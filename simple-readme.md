@@ -4,9 +4,37 @@
 
 ---
 
-## 1. 下载代码（两种方式）
+## 1. 下载代码（两种方式）## 7. 运行项目（命令）
+确保你已在项目根目录，并且 `.env` 已配置好：
 
-- 方式 A：使用 Git（推荐）
+```bash
+# 使用 Bun（Windows 10 1809+ 或 macOS/Linux）
+bun install       # 第一次运行需要安装依赖
+bun run index.ts  # 启动程序
+
+# 或使用 Node.js（适用于较旧的 Windows 版本）
+npm install       # 第一次运行需要安装依赖
+npm install -D tsx # 安装 TypeScript 支持
+npm run start     # 启动程序
+```
+
+启动后，终端里会出现一个交互界面：
+- 使用键盘 ↑ / ↓ 选择"趋势策略"或"做市策略"，回车启动。
+- 按 `Esc` 返回菜单。
+- 按 `Ctrl + C` 退出程序。
+
+如果你更喜欢用脚本，也可以：
+```bash
+# 使用 Bun
+bun run start
+# 或
+bun run dev
+
+# 使用 Node.js
+npm run start
+# 或
+npm run dev
+```）
   1) 安装 Git：
      - Windows：到 `https://git-scm.com/download/win` 下载并安装，一路“下一步”。
      - macOS：打开“终端”（Terminal），输入 `git --version` 看是否已自带。如果提示未安装，会引导你安装 Xcode Command Line Tools，按提示安装即可。
@@ -49,11 +77,30 @@
   ```
   安装后关闭并重新打开 PowerShell，输入 `bun -v` 出现版本号即成功。
 
-- 如果上述办法不行，去 Bun 官网查看其他方式：`https://bun.com/get`
+- **如果出现 Windows 版本兼容性警告**：
+  - Bun 需要 Windows 10 1809 或更新版本
+  - 如果你的系统版本较旧，建议使用 Node.js + npm 作为替代方案：
+    1. 下载并安装 Node.js：`https://nodejs.org/en/download`
+    2. 安装完成后，使用 npm 全局安装 bun：
+       ```powershell
+       npm install -g bun
+       ```
+    3. 或者直接使用 Node.js 运行项目：
+       ```powershell
+       npm install    # 安装依赖
+       npm run start  # 启动项目
+       ```
+
+- 如果上述办法都不行，去 Bun 官网查看其他方式：`https://bun.com/get`
 
 - 首次进入项目目录后，安装依赖：
   ```bash
+  # 如果使用 Bun（Windows 10 1809+ 或 macOS/Linux）
   bun install
+  
+  # 如果使用 Node.js（适用于较旧的 Windows 版本）
+  npm install
+  npm install -D tsx  # 额外安装 TypeScript 支持
   ```
 
 ---
