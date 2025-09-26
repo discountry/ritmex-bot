@@ -17,6 +17,8 @@
     "typescript": "^5"
   },
   "dependencies": {
+    "@grvt/sdk": "^0.0.1-beta.17",
+    "axios": "^1.12.2",
     "ccxt": "^4.5.5",
     "dotenv": "^17.2.2",
     "ink": "^6.3.1",

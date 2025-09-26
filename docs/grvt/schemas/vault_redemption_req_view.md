@@ -1,0 +1,19 @@
+!!! info "[VaultRedemptionReqView](/../../schemas/vault_redemption_req_view)"
+    Representation of a pending redemption request for a given vault.<br>
+
+    |Name<br>`Lite`|Type|Required<br>`Default`| Description |
+    |-|-|-|-|
+    |request_time<br>`rt` |string|True|[Filled by GRVT Backend] Time at which the redemption request was received by GRVT in unix nanoseconds|
+    |num_lp_tokens<br>`nl` |string|True|The number of shares to redeem|
+    |max_redemption_period_timestamp<br>`mr` |string|True|[Filled by GRVT Backend] Time in unix nanoseconds, beyond which the request will be force-redeemed.|
+    |age_category<br>`ac` |VaultRedemptionReqAgeCategory|True|Age category of this redemption request.|
+    |investor_id<br>`ii` |string|True|The address of the investor who submitted the request.|
+    ??? info "[VaultRedemptionReqAgeCategory](/../../schemas/vault_redemption_req_age_category)"
+        Denotes the age category of a given redemption request.<br><br><br>
+
+        |Value| Description |
+        |-|-|
+        |`NORMAL` = 1|This request is at least as old as the minimum redemption period, and is eligible for automated redemption.|
+        |`URGENT` = 2|This request is nearing the maxmimum redemption period and will be factored into pre-order check margin requirements.|
+        |`OVERDUE` = 3|This request has exceeded the maximum redemption period and will be considered for forced redemptions.|
+        |`PRE_MIN` = 4|This request has yet to exceed the minimum redemption period, and is not yet eligible for automated redemption.|

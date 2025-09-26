@@ -1,0 +1,2 @@
+Placeholder until adapter implementation
+

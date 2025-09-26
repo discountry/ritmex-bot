@@ -1,0 +1,7 @@
+!!! info "[ApiCancelOnDisconnectRequest](/../../schemas/api_cancel_on_disconnect_request)"
+    Auto-Cancel All Open Orders when the countdown time hits zero.<br><br>Market Maker inputs a countdown time parameter in milliseconds (e.g. 120000 for 120s) rounded down to the smallest second follows the following logic:<br>  - Market Maker initially entered a value between 0 -> 1000, which is rounded to 0: will result in termination of their COD<br>  - Market Maker initially entered a value between 1001 -> 300_000, which is rounded to the nearest second: will result in refresh of their COD<br>  - Market Maker initially entered a value bigger than 300_000, which will result in error (upper bound)<br>Market Maker will send a heartbeat message by calling the endpoint at specific intervals (ex. every 30 seconds) to the server to refresh the count down.<br><br>If the server does not receive a heartbeat message within the countdown time, it will cancel all open orders for the specified Sub Account ID.<br>
+
+    |Name<br>`Lite`|Type|Required<br>`Default`| Description |
+    |-|-|-|-|
+    |sub_account_id<br>`sa` |string|True|The subaccount ID cancelling the orders for|
+    |countdown_time<br>`ct` |string|False<br>`1000`|Countdown time in milliseconds (ex. 120000 for 120s).<br><br>0 to disable the timer.<br><br>Does not accept negative values.<br><br>Minimum acceptable value is 1,000.<br><br>Maximum acceptable value is 300,000|
