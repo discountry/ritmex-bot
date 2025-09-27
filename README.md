@@ -8,7 +8,6 @@
 ## 文档索引
 - [English README](README_en.md)
 - [简明上手指南（零基础）](simple-readme.md)
-- `legacy/docs/`：旧版策略与架构说明
 
 ## 项目亮点
 - **实时行情与风控**：Websocket + REST 自动同步账户、挂单与仓位。

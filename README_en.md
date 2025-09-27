@@ -5,7 +5,6 @@ A Bun-powered trading workstation for Aster perpetual contracts that ships two p
 ## Documentation Map
 - [中文 README](README.md)
 - [Beginner-friendly Quick Start](simple-readme.md)
-- `legacy/docs/`: in-depth architecture notes for the historical workspace
 
 ## Highlights
 - **Live market data & risk sync** via websocket feeds with REST fallbacks, full reconciliation on restart.
