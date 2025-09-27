@@ -39,7 +39,7 @@ export const tradingConfig: TradingConfig = {
   qtyStep: parseNumber(process.env.QTY_STEP, 0.001),
   bollingerLength: parseNumber(process.env.BOLLINGER_LENGTH, 20),
   bollingerStdMultiplier: parseNumber(process.env.BOLLINGER_STD_MULTIPLIER, 2),
-  minBollingerBandwidth: parseNumber(process.env.MIN_BOLLINGER_BANDWIDTH, 0.1),
+  minBollingerBandwidth: parseNumber(process.env.MIN_BOLLINGER_BANDWIDTH, 0.001),
 };
 
 export interface MakerConfig {
