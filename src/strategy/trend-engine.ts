@@ -32,6 +32,9 @@ import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { decryptCopyright } from "../utils/copyright";
 import { isRateLimitError } from "../utils/errors";
 import { RateLimitController } from "../core/lib/rate-limit";
+import { StrategyEventEmitter } from "./common/event-emitter";
+import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { SessionVolumeTracker } from "./common/session-volume";
 
 export interface TrendEngineSnapshot {
   ready: boolean;
@@ -75,6 +78,8 @@ export class TrendEngine {
   private readonly pending: OrderPendingMap = {};
 
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
+  private readonly events = new StrategyEventEmitter<TrendEngineEvent, TrendEngineSnapshot>();
+  private readonly sessionVolume = new SessionVolumeTracker();
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
@@ -84,9 +89,6 @@ export class TrendEngine {
   private totalProfit = 0;
   private totalTrades = 0;
   private lastOpenPlan: OpenOrderPlan = { side: null, price: null };
-  private sessionQuoteVolume = 0;
-  private prevPositionAmt = 0;
-  private initializedPosition = false;
   private cancelAllRequested = false;
   private readonly pendingCancelOrders = new Set<string>();
   private readonly rateLimit: RateLimitController;
@@ -137,18 +139,11 @@ export class TrendEngine {
   }
 
   on(event: TrendEngineEvent, handler: TrendEngineListener): void {
-    const handlers = this.listeners.get(event) ?? new Set<TrendEngineListener>();
-    handlers.add(handler);
-    this.listeners.set(event, handlers);
+    this.events.on(event, handler);
   }
 
   off(event: TrendEngineEvent, handler: TrendEngineListener): void {
-    const handlers = this.listeners.get(event);
-    if (!handlers) return;
-    handlers.delete(handler);
-    if (handlers.size === 0) {
-      this.listeners.delete(event);
-    }
+    this.events.off(event, handler);
   }
 
   getSnapshot(): TrendEngineSnapshot {
@@ -156,82 +151,89 @@ export class TrendEngine {
   }
 
   private bootstrap(): void {
-    try {
-      this.exchange.watchAccount((snapshot) => {
-        try {
-          this.accountSnapshot = snapshot;
-          const position = getPosition(snapshot, this.config.symbol);
-          this.updateSessionVolume(position);
-          this.trackPositionLifecycle(position, this.getReferencePrice());
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `账户推送处理异常: ${extractMessage(err)}`);
-        }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅账户失败: ${String(err)}`);
-    }
-    try {
-      this.exchange.watchOrders((orders) => {
-        try {
-          this.synchronizeLocks(orders);
-          this.openOrders = Array.isArray(orders)
-            ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
-            : [];
-          const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
-          for (const id of Array.from(this.pendingCancelOrders)) {
-            if (!currentIds.has(id)) {
-              this.pendingCancelOrders.delete(id);
-            }
+    const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
+
+    safeSubscribe<AsterAccountSnapshot>(
+      this.exchange.watchAccount.bind(this.exchange),
+      (snapshot) => {
+        this.accountSnapshot = snapshot;
+        const position = getPosition(snapshot, this.config.symbol);
+        const reference = this.getReferencePrice();
+        this.sessionVolume.update(position, reference);
+        this.trackPositionLifecycle(position, reference);
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅账户失败: ${String(error)}`,
+        processFail: (error) => `账户推送处理异常: ${extractMessage(error)}`,
+      }
+    );
+
+    safeSubscribe<AsterOrder[]>(
+      this.exchange.watchOrders.bind(this.exchange),
+      (orders) => {
+        this.synchronizeLocks(orders);
+        this.openOrders = Array.isArray(orders)
+          ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
+          : [];
+        const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+        for (const id of Array.from(this.pendingCancelOrders)) {
+          if (!currentIds.has(id)) {
+            this.pendingCancelOrders.delete(id);
           }
-          if (this.openOrders.length === 0 || this.pendingCancelOrders.size === 0) {
-            this.cancelAllRequested = false;
-          }
-          this.ordersSnapshotReady = true;
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `订单推送处理异常: ${extractMessage(err)}`);
         }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅订单失败: ${String(err)}`);
-    }
-    try {
-      this.exchange.watchDepth(this.config.symbol, (depth) => {
-        try {
-          this.depthSnapshot = depth;
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `深度推送处理异常: ${extractMessage(err)}`);
+        if (this.openOrders.length === 0 || this.pendingCancelOrders.size === 0) {
+          this.cancelAllRequested = false;
         }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅深度失败: ${String(err)}`);
-    }
-    try {
-      this.exchange.watchTicker(this.config.symbol, (ticker) => {
-        try {
-          this.tickerSnapshot = ticker;
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `价格推送处理异常: ${extractMessage(err)}`);
-        }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅Ticker失败: ${String(err)}`);
-    }
-    try {
-      this.exchange.watchKlines(this.config.symbol, this.config.klineInterval, (klines) => {
-        try {
-          this.klineSnapshot = Array.isArray(klines) ? klines : [];
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `K线推送处理异常: ${extractMessage(err)}`);
-        }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅K线失败: ${String(err)}`);
-    }
+        this.ordersSnapshotReady = true;
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅订单失败: ${String(error)}`,
+        processFail: (error) => `订单推送处理异常: ${extractMessage(error)}`,
+      }
+    );
+
+    safeSubscribe<AsterDepth>(
+      this.exchange.watchDepth.bind(this.exchange, this.config.symbol),
+      (depth) => {
+        this.depthSnapshot = depth;
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅深度失败: ${String(error)}`,
+        processFail: (error) => `深度推送处理异常: ${extractMessage(error)}`,
+      }
+    );
+
+    safeSubscribe<AsterTicker>(
+      this.exchange.watchTicker.bind(this.exchange, this.config.symbol),
+      (ticker) => {
+        this.tickerSnapshot = ticker;
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`,
+        processFail: (error) => `价格推送处理异常: ${extractMessage(error)}`,
+      }
+    );
+
+    safeSubscribe<AsterKline[]>(
+      this.exchange.watchKlines.bind(this.exchange, this.config.symbol, this.config.klineInterval),
+      (klines) => {
+        this.klineSnapshot = Array.isArray(klines) ? klines : [];
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅K线失败: ${String(error)}`,
+        processFail: (error) => `K线推送处理异常: ${extractMessage(error)}`,
+      }
+    );
   }
 
   private synchronizeLocks(orders: AsterOrder[] | null | undefined): void {
@@ -303,7 +305,7 @@ export class TrendEngine {
         }
       }
 
-      this.updateSessionVolume(position);
+      this.sessionVolume.update(position, price);
       this.trackPositionLifecycle(position, price);
       this.lastSma30 = sma30;
       this.lastPrice = price;
@@ -849,16 +851,9 @@ export class TrendEngine {
   private emitUpdate(): void {
     try {
       const snapshot = this.buildSnapshot();
-      const handlers = this.listeners.get("update");
-      if (handlers) {
-        handlers.forEach((handler) => {
-          try {
-            handler(snapshot);
-          } catch (err) {
-            this.tradeLog.push("error", `更新回调处理异常: ${String(err)}`);
-          }
-        });
-      }
+      this.events.emit("update", snapshot, (error) => {
+        this.tradeLog.push("error", `更新回调处理异常: ${String(error)}`);
+      });
     } catch (err) {
       this.tradeLog.push("error", `快照或更新分发异常: ${String(err)}`);
     }
@@ -888,7 +883,7 @@ export class TrendEngine {
       unrealized: position.unrealizedProfit,
       totalProfit: this.totalProfit,
       totalTrades: this.totalTrades,
-      sessionVolume: this.sessionQuoteVolume,
+      sessionVolume: this.sessionVolume.value,
       tradeLog: this.tradeLog.all(),
       openOrders: this.openOrders,
       depth: this.depthSnapshot,
@@ -896,24 +891,6 @@ export class TrendEngine {
       lastUpdated: Date.now(),
       lastOpenSignal: this.lastOpenPlan,
     };
-  }
-
-  private updateSessionVolume(position: PositionSnapshot): void {
-    const price = this.getReferencePrice();
-    if (!this.initializedPosition) {
-      this.prevPositionAmt = position.positionAmt;
-      this.initializedPosition = true;
-      return;
-    }
-    if (price == null) {
-      this.prevPositionAmt = position.positionAmt;
-      return;
-    }
-    const delta = Math.abs(position.positionAmt - this.prevPositionAmt);
-    if (delta > 0) {
-      this.sessionQuoteVolume += delta * price;
-    }
-    this.prevPositionAmt = position.positionAmt;
   }
 
   private getReferencePrice(): number | null {

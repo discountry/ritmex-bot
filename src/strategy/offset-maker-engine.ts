@@ -3,13 +3,15 @@ import type { ExchangeAdapter } from "../exchanges/adapter";
 import type {
   AsterAccountSnapshot,
   AsterDepth,
+  AsterKline,
   AsterOrder,
   AsterTicker,
 } from "../exchanges/types";
 import { roundDownToTick } from "../utils/math";
 import { createTradeLog } from "../logging/trade-log";
 import { isUnknownOrderError, isRateLimitError } from "../utils/errors";
-import { getPosition, type PositionSnapshot } from "../utils/strategy";
+import { getPosition } from "../utils/strategy";
+import type { PositionSnapshot } from "../utils/strategy";
 import { computeDepthStats } from "../utils/depth";
 import { computePositionPnl } from "../utils/pnl";
 import { getTopPrices, getMidOrLast } from "../utils/price";
@@ -24,6 +26,9 @@ import type { MakerEngineSnapshot } from "./maker-engine";
 import { makeOrderPlan } from "../core/lib/order-plan";
 import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
+import { StrategyEventEmitter } from "./common/event-emitter";
+import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { SessionVolumeTracker } from "./common/session-volume";
 
 interface DesiredOrder {
   side: "BUY" | "SELL";
@@ -57,15 +62,13 @@ export class OffsetMakerEngine {
   private readonly pendingCancelOrders = new Set<string>();
 
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
-  private readonly listeners = new Map<MakerEvent, Set<MakerListener>>();
+  private readonly events = new StrategyEventEmitter<MakerEvent, OffsetMakerEngineSnapshot>();
+  private readonly sessionVolume = new SessionVolumeTracker();
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
   private desiredOrders: DesiredOrder[] = [];
   private accountUnrealized = 0;
-  private sessionQuoteVolume = 0;
-  private prevPositionAmt = 0;
-  private initializedPosition = false;
   private initialOrderSnapshotReady = false;
   private initialOrderResetDone = false;
   private entryPricePendingLogged = false;
@@ -100,18 +103,11 @@ export class OffsetMakerEngine {
   }
 
   on(event: MakerEvent, handler: MakerListener): void {
-    const handlers = this.listeners.get(event) ?? new Set<MakerListener>();
-    handlers.add(handler);
-    this.listeners.set(event, handlers);
+    this.events.on(event, handler);
   }
 
   off(event: MakerEvent, handler: MakerListener): void {
-    const handlers = this.listeners.get(event);
-    if (!handlers) return;
-    handlers.delete(handler);
-    if (handlers.size === 0) {
-      this.listeners.delete(event);
-    }
+    this.events.off(event, handler);
   }
 
   getSnapshot(): OffsetMakerEngineSnapshot {
@@ -119,85 +115,87 @@ export class OffsetMakerEngine {
   }
 
   private bootstrap(): void {
-    try {
-      this.exchange.watchAccount((snapshot) => {
-        try {
-          this.accountSnapshot = snapshot;
-          const totalUnrealized = Number(snapshot.totalUnrealizedProfit ?? "0");
-          if (Number.isFinite(totalUnrealized)) {
-            this.accountUnrealized = totalUnrealized;
+    const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
+
+    safeSubscribe<AsterAccountSnapshot>(
+      this.exchange.watchAccount.bind(this.exchange),
+      (snapshot) => {
+        this.accountSnapshot = snapshot;
+        const totalUnrealized = Number(snapshot.totalUnrealizedProfit ?? "0");
+        if (Number.isFinite(totalUnrealized)) {
+          this.accountUnrealized = totalUnrealized;
+        }
+        const position = getPosition(snapshot, this.config.symbol);
+        this.sessionVolume.update(position, this.getReferencePrice());
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅账户失败: ${String(error)}`,
+        processFail: (error) => `账户推送处理异常: ${String(error)}`,
+      }
+    );
+
+    safeSubscribe<AsterOrder[]>(
+      this.exchange.watchOrders.bind(this.exchange),
+      (orders) => {
+        this.syncLocksWithOrders(orders);
+        this.openOrders = Array.isArray(orders)
+          ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
+          : [];
+        const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
+        for (const id of Array.from(this.pendingCancelOrders)) {
+          if (!currentIds.has(id)) {
+            this.pendingCancelOrders.delete(id);
           }
-          const position = getPosition(snapshot, this.config.symbol);
-          this.updateSessionVolume(position);
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `账户推送处理异常: ${String(err)}`);
         }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅账户失败: ${String(err)}`);
-    }
+        this.initialOrderSnapshotReady = true;
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅订单失败: ${String(error)}`,
+        processFail: (error) => `订单推送处理异常: ${String(error)}`,
+      }
+    );
 
-    try {
-      this.exchange.watchOrders((orders) => {
-        try {
-          this.syncLocksWithOrders(orders);
-          this.openOrders = Array.isArray(orders)
-            ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
-            : [];
-          const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
-          for (const id of Array.from(this.pendingCancelOrders)) {
-            if (!currentIds.has(id)) {
-              this.pendingCancelOrders.delete(id);
-            }
-          }
-          this.initialOrderSnapshotReady = true;
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `订单推送处理异常: ${String(err)}`);
-        }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅订单失败: ${String(err)}`);
-    }
+    safeSubscribe<AsterDepth>(
+      this.exchange.watchDepth.bind(this.exchange, this.config.symbol),
+      (depth) => {
+        this.depthSnapshot = depth;
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅深度失败: ${String(error)}`,
+        processFail: (error) => `深度推送处理异常: ${String(error)}`,
+      }
+    );
 
-    try {
-      this.exchange.watchDepth(this.config.symbol, (depth) => {
-        try {
-          this.depthSnapshot = depth;
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `深度推送处理异常: ${String(err)}`);
-        }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅深度失败: ${String(err)}`);
-    }
+    safeSubscribe<AsterTicker>(
+      this.exchange.watchTicker.bind(this.exchange, this.config.symbol),
+      (ticker) => {
+        this.tickerSnapshot = ticker;
+        this.emitUpdate();
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`,
+        processFail: (error) => `价格推送处理异常: ${String(error)}`,
+      }
+    );
 
-    try {
-      this.exchange.watchTicker(this.config.symbol, (ticker) => {
-        try {
-          this.tickerSnapshot = ticker;
-          this.emitUpdate();
-        } catch (err) {
-          this.tradeLog.push("error", `价格推送处理异常: ${String(err)}`);
-        }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅Ticker失败: ${String(err)}`);
-    }
-
-    try {
-      this.exchange.watchKlines(this.config.symbol, "1m", () => {
-        try {
-          /* no-op */
-        } catch (err) {
-          this.tradeLog.push("error", `K线推送处理异常: ${String(err)}`);
-        }
-      });
-    } catch (err) {
-      this.tradeLog.push("error", `订阅K线失败: ${String(err)}`);
-    }
+    safeSubscribe<AsterKline[]>(
+      this.exchange.watchKlines.bind(this.exchange, this.config.symbol, "1m"),
+      (_klines) => {
+        /* no-op */
+      },
+      log,
+      {
+        subscribeFail: (error) => `订阅K线失败: ${String(error)}`,
+        processFail: (error) => `K线推送处理异常: ${String(error)}`,
+      }
+    );
   }
 
   private syncLocksWithOrders(orders: AsterOrder[] | null | undefined): void {
@@ -282,7 +280,7 @@ export class OffsetMakerEngine {
       }
 
       this.desiredOrders = desired;
-      this.updateSessionVolume(position);
+      this.sessionVolume.update(position, this.getReferencePrice());
       await this.syncOrders(desired);
       await this.checkRisk(position, closeBidPrice, closeAskPrice);
       this.emitUpdate();
@@ -569,16 +567,9 @@ export class OffsetMakerEngine {
   private emitUpdate(): void {
     try {
       const snapshot = this.buildSnapshot();
-      const handlers = this.listeners.get("update");
-      if (handlers) {
-        handlers.forEach((handler) => {
-          try {
-            handler(snapshot);
-          } catch (err) {
-            this.tradeLog.push("error", `更新回调处理异常: ${String(err)}`);
-          }
-        });
-      }
+      this.events.emit("update", snapshot, (error) => {
+        this.tradeLog.push("error", `更新回调处理异常: ${String(error)}`);
+      });
     } catch (err) {
       this.tradeLog.push("error", `快照或更新分发异常: ${String(err)}`);
     }
@@ -599,7 +590,7 @@ export class OffsetMakerEngine {
       position,
       pnl,
       accountUnrealized: this.accountUnrealized,
-      sessionVolume: this.sessionQuoteVolume,
+      sessionVolume: this.sessionVolume.value,
       openOrders: this.openOrders,
       desiredOrders: this.desiredOrders,
       tradeLog: this.tradeLog.all(),
@@ -610,24 +601,6 @@ export class OffsetMakerEngine {
       skipBuySide: this.lastSkipBuy,
       skipSellSide: this.lastSkipSell,
     };
-  }
-
-  private updateSessionVolume(position: PositionSnapshot): void {
-    const price = this.getReferencePrice();
-    if (!this.initializedPosition) {
-      this.prevPositionAmt = position.positionAmt;
-      this.initializedPosition = true;
-      return;
-    }
-    if (price == null) {
-      this.prevPositionAmt = position.positionAmt;
-      return;
-    }
-    const delta = Math.abs(position.positionAmt - this.prevPositionAmt);
-    if (delta > 0) {
-      this.sessionQuoteVolume += delta * price;
-    }
-    this.prevPositionAmt = position.positionAmt;
   }
 
   private getReferencePrice(): number | null {
