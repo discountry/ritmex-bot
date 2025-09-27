@@ -6,7 +6,7 @@ import {
   getExchangeDisplayName,
   resolveExchangeId,
 } from "../exchanges/create-adapter";
-import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../core/offset-maker-engine";
+import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
 

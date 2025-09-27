@@ -6,7 +6,7 @@ import {
   getExchangeDisplayName,
   resolveExchangeId,
 } from "../exchanges/create-adapter";
-import { MakerEngine, type MakerEngineSnapshot } from "../core/maker-engine";
+import { MakerEngine, type MakerEngineSnapshot } from "../strategy/maker-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
 

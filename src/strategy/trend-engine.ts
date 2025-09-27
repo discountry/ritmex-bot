@@ -24,14 +24,14 @@ import {
   placeStopLossOrder,
   placeTrailingStopOrder,
   unlockOperating,
-} from "./order-coordinator";
-import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "./order-coordinator";
+} from "../core/order-coordinator";
+import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
 import { extractMessage, isUnknownOrderError } from "../utils/errors";
 import { roundDownToTick } from "../utils/math";
-import { createTradeLog, type TradeLogEntry } from "../state/trade-log";
+import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { decryptCopyright } from "../utils/copyright";
 import { isRateLimitError } from "../utils/errors";
-import { RateLimitController } from "./lib/rate-limit";
+import { RateLimitController } from "../core/lib/rate-limit";
 
 export interface TrendEngineSnapshot {
   ready: boolean;

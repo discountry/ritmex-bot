@@ -6,7 +6,7 @@ import {
   getExchangeDisplayName,
   resolveExchangeId,
 } from "../exchanges/create-adapter";
-import { TrendEngine, type TrendEngineSnapshot } from "../core/trend-engine";
+import { TrendEngine, type TrendEngineSnapshot } from "../strategy/trend-engine";
 import { formatNumber } from "../utils/format";
 import { DataTable, type TableColumn } from "./components/DataTable";
 
