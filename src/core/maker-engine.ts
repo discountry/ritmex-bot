@@ -60,7 +60,7 @@ export class MakerEngine {
   private readonly locks: OrderLockMap = {};
   private readonly timers: OrderTimerMap = {};
   private readonly pending: OrderPendingMap = {};
-  private readonly pendingCancelOrders = new Set<number>();
+  private readonly pendingCancelOrders = new Set<string>();
 
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly listeners = new Map<MakerEvent, Set<MakerListener>>();
@@ -145,7 +145,7 @@ export class MakerEngine {
           this.openOrders = Array.isArray(orders)
             ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
             : [];
-          const currentIds = new Set(this.openOrders.map((order) => order.orderId));
+          const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
           for (const id of Array.from(this.pendingCancelOrders)) {
             if (!currentIds.has(id)) {
               this.pendingCancelOrders.delete(id);
@@ -246,6 +246,8 @@ export class MakerEngine {
         return;
       }
 
+      const closeBidPrice = roundDownToTick(topBid, this.config.priceTick);
+      const closeAskPrice = roundDownToTick(topAsk, this.config.priceTick);
       const bidPrice = roundDownToTick(topBid - this.config.bidOffset, this.config.priceTick);
       const askPrice = roundDownToTick(topAsk + this.config.askOffset, this.config.priceTick);
       const position = getPosition(this.accountSnapshot, this.config.symbol);
@@ -261,14 +263,14 @@ export class MakerEngine {
         }
       } else {
         const closeSide: "BUY" | "SELL" = position.positionAmt > 0 ? "SELL" : "BUY";
-        const closePrice = closeSide === "SELL" ? askPrice : bidPrice;
+        const closePrice = closeSide === "SELL" ? closeAskPrice : closeBidPrice;
         desired.push({ side: closeSide, price: closePrice, amount: absPosition, reduceOnly: true });
       }
 
       this.desiredOrders = desired;
       this.updateSessionVolume(position);
       await this.syncOrders(desired);
-      await this.checkRisk(position, bidPrice, askPrice);
+      await this.checkRisk(position, closeBidPrice, closeAskPrice);
       this.emitUpdate();
     } catch (error) {
       if (isRateLimitError(error)) {
@@ -291,9 +293,9 @@ export class MakerEngine {
     if (Math.abs(position.positionAmt) < EPS) return;
     const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
     if (topBid == null || topAsk == null) return;
-    const bidPrice = roundDownToTick(topBid - this.config.bidOffset, this.config.priceTick);
-    const askPrice = roundDownToTick(topAsk + this.config.askOffset, this.config.priceTick);
-    await this.checkRisk(position, bidPrice, askPrice);
+    const closeBidPrice = roundDownToTick(topBid, this.config.priceTick);
+    const closeAskPrice = roundDownToTick(topAsk, this.config.priceTick);
+    await this.checkRisk(position, closeBidPrice, closeAskPrice);
     await this.flushOrders();
   }
 
@@ -328,12 +330,12 @@ export class MakerEngine {
 
   private async syncOrders(targets: DesiredOrder[]): Promise<void> {
     const tolerance = this.config.priceChaseThreshold;
-    const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(o.orderId));
+    const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
     const { toCancel, toPlace } = makeOrderPlan(availableOrders, targets, tolerance);
 
     for (const order of toCancel) {
-      if (this.pendingCancelOrders.has(order.orderId)) continue;
-      this.pendingCancelOrders.add(order.orderId);
+      if (this.pendingCancelOrders.has(String(order.orderId))) continue;
+      this.pendingCancelOrders.add(String(order.orderId));
       await safeCancelOrder(
         this.exchange,
         this.config.symbol,
@@ -346,12 +348,12 @@ export class MakerEngine {
         },
         () => {
           this.tradeLog.push("order", "撤销时发现订单已被成交/取消，忽略");
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
           this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
       );
@@ -440,8 +442,8 @@ export class MakerEngine {
   private async flushOrders(): Promise<void> {
     if (!this.openOrders.length) return;
     for (const order of this.openOrders) {
-      if (this.pendingCancelOrders.has(order.orderId)) continue;
-      this.pendingCancelOrders.add(order.orderId);
+      if (this.pendingCancelOrders.has(String(order.orderId))) continue;
+      this.pendingCancelOrders.add(String(order.orderId));
       await safeCancelOrder(
         this.exchange,
         this.config.symbol,
@@ -451,12 +453,12 @@ export class MakerEngine {
         },
         () => {
           this.tradeLog.push("order", "订单已不存在，撤销跳过");
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
           this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
       );

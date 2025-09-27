@@ -6,7 +6,7 @@ export async function safeCancelOrder(
   exchange: ExchangeAdapter,
   symbol: string,
   order: AsterOrder,
-  onResolved: (orderId: number) => void,
+  onResolved: (orderId: number | string) => void,
   onUnknown: () => void,
   onError: (err: unknown) => void
 ): Promise<void> {
@@ -18,5 +18,4 @@ export async function safeCancelOrder(
     else onError(error);
   }
 }
-
 

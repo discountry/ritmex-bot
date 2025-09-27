@@ -54,7 +54,7 @@ export class OffsetMakerEngine {
   private readonly locks: OrderLockMap = {};
   private readonly timers: OrderTimerMap = {};
   private readonly pending: OrderPendingMap = {};
-  private readonly pendingCancelOrders = new Set<number>();
+  private readonly pendingCancelOrders = new Set<string>();
 
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly listeners = new Map<MakerEvent, Set<MakerListener>>();
@@ -145,7 +145,7 @@ export class OffsetMakerEngine {
           this.openOrders = Array.isArray(orders)
             ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
             : [];
-          const currentIds = new Set(this.openOrders.map((order) => order.orderId));
+          const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
           for (const id of Array.from(this.pendingCancelOrders)) {
             if (!currentIds.has(id)) {
               this.pendingCancelOrders.delete(id);
@@ -259,6 +259,8 @@ export class OffsetMakerEngine {
         return;
       }
 
+      const closeBidPrice = roundDownToTick(topBid!, this.config.priceTick);
+      const closeAskPrice = roundDownToTick(topAsk!, this.config.priceTick);
       const bidPrice = roundDownToTick(topBid! - this.config.bidOffset, this.config.priceTick);
       const askPrice = roundDownToTick(topAsk! + this.config.askOffset, this.config.priceTick);
       const absPosition = Math.abs(position.positionAmt);
@@ -275,14 +277,14 @@ export class OffsetMakerEngine {
         }
       } else {
         const closeSide: "BUY" | "SELL" = position.positionAmt > 0 ? "SELL" : "BUY";
-        const closePrice = closeSide === "SELL" ? askPrice : bidPrice;
+        const closePrice = closeSide === "SELL" ? closeAskPrice : closeBidPrice;
         desired.push({ side: closeSide, price: closePrice, amount: absPosition, reduceOnly: true });
       }
 
       this.desiredOrders = desired;
       this.updateSessionVolume(position);
       await this.syncOrders(desired);
-      await this.checkRisk(position, bidPrice, askPrice);
+      await this.checkRisk(position, closeBidPrice, closeAskPrice);
       this.emitUpdate();
     } catch (error) {
       if (isRateLimitError(error)) {
@@ -306,6 +308,9 @@ export class OffsetMakerEngine {
     await this.flushOrders();
     const absPosition = Math.abs(position.positionAmt);
     const side: "BUY" | "SELL" = position.positionAmt > 0 ? "SELL" : "BUY";
+    const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
+    const closeBidPrice = topBid != null ? roundDownToTick(topBid, this.config.priceTick) : null;
+    const closeAskPrice = topAsk != null ? roundDownToTick(topAsk, this.config.priceTick) : null;
     try {
       await marketClose(
         this.exchange,
@@ -319,7 +324,10 @@ export class OffsetMakerEngine {
         (type, detail) => this.tradeLog.push(type, detail),
         {
           markPrice: position.markPrice,
-          expectedPrice: Number(side === "SELL" ? this.depthSnapshot?.bids?.[0]?.[0] : this.depthSnapshot?.asks?.[0]?.[0]) || null,
+          expectedPrice:
+            side === "SELL"
+              ? (closeAskPrice != null ? Number(closeAskPrice) : null)
+              : (closeBidPrice != null ? Number(closeBidPrice) : null),
           maxPct: this.config.maxCloseSlippagePct,
         }
       );
@@ -423,12 +431,12 @@ export class OffsetMakerEngine {
 
   private async syncOrders(targets: DesiredOrder[]): Promise<void> {
     const tolerance = this.config.priceChaseThreshold;
-    const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(o.orderId));
+    const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
     const { toCancel, toPlace } = makeOrderPlan(availableOrders, targets, tolerance);
 
     for (const order of toCancel) {
-      if (this.pendingCancelOrders.has(order.orderId)) continue;
-      this.pendingCancelOrders.add(order.orderId);
+      if (this.pendingCancelOrders.has(String(order.orderId))) continue;
+      this.pendingCancelOrders.add(String(order.orderId));
       await safeCancelOrder(
         this.exchange,
         this.config.symbol,
@@ -442,12 +450,12 @@ export class OffsetMakerEngine {
         },
         () => {
           this.tradeLog.push("order", "撤销时发现订单已被成交/取消，忽略");
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
           this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           // 避免同一轮内重复操作同一张已出错的本地挂单，直接从本地缓存移除，等待下一次订单推送重建
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
@@ -534,8 +542,8 @@ export class OffsetMakerEngine {
   private async flushOrders(): Promise<void> {
     if (!this.openOrders.length) return;
     for (const order of this.openOrders) {
-      if (this.pendingCancelOrders.has(order.orderId)) continue;
-      this.pendingCancelOrders.add(order.orderId);
+      if (this.pendingCancelOrders.has(String(order.orderId))) continue;
+      this.pendingCancelOrders.add(String(order.orderId));
       await safeCancelOrder(
         this.exchange,
         this.config.symbol,
@@ -545,12 +553,12 @@ export class OffsetMakerEngine {
         },
         () => {
           this.tradeLog.push("order", "订单已不存在，撤销跳过");
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
           this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
-          this.pendingCancelOrders.delete(order.orderId);
+          this.pendingCancelOrders.delete(String(order.orderId));
           // 与同步撤单路径保持一致，移除本地异常订单，等待订单流重建
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }

@@ -85,7 +85,7 @@ export class TrendEngine {
   private prevPositionAmt = 0;
   private initializedPosition = false;
   private cancelAllRequested = false;
-  private readonly pendingCancelOrders = new Set<number>();
+  private readonly pendingCancelOrders = new Set<string>();
   private readonly rateLimit: RateLimitController;
 
   // 控制入场频率：同一分钟内最多入场一次
@@ -166,7 +166,7 @@ export class TrendEngine {
           this.openOrders = Array.isArray(orders)
             ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
             : [];
-          const currentIds = new Set(this.openOrders.map((order) => order.orderId));
+          const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
           for (const id of Array.from(this.pendingCancelOrders)) {
             if (!currentIds.has(id)) {
               this.pendingCancelOrders.delete(id);
@@ -588,17 +588,18 @@ export class TrendEngine {
       try {
         if (this.openOrders.length > 0) {
           const orderIdList = this.openOrders.map((order) => order.orderId);
+          const orderIdSet = new Set(orderIdList.map(String));
           try {
             await this.exchange.cancelOrders({ symbol: this.config.symbol, orderIdList });
-            orderIdList.forEach((id) => this.pendingCancelOrders.add(id));
+            orderIdSet.forEach((id) => this.pendingCancelOrders.add(id));
           } catch (err) {
             if (isUnknownOrderError(err)) {
               this.tradeLog.push("order", "止损前撤单发现订单已不存在");
                 // 清理本地缓存，避免重复对同一订单执行撤单
-                for (const id of orderIdList) {
+                for (const id of orderIdSet) {
                   this.pendingCancelOrders.delete(id);
                 }
-                this.openOrders = this.openOrders.filter((o) => !orderIdList.includes(o.orderId));
+                this.openOrders = this.openOrders.filter((o) => !orderIdSet.has(String(o.orderId)));
             } else {
               throw err;
             }

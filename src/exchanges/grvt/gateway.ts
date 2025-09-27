@@ -1,7 +1,12 @@
 import { setInterval, clearInterval } from "timers";
 import { randomInt } from "crypto";
-import axios from "axios";
+import axios, { AxiosHeaders } from "axios";
 import { TDG, MDG } from "@grvt/client";
+import { ECandlestickInterval } from "@grvt/client/interfaces/codegen/enums/candlestick-interval";
+import { ECandlestickType } from "@grvt/client/interfaces/codegen/enums/candlestick-type";
+import { ETimeInForce } from "@grvt/client/interfaces/codegen/enums/time-in-force";
+import { ETriggerType } from "@grvt/client/interfaces/codegen/enums/trigger-type";
+import { ETriggerBy } from "@grvt/client/interfaces/codegen/enums/trigger-by";
 import { keccak256 } from "ethereum-cryptography/keccak";
 import { secp256k1 } from "ethereum-cryptography/secp256k1";
 import { bytesToHex, hexToBytes, utf8ToBytes, concatBytes } from "ethereum-cryptography/utils";
@@ -14,6 +19,7 @@ import type {
   IApiTickerResponse,
   IApiCandlestickResponse,
   IApiCreateOrderResponse,
+  IOrder,
 } from "@grvt/client/interfaces";
 import type {
   AsterAccountSnapshot,
@@ -24,10 +30,12 @@ import type {
   AsterTicker,
   CreateOrderParams,
   OrderSide,
-  GrvtOrder,
   GrvtSignedOrder,
   GrvtSignature,
   GrvtUnsignedOrder,
+  GrvtTimeInForce,
+  GrvtOrderMetadataInput,
+  GrvtTriggerMetadata,
 } from "../types";
 
 const DEFAULT_ACCOUNT_POLL_INTERVAL_MS = 5000;
@@ -65,7 +73,7 @@ const ENVIRONMENT_ALIASES: Record<string, keyof typeof ENVIRONMENT_HOSTS> = {
 };
 
 const DEFAULT_MARK_PRICE_TRIGGER = "MARK";
-const DEFAULT_TIME_IN_FORCE = "GOOD_TILL_TIME";
+const DEFAULT_TIME_IN_FORCE: GrvtTimeInForce = "GOOD_TILL_TIME";
 const TRAILING_NOT_SUPPORTED_ERROR =
   "GRVT exchange adapter does not yet support trailing stop orders";
 
@@ -190,7 +198,13 @@ export class GrvtGateway {
   private readonly instrument: string;
   private readonly symbol: string;
   private readonly subAccountId: string;
-  private readonly pollIntervals: Required<GrvtGatewayOptions["pollIntervals"]>;
+  private readonly pollIntervals: {
+    account: number;
+    orders: number;
+    depth: number;
+    ticker: number;
+    klines: number;
+  };
   private readonly hosts: HostsConfig;
   private readonly chainId: number;
   private headers: Record<string, string> = {};
@@ -220,7 +234,7 @@ export class GrvtGateway {
   private klineTimer: ReturnType<typeof setInterval> | null = null;
 
   private initialized = false;
-  private klineInterval = "CI_1_M";
+  private klineInterval: ECandlestickInterval = ECandlestickInterval.CI_1_M;
 
   constructor(options: GrvtGatewayOptions) {
     const envKey = normalizeEnvironment(options.env);
@@ -254,13 +268,25 @@ export class GrvtGateway {
 
     this.tdg.axios.interceptors.request.use(async (config) => {
       await this.ensureSession();
-      config.headers = { ...(config.headers ?? {}), ...this.headers };
+      const existing =
+        config.headers instanceof AxiosHeaders ? config.headers.toJSON() : config.headers ?? {};
+      const merged = AxiosHeaders.from(existing);
+      for (const [key, value] of Object.entries(this.headers)) {
+        merged.set(key, value);
+      }
+      config.headers = merged;
       return config;
     });
 
     this.mdg.axios.interceptors.request.use(async (config) => {
       await this.ensureSession();
-      config.headers = { ...(config.headers ?? {}), ...this.headers };
+      const existing =
+        config.headers instanceof AxiosHeaders ? config.headers.toJSON() : config.headers ?? {};
+      const merged = AxiosHeaders.from(existing);
+      for (const [key, value] of Object.entries(this.headers)) {
+        merged.set(key, value);
+      }
+      config.headers = merged;
       return config;
     });
   }
@@ -388,7 +414,7 @@ export class GrvtGateway {
     const signedOrder: GrvtSignedOrder = { ...unsignedOrder, signature };
 
     try {
-      const response = await this.tdg.createOrder({ order: signedOrder });
+      const response = await this.tdg.createOrder({ order: toApiOrderPayload(signedOrder) });
       const order = mapCreateOrderResponse(response, this.symbol);
       this.mergeOrder(order);
       return order;
@@ -528,7 +554,7 @@ export class GrvtGateway {
     const response = await this.mdg.candlestick({
       instrument: this.instrument,
       interval: this.klineInterval,
-      type: "TRADE",
+      type: ECandlestickType.TRADE,
       limit: 500,
     });
     const klines = mapKlines(response, this.symbol);
@@ -725,14 +751,17 @@ export class GrvtGateway {
     }
     const privateKeyBytes = hexToBytes(padPrivateKey(this.apiSecret));
     const leg = context.order.legs[0];
+    if (!leg) {
+      throw new Error("GRVT order leg missing for signing");
+    }
     const contractSize = scaleDecimal(leg.size, context.instrument.baseDecimals);
     const limitPriceSource =
       leg.limit_price ?? (context.isMarket ? "0" : context.price?.toString() ?? "0");
     const limitPrice = scaleDecimal(limitPriceSource, 9);
     const types: EIP712Types = {
-      EIP712Domain: EIP712_DOMAIN_FIELDS,
-      Order: EIP712_ORDER_TYPES.Order,
-      OrderLeg: EIP712_ORDER_TYPES.OrderLeg,
+      EIP712Domain: EIP712_DOMAIN_FIELDS.map((field) => ({ ...field })),
+      Order: EIP712_ORDER_TYPES.Order.map((field) => ({ ...field })),
+      OrderLeg: EIP712_ORDER_TYPES.OrderLeg.map((field) => ({ ...field })),
     };
     const message = {
       subAccountID: BigInt(context.subAccountId),
@@ -786,7 +815,10 @@ function normalizeEnvironment(env: GrvtEnvironment | undefined): BaseEnvironment
     return normalized as BaseEnvironment;
   }
   if (normalized in ENVIRONMENT_ALIASES) {
-    return ENVIRONMENT_ALIASES[normalized];
+    const alias = ENVIRONMENT_ALIASES[normalized as keyof typeof ENVIRONMENT_ALIASES];
+    if (alias) {
+      return alias;
+    }
   }
   return "testnet";
 }
@@ -803,7 +835,8 @@ function resolveHosts(env: BaseEnvironment, override?: GrvtHostsOverride): Hosts
 function normalizeCookieValue(value: string): string {
   const parsed = parseSetCookieHeader(value);
   if (parsed?.cookie) return parsed.cookie;
-  return value.split(";")[0].trim();
+  const [cookie] = value.split(";");
+  return (cookie ?? value).trim();
 }
 
 function defaultLogger(context: string, error: unknown): void {
@@ -875,7 +908,8 @@ function scaleDecimal(value: string | number | undefined, decimals: number): big
   const strValue = typeof value === "number" ? value.toString() : value;
   if (!strValue.includes("e") && !strValue.includes("E")) {
     const [intPartRaw, fracRaw = ""] = strValue.split(".");
-    const intPart = intPartRaw === "" ? "0" : intPartRaw.replace(/^\+/, "");
+    const sanitizedIntPart = (intPartRaw ?? "").replace(/^\+/, "");
+    const intPart = sanitizedIntPart === "" ? "0" : sanitizedIntPart;
     const fraction = fracRaw.padEnd(decimals, "0").slice(0, decimals);
     const combined = `${intPart}${fraction}`;
     return BigInt(combined || "0");
@@ -947,7 +981,7 @@ function mapOpenOrders(response: IApiOpenOrdersResponse, symbol: string): AsterO
   return (response.result ?? []).map((order) => mapOrder(order, symbol));
 }
 
-function mapOrder(order: GrvtOrder, symbol: string): AsterOrder {
+function mapOrder(order: IOrder, symbol: string): AsterOrder {
   const leg = order.legs?.[0];
   const state = order.state;
   const metadata = order.metadata;
@@ -1030,7 +1064,7 @@ function mapKlines(response: IApiCandlestickResponse, symbol: string): AsterKlin
 }
 
 function mapCreateOrderResponse(response: IApiCreateOrderResponse, symbol: string): AsterOrder {
-  const order = response.result ?? (response as unknown as { order?: GrvtOrder }).order;
+  const order = response.result ?? (response as unknown as { order?: IOrder }).order;
   if (!order) {
     return {
       orderId: cryptoRandomId(),
@@ -1049,7 +1083,75 @@ function mapCreateOrderResponse(response: IApiCreateOrderResponse, symbol: strin
       closePosition: false,
     };
   }
-  return mapOrder(order as unknown as GrvtOrder, symbol);
+  return mapOrder(order as IOrder, symbol);
+}
+
+function toApiOrderPayload(order: GrvtSignedOrder): IOrder {
+  const metadata = order.metadata ? toApiOrderMetadata(order.metadata) : undefined;
+  return {
+    ...order,
+    time_in_force: toApiTimeInForce(order.time_in_force),
+    metadata,
+  };
+}
+
+function toApiOrderMetadata(metadata: GrvtOrderMetadataInput): IOrder["metadata"] {
+  const trigger = metadata.trigger;
+  return {
+    client_order_id: metadata.client_order_id,
+    trigger: trigger
+      ? {
+          trigger_type: toApiTriggerType(trigger.trigger_type),
+          tpsl: {
+            trigger_by: toApiTriggerBy(trigger.tpsl.trigger_by),
+            trigger_price: trigger.tpsl.trigger_price,
+            close_position: trigger.tpsl.close_position,
+          },
+        }
+      : undefined,
+  };
+}
+
+function toApiTimeInForce(timeInForce: GrvtTimeInForce): ETimeInForce {
+  switch (timeInForce) {
+    case "ALL_OR_NONE":
+      return ETimeInForce.ALL_OR_NONE;
+    case "IMMEDIATE_OR_CANCEL":
+      return ETimeInForce.IMMEDIATE_OR_CANCEL;
+    case "FILL_OR_KILL":
+      return ETimeInForce.FILL_OR_KILL;
+    case "GOOD_TILL_TIME":
+    default:
+      return ETimeInForce.GOOD_TILL_TIME;
+  }
+}
+
+function toApiTriggerType(triggerType: GrvtTriggerMetadata["trigger_type"] | undefined): ETriggerType {
+  switch (triggerType) {
+    case "TAKE_PROFIT":
+      return ETriggerType.TAKE_PROFIT;
+    case "STOP_LOSS":
+      return ETriggerType.STOP_LOSS;
+    case "UNSPECIFIED":
+    default:
+      return ETriggerType.UNSPECIFIED;
+  }
+}
+
+function toApiTriggerBy(triggerBy: GrvtTriggerMetadata["tpsl"]["trigger_by"] | undefined): ETriggerBy {
+  switch (triggerBy) {
+    case "INDEX":
+      return ETriggerBy.INDEX;
+    case "LAST":
+      return ETriggerBy.LAST;
+    case "MID":
+      return ETriggerBy.MID;
+    case "MARK":
+      return ETriggerBy.MARK;
+    case "UNSPECIFIED":
+    default:
+      return ETriggerBy.UNSPECIFIED;
+  }
 }
 
 function buildUnsignedOrder(params: {
@@ -1080,10 +1182,10 @@ function buildUnsignedOrder(params: {
     orderParams.timeInForce && orderParams.timeInForce.toUpperCase() === "GTX"
   );
   const reduceOnly = normalizeBoolean(orderParams.reduceOnly);
-    const priceValue = isMarketOrder ? undefined : orderParams.price;
-    if (!isMarketOrder && (priceValue == null || !Number.isFinite(Number(priceValue)))) {
-      throw new Error("GRVT limit orders require a valid price");
-    }
+  const priceValue = isMarketOrder ? undefined : orderParams.price;
+  if (!isMarketOrder && (priceValue == null || !Number.isFinite(Number(priceValue)))) {
+    throw new Error("GRVT limit orders require a valid price");
+  }
 
   const trigger = buildTriggerMetadata(orderParams);
   const metadata = {
@@ -1141,41 +1243,41 @@ function buildTriggerMetadata(params: CreateOrderParams): GrvtUnsignedOrder["met
   return undefined;
 }
 
-function mapIntervalToGrvt(interval: string): string {
+function mapIntervalToGrvt(interval: string): ECandlestickInterval {
   const normalized = interval.trim().toLowerCase();
   switch (normalized) {
     case "1m":
-      return "CI_1_M";
+      return ECandlestickInterval.CI_1_M;
     case "3m":
-      return "CI_3_M";
+      return ECandlestickInterval.CI_3_M;
     case "5m":
-      return "CI_5_M";
+      return ECandlestickInterval.CI_5_M;
     case "15m":
-      return "CI_15_M";
+      return ECandlestickInterval.CI_15_M;
     case "30m":
-      return "CI_30_M";
+      return ECandlestickInterval.CI_30_M;
     case "1h":
-      return "CI_1_H";
+      return ECandlestickInterval.CI_1_H;
     case "2h":
-      return "CI_2_H";
+      return ECandlestickInterval.CI_2_H;
     case "4h":
-      return "CI_4_H";
+      return ECandlestickInterval.CI_4_H;
     case "6h":
-      return "CI_6_H";
+      return ECandlestickInterval.CI_6_H;
     case "8h":
-      return "CI_8_H";
+      return ECandlestickInterval.CI_8_H;
     case "12h":
-      return "CI_12_H";
+      return ECandlestickInterval.CI_12_H;
     case "1d":
-      return "CI_1_D";
+      return ECandlestickInterval.CI_1_D;
     case "1w":
-      return "CI_1_W";
+      return ECandlestickInterval.CI_1_W;
     default:
-      return "CI_1_M";
+      return ECandlestickInterval.CI_1_M;
   }
 }
 
-function mapTimeInForceToGrvt(timeInForce: string | undefined): string {
+function mapTimeInForceToGrvt(timeInForce: string | undefined): GrvtTimeInForce {
   switch ((timeInForce ?? "GTC").toUpperCase()) {
     case "IOC":
       return "IMMEDIATE_OR_CANCEL";

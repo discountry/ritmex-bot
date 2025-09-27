@@ -707,10 +707,12 @@ function updateAccountSnapshot(snapshot: AsterAccountSnapshot | null, event: { e
 }
 
 function mergeOrderSnapshot(map: Map<number, AsterOrder>, order: AsterOrder): void {
+  const numericId = typeof order.orderId === "number" ? order.orderId : Number(order.orderId);
+  if (!Number.isFinite(numericId)) return;
   if (FINAL_ORDER_STATUSES.has(order.status)) {
-    map.delete(order.orderId);
+    map.delete(numericId);
   } else {
-    map.set(order.orderId, order);
+    map.set(numericId, { ...order, orderId: numericId });
   }
 }
 
@@ -1003,7 +1005,10 @@ export class AsterGateway {
     await this.rest.cancelAllOrders(params);
     for (const order of Array.from(this.openOrders.values())) {
       if (order.symbol === params.symbol) {
-        this.openOrders.delete(order.orderId);
+        const numericId = typeof order.orderId === "number" ? order.orderId : Number(order.orderId);
+        if (Number.isFinite(numericId)) {
+          this.openOrders.delete(numericId);
+        }
       }
     }
     this.ordersEvent.emit(Array.from(this.openOrders.values()));

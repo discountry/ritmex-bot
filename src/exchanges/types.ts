@@ -51,10 +51,17 @@ export interface GrvtOrderLeg {
   is_buying_asset?: boolean;
 }
 
+export type GrvtTimeInForce =
+  | "GOOD_TILL_TIME"
+  | "ALL_OR_NONE"
+  | "IMMEDIATE_OR_CANCEL"
+  | "FILL_OR_KILL";
+
 export interface GrvtOrderMetadata {
   client_order_id?: string;
   create_time?: string;
   broker?: string | null;
+  trigger?: GrvtTriggerMetadata;
 }
 
 export interface GrvtOrderState {
@@ -71,7 +78,7 @@ export interface GrvtOrder {
   client_order_id?: string;
   sub_account_id?: string;
   is_market?: boolean;
-  time_in_force?: string;
+  time_in_force?: GrvtTimeInForce;
   post_only?: boolean;
   reduce_only?: boolean;
   legs?: GrvtOrderLeg[];
@@ -229,7 +236,7 @@ export interface GrvtOrderMetadataInput {
 export interface GrvtUnsignedOrder {
   sub_account_id: string;
   is_market: boolean;
-  time_in_force: string;
+  time_in_force: GrvtTimeInForce;
   post_only: boolean;
   reduce_only: boolean;
   legs: GrvtUnsignedOrderLeg[];

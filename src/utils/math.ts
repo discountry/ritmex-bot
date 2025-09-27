@@ -14,7 +14,8 @@ export function roundQtyDownToStep(value: number, step: number): number {
 export function decimalsOf(step: number): number {
   const s = step.toString();
   if (!s.includes(".")) return 0;
-  return s.split(".")[1].length;
+  const fraction = s.split(".")[1];
+  return fraction ? fraction.length : 0;
 }
 
 export function isNearlyZero(value: number, epsilon = 1e-5): boolean {

@@ -9,18 +9,18 @@ export function shouldStopLoss(
   const absPosition = Math.abs(position.positionAmt);
   if (absPosition < 1e-5) return false;
 
+  if (!Number.isFinite(position.entryPrice) || Math.abs(position.entryPrice) < 1e-8) {
+    return false;
+  }
+
+  const closePrice = position.positionAmt > 0 ? bestBid : bestAsk;
+  if (!Number.isFinite(closePrice)) return false;
+
   const pnl = position.positionAmt > 0
-    ? (bestBid - position.entryPrice) * absPosition
-    : (position.entryPrice - bestAsk) * absPosition;
+    ? (closePrice - position.entryPrice) * absPosition
+    : (position.entryPrice - closePrice) * absPosition;
 
-  const unrealized = Number.isFinite(position.unrealizedProfit)
-    ? (position.unrealizedProfit as number)
-    : null;
+  if (!Number.isFinite(pnl)) return false;
 
-  const derivedLoss = pnl < -lossLimit;
-  const snapshotLoss = Boolean(unrealized != null && unrealized < -lossLimit && pnl <= 0);
-
-  return derivedLoss || snapshotLoss;
+  return pnl < -lossLimit;
 }
-
-
