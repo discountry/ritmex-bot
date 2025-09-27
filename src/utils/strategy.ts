@@ -52,6 +52,37 @@ export function calcTrailingActivationPrice(entryPrice: number, qty: number, sid
   return entryPrice - profit / Math.abs(qty);
 }
 
+export function computeBollingerBandwidth(
+  values: AsterKline[],
+  length: number,
+  stdMultiplier: number
+): number | null {
+  const period = Number.isInteger(length) ? Number(length) : 0;
+  const multiplier = Number.isFinite(stdMultiplier) ? stdMultiplier : 0;
+  if (!Array.isArray(values) || period <= 0 || values.length < period || multiplier <= 0) {
+    return null;
+  }
+  const window = values.slice(-period);
+  const closes = window.map((kline) => Number(kline.close));
+  if (closes.some((close) => !Number.isFinite(close))) {
+    return null;
+  }
+  const mean = closes.reduce((sum, price) => sum + price, 0) / period;
+  if (!Number.isFinite(mean) || mean <= 0) {
+    return null;
+  }
+  const variance = closes.reduce((sum, price) => {
+    const diff = price - mean;
+    return sum + diff * diff;
+  }, 0) / period;
+  const std = Math.sqrt(Math.max(variance, 0));
+  const width = std * multiplier * 2;
+  if (!Number.isFinite(width)) {
+    return null;
+  }
+  return width / mean;
+}
+
 /**
  * Return true if the intended order price is within the allowed deviation from mark price.
  * - For BUY: orderPrice must be <= markPrice * (1 + maxPct)

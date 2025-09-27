@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getPosition, getSMA } from "../src/utils/strategy";
+import { computeBollingerBandwidth, getPosition, getSMA } from "../src/utils/strategy";
 import type { AsterAccountSnapshot, AsterKline } from "../src/exchanges/types";
 
 const mockSnapshot = (positions: Array<{ symbol: string; amt: number; entry: number; pnl: number }> = []): AsterAccountSnapshot => ({
@@ -54,5 +54,18 @@ describe("strategy utils", () => {
   it("computes SMA for latest closes", () => {
     const data = mockKlines(Array.from({ length: 30 }, (_, i) => i + 1));
     expect(getSMA(data, 30)).toBe(15.5);
+  });
+
+  it("returns null Bollinger bandwidth when data insufficient", () => {
+    const klines = mockKlines([100, 101, 102]);
+    expect(computeBollingerBandwidth(klines, 20, 2)).toBeNull();
+  });
+
+  it("computes Bollinger bandwidth ratio", () => {
+    const closes = [...Array(19).fill(100), 110];
+    const klines = mockKlines(closes);
+    const bandwidth = computeBollingerBandwidth(klines, 20, 2);
+    expect(bandwidth).not.toBeNull();
+    expect(bandwidth ?? 0).toBeCloseTo(0.0867443, 5);
   });
 });

@@ -12,6 +12,9 @@ export interface TradingConfig {
   maxCloseSlippagePct: number;
   priceTick: number; // price tick size, e.g. 0.1 for BTCUSDT
   qtyStep: number;   // quantity step size, e.g. 0.001 BTC
+  bollingerLength: number;
+  bollingerStdMultiplier: number;
+  minBollingerBandwidth: number;
 }
 
 function parseNumber(value: string | undefined, fallback: number): number {
@@ -34,6 +37,9 @@ export const tradingConfig: TradingConfig = {
   maxCloseSlippagePct: parseNumber(process.env.MAX_CLOSE_SLIPPAGE_PCT, 0.05),
   priceTick: parseNumber(process.env.PRICE_TICK, 0.1),
   qtyStep: parseNumber(process.env.QTY_STEP, 0.001),
+  bollingerLength: parseNumber(process.env.BOLLINGER_LENGTH, 20),
+  bollingerStdMultiplier: parseNumber(process.env.BOLLINGER_STD_MULTIPLIER, 2),
+  minBollingerBandwidth: parseNumber(process.env.MIN_BOLLINGER_BANDWIDTH, 0.1),
 };
 
 export interface MakerConfig {

@@ -78,6 +78,7 @@ Windows 使用 WSL（推荐）：
    - `LOSS_LIMIT`：单笔允许的最大亏损（USDT），触发即强制平仓。
    - `TRAILING_PROFIT` / `TRAILING_CALLBACK_RATE`：趋势策略的动态止盈触发值（单位 USDT）与回撤百分比（百分数，如 0.2 表示 0.2%）。
    - `PROFIT_LOCK_TRIGGER_USD` / `PROFIT_LOCK_OFFSET_USD`：达到一定浮盈后，将基础止损上调（做多）或下调（做空）到开仓价的偏移量（单位 USDT）。
+   - `BOLLINGER_LENGTH` / `BOLLINGER_STD_MULTIPLIER` / `MIN_BOLLINGER_BANDWIDTH`：布林带宽度过滤参数，默认使用 20 根 1 分钟 K 线及 2 倍标准差，仅当带宽比例 ≥ 0.1 时允许入场。
    - `PRICE_TICK` / `QTY_STEP`：交易对的最小价格变动单位与最小下单数量步长（例如 BTCUSDT 分别为 0.1 与 0.001）。
    - `MAKER_*` 参数：做市策略追价阈值、报价偏移、刷新频率等，可按流动性需求调节。
 6. **运行机器人**

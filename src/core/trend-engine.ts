@@ -11,6 +11,7 @@ import type {
 import {
   calcStopLossPrice,
   calcTrailingActivationPrice,
+  computeBollingerBandwidth,
   getPosition,
   getSMA,
   type PositionSnapshot,
@@ -37,6 +38,7 @@ export interface TrendEngineSnapshot {
   symbol: string;
   lastPrice: number | null;
   sma30: number | null;
+  bollingerBandwidth: number | null;
   trend: "做多" | "做空" | "无信号";
   position: PositionSnapshot;
   pnl: number;
@@ -78,6 +80,7 @@ export class TrendEngine {
   private processing = false;
   private lastPrice: number | null = null;
   private lastSma30: number | null = null;
+  private lastBollingerBandwidth: number | null = null;
   private totalProfit = 0;
   private totalTrades = 0;
   private lastOpenPlan: OpenOrderPlan = { side: null, price: null };
@@ -99,6 +102,7 @@ export class TrendEngine {
   private lastEntryMinute: number | null = null;
   // 止损后冷却：止损发生后的 60s 内忽略 SMA 入场信号
   private lastStopLossAt: number | null = null;
+  private lastBollingerBlockLogged = 0;
 
   private ordersSnapshotReady = false;
   private startupLogged = false;
@@ -243,11 +247,12 @@ export class TrendEngine {
   }
 
   private isReady(): boolean {
+    const minKlines = Math.max(30, this.config.bollingerLength);
     return Boolean(
       this.accountSnapshot &&
         this.tickerSnapshot &&
         this.depthSnapshot &&
-        this.klineSnapshot.length >= 30
+        this.klineSnapshot.length >= minKlines
     );
   }
 
@@ -277,13 +282,19 @@ export class TrendEngine {
       if (sma30 == null) {
         return;
       }
+      const bollingerBandwidth = computeBollingerBandwidth(
+        this.klineSnapshot,
+        this.config.bollingerLength,
+        this.config.bollingerStdMultiplier
+      );
+      this.lastBollingerBandwidth = bollingerBandwidth;
       const ticker = this.tickerSnapshot!;
       const price = Number(ticker.lastPrice);
       const position = getPosition(this.accountSnapshot, this.config.symbol);
 
       if (Math.abs(position.positionAmt) < 1e-5) {
         if (!this.rateLimit.shouldBlockEntries()) {
-          await this.handleOpenPosition(price, sma30);
+          await this.handleOpenPosition(price, sma30, bollingerBandwidth);
         }
       } else {
         const result = await this.handlePositionManagement(position, price);
@@ -345,7 +356,11 @@ export class TrendEngine {
     this.startupLogged = true;
   }
 
-  private async handleOpenPosition(currentPrice: number, currentSma: number): Promise<void> {
+  private async handleOpenPosition(
+    currentPrice: number,
+    currentSma: number,
+    currentBandwidth: number | null
+  ): Promise<void> {
     this.entryPricePendingLogged = false;
     const now = Date.now();
     const currentMinute = Math.floor(now / 60_000);
@@ -358,6 +373,20 @@ export class TrendEngine {
     // 同一分钟只允许一次入场
     if (this.lastEntryMinute != null && this.lastEntryMinute === currentMinute) {
       this.tradeLog.push("info", "本分钟已入场，忽略新的 SMA 入场信号");
+      return;
+    }
+    if (
+      Number.isFinite(currentBandwidth) &&
+      this.config.minBollingerBandwidth > 0 &&
+      Number(currentBandwidth) < this.config.minBollingerBandwidth
+    ) {
+      if (now - this.lastBollingerBlockLogged > 15_000) {
+        this.tradeLog.push(
+          "info",
+          `布林带宽度不足：${Number(currentBandwidth).toFixed(4)} < ${this.config.minBollingerBandwidth}，忽略入场信号`
+        );
+        this.lastBollingerBlockLogged = now;
+      }
       return;
     }
     if (this.lastPrice == null) {
@@ -852,6 +881,7 @@ export class TrendEngine {
       symbol: this.config.symbol,
       lastPrice: price,
       sma30,
+      bollingerBandwidth: this.lastBollingerBandwidth,
       trend,
       position,
       pnl,
