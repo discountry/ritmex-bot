@@ -1,0 +1,79 @@
+ci:
+  skip: [pytest]
+
+default_language_version:
+  python: python3.10
+
+repos:
+  # general checks (see here: https://pre-commit.com/hooks.html)
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  # ruff - linting + formatting
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: "v0.6.3"
+    hooks:
+      - id: ruff
+        name: ruff
+      - id: ruff-format
+        name: ruff-format
+
+  # mypy - lint-like type checking
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        name: mypy
+
+  # docformatter - formats docstrings to follow PEP 257
+  - repo: https://github.com/pycqa/docformatter
+    rev: v1.7.5
+    hooks:
+      - id: docformatter
+        name: docformatter
+        args:
+          [
+            -r,
+            -i,
+            --pre-summary-newline,
+            --make-summary-multi-line,
+            --wrap-summaries,
+            "90",
+            --wrap-descriptions,
+            "90",
+            src,
+            tests,
+          ]
+        exclude: ^(artifacts/.*)$
+
+  # bandit - find common security issues
+  - repo: https://github.com/pycqa/bandit
+    rev: 1.7.9
+    hooks:
+      - id: bandit
+        name: bandit
+        exclude: ^tests/
+        args:
+          - -r
+          - src
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: uv run pytest tests --cov=src
+        language: system
+        types: [python]
+        pass_filenames: false
+
+  # prettier - formatting JS, CSS, JSON, Markdown, ...
+  - repo: https://github.com/pre-commit/mirrors-prettier
+    rev: v3.1.0
+    hooks:
+      - id: prettier
+        exclude: ^(uv.lock)$

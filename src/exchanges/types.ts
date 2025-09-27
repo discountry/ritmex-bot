@@ -195,6 +195,51 @@ export interface GrvtKline {
   number_of_trades?: number;
 }
 
+export interface GrvtSignature {
+  signer: string;
+  r: string;
+  s: string;
+  v: number;
+  expiration: string;
+  nonce: number;
+}
+
+export interface GrvtUnsignedOrderLeg {
+  instrument: string;
+  size: string;
+  limit_price?: string;
+  is_buying_asset: boolean;
+}
+
+export interface GrvtTriggerMetadata {
+  trigger_type: "UNSPECIFIED" | "TAKE_PROFIT" | "STOP_LOSS";
+  tpsl: {
+    trigger_by: "UNSPECIFIED" | "INDEX" | "LAST" | "MID" | "MARK";
+    trigger_price: string;
+    close_position: boolean;
+  };
+}
+
+export interface GrvtOrderMetadataInput {
+  client_order_id: string;
+  trigger?: GrvtTriggerMetadata;
+  broker?: string | null;
+}
+
+export interface GrvtUnsignedOrder {
+  sub_account_id: string;
+  is_market: boolean;
+  time_in_force: string;
+  post_only: boolean;
+  reduce_only: boolean;
+  legs: GrvtUnsignedOrderLeg[];
+  metadata: GrvtOrderMetadataInput;
+}
+
+export interface GrvtSignedOrder extends GrvtUnsignedOrder {
+  signature: GrvtSignature;
+}
+
 export interface AsterAccountAsset {
   asset: string;
   walletBalance: string;
@@ -290,7 +335,7 @@ export interface AsterKline {
 }
 
 export interface AsterOrder {
-  orderId: number;
+  orderId: number | string;
   clientOrderId: string;
   symbol: string;
   side: OrderSide;

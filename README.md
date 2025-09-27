@@ -133,6 +133,62 @@ MAKER_MAX_CLOSE_SLIPPAGE_PCT=0.05 # allowed deviation vs mark when closing
 MAKER_PRICE_TICK=0.1              # maker tick size; defaults to PRICE_TICK
 ```
 
+To switch the entire CLI to GRVT instead of Aster, set `EXCHANGE=grvt` and provide the programmable API credentials:
+
+```bash
+EXCHANGE=grvt
+GRVT_API_KEY=your_api_key
+GRVT_API_SECRET=0xabc123...            # private key used for EIP-712 order signatures
+GRVT_SUB_ACCOUNT_ID=your_sub_account   # sub account that actually trades
+GRVT_INSTRUMENT=BTC_USDT_Perp          # instrument as defined by GRVT
+GRVT_SYMBOL=BTCUSDT                    # optional display symbol; defaults to instrument sans underscores
+GRVT_ENV=prod                          # optional environment switch (prod/testnet/staging/dev)
+# Optional overrides
+# GRVT_SIGNER_PATH=./grvt-signer.cjs   # replace the built-in signer if you run an external service
+# GRVT_COOKIE="gravity=..."           # pre-provisioned session cookie (auto-fetched via API key when absent)
+# GRVT_ACCOUNT_ID=...                 # populated automatically after login
+```
+
+The adapter logs in with `GRVT_API_KEY`, refreshes cookies automatically, and signs orders locally using `GRVT_API_SECRET` following GRVT's EIP‑712 schema. If you prefer to delegate signing to another process, set `GRVT_SIGNER_PATH`; the module should export a function (default export also works) that receives a context object (unsigned order, nonce/expiration, instrument metadata, chain id, etc.) and returns `{ signer, r, s, v, expiration, nonce }`. If you leave `GRVT_SIGNER_PATH` unset, the built-in signer uses `GRVT_API_SECRET` directly.
+
+### 切换到 GRVT 交易所
+
+将环境变量 `EXCHANGE` 设为 `grvt` 后，所有策略会改用 GRVT 适配器：
+
+```bash
+EXCHANGE=grvt
+GRVT_API_KEY=你的APIKey
+GRVT_API_SECRET=0xabc123...                 # 用于订单签名的私钥
+GRVT_SUB_ACCOUNT_ID=your_sub_account_id     # 具体交易子账号
+GRVT_INSTRUMENT=BTC_USDT_Perp               # 交易品种，需与策略一致
+GRVT_SYMBOL=BTCUSDT                         # 可选，内部用于展示，默认由 instrument 推导
+GRVT_ENV=prod                               # 可选：prod / testnet / staging / dev，默认 prod
+# 可选覆盖项
+# GRVT_SIGNER_PATH=./grvt-signer.cjs        # 如果你希望由外部服务签名
+# GRVT_COOKIE="gravity=..."                # 预先获取到的 Cookie（若未提供，将使用 API Key 自动登录）
+# GRVT_ACCOUNT_ID=...                      # 登录后自动填充
+```
+
+适配器会基于 `GRVT_API_SECRET` 自动完成 EIP‑712 签名并提交订单。如果你需要自定义签名流程，可通过 `GRVT_SIGNER_PATH` 指定模块（CommonJS 或 ESM 均可）。模块需导出一个函数，接收签名上下文（未签名订单、nonce/expiration、合约元信息、链 ID 等）并返回包含 `signer/r/s/v/expiration/nonce` 字段的对象，例如：
+
+```js
+// grvt-signer.cjs
+module.exports = async function signOrder(context) {
+  // 调用你自己的签名服务，或者使用本地私钥完成签名
+  const signature = await mySigner(context);
+  return {
+    signer: signature.signer,
+    r: signature.r,
+    s: signature.s,
+    v: signature.v,
+    expiration: signature.expiration,
+    nonce: signature.nonce,
+  };
+};
+```
+
+如未自定义 `GRVT_SIGNER_PATH`，适配器会直接使用 `GRVT_API_SECRET` 完成签名。
+
 ## Running the CLI
 ```bash
 bun run index.ts   # or: bun run dev / bun run start

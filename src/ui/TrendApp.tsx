@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { tradingConfig } from "../config";
-import { AsterExchangeAdapter } from "../exchanges/aster-adapter";
+import { createExchangeAdapter, resolveExchangeId } from "../exchanges/create-adapter";
 import { TrendEngine, type TrendEngineSnapshot } from "../core/trend-engine";
 import { formatNumber } from "../utils/format";
 import { DataTable, type TableColumn } from "./components/DataTable";
@@ -30,18 +30,28 @@ export function TrendApp({ onExit }: TrendAppProps) {
   );
 
   useEffect(() => {
-    const apiKey = process.env.ASTER_API_KEY;
-    const apiSecret = process.env.ASTER_API_SECRET;
-    if (!apiKey || !apiSecret) {
-      setError(new Error("缺少 ASTER_API_KEY 或 ASTER_API_SECRET 环境变量"));
-      return;
-    }
     try {
-      const adapter = new AsterExchangeAdapter({
-        apiKey,
-        apiSecret,
-        symbol: tradingConfig.symbol,
-      });
+      const exchangeId = resolveExchangeId();
+      let adapter;
+      if (exchangeId === "aster") {
+        const apiKey = process.env.ASTER_API_KEY;
+        const apiSecret = process.env.ASTER_API_SECRET;
+        if (!apiKey || !apiSecret) {
+          setError(new Error("缺少 ASTER_API_KEY 或 ASTER_API_SECRET 环境变量"));
+          return;
+        }
+        adapter = createExchangeAdapter({
+          exchange: exchangeId,
+          symbol: tradingConfig.symbol,
+          aster: { apiKey, apiSecret },
+        });
+      } else {
+        adapter = createExchangeAdapter({
+          exchange: exchangeId,
+          symbol: tradingConfig.symbol,
+          grvt: { symbol: tradingConfig.symbol },
+        });
+      }
       const engine = new TrendEngine(tradingConfig, adapter);
       engineRef.current = engine;
       setSnapshot(engine.getSnapshot());
