@@ -87,6 +87,13 @@ export class TrendEngine {
   private cancelAllRequested = false;
   private readonly pendingCancelOrders = new Set<string>();
   private readonly rateLimit: RateLimitController;
+  private lastAccountPosition: PositionSnapshot = {
+    positionAmt: 0,
+    entryPrice: 0,
+    unrealizedProfit: 0,
+    markPrice: null,
+  };
+  private pendingRealized: { pnl: number; timestamp: number } | null = null;
 
   // 控制入场频率：同一分钟内最多入场一次
   private lastEntryMinute: number | null = null;
@@ -151,6 +158,7 @@ export class TrendEngine {
           this.accountSnapshot = snapshot;
           const position = getPosition(snapshot, this.config.symbol);
           this.updateSessionVolume(position);
+          this.trackPositionLifecycle(position, this.getReferencePrice());
           this.emitUpdate();
         } catch (err) {
           this.tradeLog.push("error", `账户推送处理异常: ${extractMessage(err)}`);
@@ -280,12 +288,12 @@ export class TrendEngine {
       } else {
         const result = await this.handlePositionManagement(position, price);
         if (result.closed) {
-          this.totalTrades += 1;
-          this.totalProfit += result.pnl;
+          this.pendingRealized = { pnl: result.pnl, timestamp: Date.now() };
         }
       }
 
       this.updateSessionVolume(position);
+      this.trackPositionLifecycle(position, price);
       this.lastSma30 = sma30;
       this.lastPrice = price;
       this.emitUpdate();
@@ -317,8 +325,7 @@ export class TrendEngine {
     if (!Number.isFinite(price) || price == null) return;
     const result = await this.handlePositionManagement(position, Number(price));
     if (result.closed) {
-      this.totalTrades += 1;
-      this.totalProfit += result.pnl;
+      this.pendingRealized = { pnl: result.pnl, timestamp: Date.now() };
     }
   }
 
@@ -881,6 +888,48 @@ export class TrendEngine {
 
   private getReferencePrice(): number | null {
     return getMidOrLast(this.depthSnapshot, this.tickerSnapshot) ?? (this.lastPrice != null && Number.isFinite(this.lastPrice) ? this.lastPrice : null);
+  }
+
+  private trackPositionLifecycle(position: PositionSnapshot, referencePrice: number | null): void {
+    const prev = this.lastAccountPosition;
+    const prevExposure = Math.abs(prev.positionAmt) > 1e-5;
+    const currentExposure = Math.abs(position.positionAmt) > 1e-5;
+    const signChanged =
+      prevExposure && currentExposure && Math.sign(prev.positionAmt) !== Math.sign(position.positionAmt);
+
+    if (prevExposure && (!currentExposure || signChanged)) {
+      let realized: number | null = this.pendingRealized?.pnl ?? null;
+      if (!Number.isFinite(realized)) {
+        realized = this.estimateRealizedPnl(prev, referencePrice);
+      }
+      if (Number.isFinite(realized)) {
+        this.totalTrades += 1;
+        this.totalProfit += realized ?? 0;
+      }
+      this.pendingRealized = null;
+    }
+
+    if (!prevExposure && currentExposure) {
+      this.pendingRealized = null;
+    }
+
+    this.lastAccountPosition = {
+      positionAmt: position.positionAmt,
+      entryPrice: position.entryPrice,
+      unrealizedProfit: position.unrealizedProfit,
+      markPrice: position.markPrice,
+    };
+  }
+
+  private estimateRealizedPnl(position: PositionSnapshot, referencePrice: number | null): number {
+    const fallbackPrice =
+      referencePrice ??
+      this.getReferencePrice() ??
+      (this.lastPrice != null && Number.isFinite(this.lastPrice) ? this.lastPrice : position.entryPrice);
+    if (!Number.isFinite(fallbackPrice)) {
+      return 0;
+    }
+    return computePositionPnl(position, fallbackPrice, fallbackPrice);
   }
 
 }
