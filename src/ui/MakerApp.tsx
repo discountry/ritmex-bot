@@ -1,7 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { makerConfig } from "../config";
-import { createExchangeAdapter, resolveExchangeId } from "../exchanges/create-adapter";
+import {
+  createExchangeAdapter,
+  getExchangeDisplayName,
+  resolveExchangeId,
+} from "../exchanges/create-adapter";
 import { MakerEngine, type MakerEngineSnapshot } from "../core/maker-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
@@ -16,6 +20,8 @@ export function MakerApp({ onExit }: MakerAppProps) {
   const [snapshot, setSnapshot] = useState<MakerEngineSnapshot | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const engineRef = useRef<MakerEngine | null>(null);
+  const exchangeId = useMemo(() => resolveExchangeId(), []);
+  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
 
   useInput(
     (input, key) => {
@@ -29,7 +35,6 @@ export function MakerApp({ onExit }: MakerAppProps) {
 
   useEffect(() => {
     try {
-      const exchangeId = resolveExchangeId();
       let adapter;
       if (exchangeId === "aster") {
         const apiKey = process.env.ASTER_API_KEY;
@@ -66,7 +71,7 @@ export function MakerApp({ onExit }: MakerAppProps) {
       console.error(err);
       setError(err instanceof Error ? err : new Error(String(err)));
     }
-  }, []);
+  }, [exchangeId]);
 
   if (error) {
     return (
@@ -131,7 +136,7 @@ export function MakerApp({ onExit }: MakerAppProps) {
       <Box flexDirection="column" marginBottom={1}>
         <Text color="cyanBright">Maker Strategy Dashboard</Text>
         <Text>
-          交易对: {snapshot.symbol} ｜ 买一价: {formatNumber(topBid, 2)} ｜ 卖一价: {formatNumber(topAsk, 2)} ｜ 点差: {spreadDisplay}
+          交易所: {exchangeName} ｜ 交易对: {snapshot.symbol} ｜ 买一价: {formatNumber(topBid, 2)} ｜ 卖一价: {formatNumber(topAsk, 2)} ｜ 点差: {spreadDisplay}
         </Text>
         <Text color="gray">状态: {snapshot.ready ? "实时运行" : "等待市场数据"} ｜ 按 Esc 返回策略选择</Text>
       </Box>

@@ -1,7 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { tradingConfig } from "../config";
-import { createExchangeAdapter, resolveExchangeId } from "../exchanges/create-adapter";
+import {
+  createExchangeAdapter,
+  getExchangeDisplayName,
+  resolveExchangeId,
+} from "../exchanges/create-adapter";
 import { TrendEngine, type TrendEngineSnapshot } from "../core/trend-engine";
 import { formatNumber } from "../utils/format";
 import { DataTable, type TableColumn } from "./components/DataTable";
@@ -18,6 +22,8 @@ export function TrendApp({ onExit }: TrendAppProps) {
   const [snapshot, setSnapshot] = useState<TrendEngineSnapshot | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const engineRef = useRef<TrendEngine | null>(null);
+  const exchangeId = useMemo(() => resolveExchangeId(), []);
+  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
 
   useInput(
     (input, key) => {
@@ -31,7 +37,6 @@ export function TrendApp({ onExit }: TrendAppProps) {
 
   useEffect(() => {
     try {
-      const exchangeId = resolveExchangeId();
       let adapter;
       if (exchangeId === "aster") {
         const apiKey = process.env.ASTER_API_KEY;
@@ -68,7 +73,7 @@ export function TrendApp({ onExit }: TrendAppProps) {
       console.error(err);
       setError(err instanceof Error ? err : new Error(String(err)));
     }
-  }, []);
+  }, [exchangeId]);
 
   if (error) {
     return (
@@ -115,7 +120,7 @@ export function TrendApp({ onExit }: TrendAppProps) {
       <Box flexDirection="column" marginBottom={1}>
         <Text color="cyanBright">Trend Strategy Dashboard</Text>
         <Text>
-          交易对: {snapshot.symbol} ｜ 最近价格: {formatNumber(lastPrice, 2)} ｜ SMA30: {formatNumber(sma30, 2)} ｜ 趋势: {trend}
+          交易所: {exchangeName} ｜ 交易对: {snapshot.symbol} ｜ 最近价格: {formatNumber(lastPrice, 2)} ｜ SMA30: {formatNumber(sma30, 2)} ｜ 趋势: {trend}
         </Text>
         <Text color="gray">状态: {ready ? "实时运行" : READY_MESSAGE} ｜ 按 Esc 返回策略选择</Text>
       </Box>

@@ -20,6 +20,10 @@ export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   return "aster";
 }
 
+export function getExchangeDisplayName(id: SupportedExchangeId): string {
+  return id === "grvt" ? "GRVT" : "AsterDex";
+}
+
 export function createExchangeAdapter(options: ExchangeFactoryOptions): ExchangeAdapter {
   const id = resolveExchangeId(options.exchange);
   if (id === "grvt") {

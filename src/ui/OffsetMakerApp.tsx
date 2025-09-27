@@ -1,7 +1,11 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { makerConfig } from "../config";
-import { createExchangeAdapter, resolveExchangeId } from "../exchanges/create-adapter";
+import {
+  createExchangeAdapter,
+  getExchangeDisplayName,
+  resolveExchangeId,
+} from "../exchanges/create-adapter";
 import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../core/offset-maker-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
@@ -16,6 +20,8 @@ export function OffsetMakerApp({ onExit }: OffsetMakerAppProps) {
   const [snapshot, setSnapshot] = useState<OffsetMakerEngineSnapshot | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const engineRef = useRef<OffsetMakerEngine | null>(null);
+  const exchangeId = useMemo(() => resolveExchangeId(), []);
+  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
 
   useInput(
     (input, key) => {
@@ -29,7 +35,6 @@ export function OffsetMakerApp({ onExit }: OffsetMakerAppProps) {
 
   useEffect(() => {
     try {
-      const exchangeId = resolveExchangeId();
       let adapter;
       if (exchangeId === "aster") {
         const apiKey = process.env.ASTER_API_KEY;
@@ -66,7 +71,7 @@ export function OffsetMakerApp({ onExit }: OffsetMakerAppProps) {
       console.error(err);
       setError(err instanceof Error ? err : new Error(String(err)));
     }
-  }, []);
+  }, [exchangeId]);
 
   if (error) {
     return (
@@ -138,7 +143,7 @@ export function OffsetMakerApp({ onExit }: OffsetMakerAppProps) {
       <Box flexDirection="column" marginBottom={1}>
         <Text color="cyanBright">Offset Maker Strategy Dashboard</Text>
         <Text>
-          交易对: {snapshot.symbol} ｜ 买一价: {formatNumber(topBid, 2)} ｜ 卖一价: {formatNumber(topAsk, 2)} ｜ 点差: {spreadDisplay}
+          交易所: {exchangeName} ｜ 交易对: {snapshot.symbol} ｜ 买一价: {formatNumber(topBid, 2)} ｜ 卖一价: {formatNumber(topAsk, 2)} ｜ 点差: {spreadDisplay}
         </Text>
         <Text>
           买10档累计: {formatNumber(snapshot.buyDepthSum10, 4)} ｜ 卖10档累计: {formatNumber(snapshot.sellDepthSum10, 4)} ｜ 状态: {imbalanceLabel}
