@@ -1,19 +1,35 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-The Bun-based entry point (`index.ts`) lives at the root for quick smoke checks, alongside `tsconfig.json` and the Bun lockfile. The production-ready trading agents reside in `legacy/`, which is a pnpm-managed workspace. Inside `legacy/`, strategy scripts (`trendV2.ts`, `maker.ts`, `bot.ts`) and the CLI live at the top level, shared helpers are under `legacy/utils/`, and exchange adapters plus tests sit in `legacy/exchanges/`. Reference environment samples are provided in `legacy/env.example`, and longer-form docs are kept in `legacy/docs/`.
+The Bun entry point (`index.ts`) lives at the repo root for quick CLI smoke checks. All production code is under `src/`:
+
+- `src/strategy/` gathers every live trading engine (`maker`, `offset-maker`, `trend`). Shared helpers for strategy wiring sit in `src/strategy/common/`.
+- `src/core/` keeps order coordination plus shared libs used by multiple strategies.
+- `src/exchanges/` exposes the adapters and REST/websocket clients.
+- `src/ui/` implements the Ink dashboards for each strategy (they remain independent dashboards).
+- `src/logging/` contains the trade log helper.
+- `src/utils/` and `src/config.ts` hold cross-cutting utilities and runtime config.
+- `docs/` stores reference material, while `tests/` contains Vitest suites.
 
 ## Build, Test, and Development Commands
-Run `bun install` at the root to satisfy the lightweight Bun demo. Change into `legacy/` for real work: `pnpm install` bootstraps dependencies, `pnpm start` launches the default trend strategy, `pnpm maker` starts the market-making loop, `pnpm cli:start` triggers the dual-exchange hedging flow, and `pnpm test` executes the full Vitest suite. Use `pnpm aster:test` when you only need the Aster adapter checks.
+- `bun install` – install dependencies.
+- `bun run index.ts` – launch the CLI menu.
+- `bun x vitest run` – execute the full test suite; `bun x vitest --watch` for incremental runs.
+
+Strategy-specific scripts still execute through the CLI; there is no separate `legacy/` workspace.
 
 ## Coding Style & Naming Conventions
-All code is modern TypeScript using native ES modules. Follow the existing two-space indentation, keep imports sorted from external to local, and prefer `camelCase` for variables/functions with `PascalCase` for classes and enums. Strategy files stay in the project root with descriptive verbs (for example `maker.ts`), while shared utilities belong under `legacy/utils/`. Comments should stay concise and explain non-obvious trading logic.
+Use modern TypeScript with ES modules, two-space indentation, and sorted imports (external → internal). Favor `camelCase` for variables/functions and `PascalCase` for classes/enums. Place new strategies under `src/strategy/`, shared utilities under `src/utils/` or `src/strategy/common/` when they only apply to strategies. Keep comments focused on non-obvious trading logic.
 
 ## Testing Guidelines
-Vitest powers unit and integration checks. Place new suites beside their subjects using the `<feature>.test.ts` pattern (e.g., `legacy/exchanges/aster.test.ts`). Ensure strategies ship with coverage for order flow, risk guardrails, and websocket edge cases before opening a pull request. Run `pnpm test --watch` during development to keep feedback tight.
+Vitest powers unit/integration tests. Co-locate new tests next to their subject using `<feature>.test.ts`. Strategies should have coverage for order lifecycle, risk guards, and websocket edge cases. Run `bun x vitest --watch` during development for fast feedback.
 
 ## Commit & Pull Request Guidelines
-The repository history is empty, so adopt a lightweight Conventional Commits style (for example `feat: add hedging status panel`) to keep future changelogs clear. Commits should stay scoped to one strategy or module. Pull requests need a concise summary, reproduction or validation notes (commands run, environments touched), and screenshots or log excerpts when behavior changes. Link tracking issues or tasks to help downstream coordination.
+Follow lightweight Conventional Commits (e.g. `feat: add hedging status panel`). Scope each commit to a single module or strategy. PRs should include:
+- Summary of changes.
+- Validation notes (commands run, environments touched).
+- Relevant logs or screenshots for behavior changes.
+Link issues/tasks when available.
 
 ## Environment & Secrets
-Copy `legacy/env.example` to `.env` and populate API keys for Bitget and AsterDex before running live strategies. Never commit secrets; rely on local dotenv files or your deployment platform's secret manager. Rotate keys immediately if logs or configs leave the sandbox.
+Duplicate `.env.example` to `.env` and populate API keys (Aster/GRVT) before running strategies. Do not commit secrets—use local `.env` or deployment secret managers. Rotate keys if they leak into logs or backups.
