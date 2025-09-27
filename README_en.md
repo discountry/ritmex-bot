@@ -77,6 +77,42 @@ bun run dev        # Development entry point
 bun x vitest run   # Execute the Vitest suite
 ```
 
+## Silent & Background Execution
+### Direct silent launch
+Skip the Ink menu and start a strategy straight from the CLI:
+
+```bash
+bun run index.ts --strategy trend --silent        # Trend engine
+bun run index.ts --strategy maker --silent        # Maker engine
+bun run index.ts --strategy offset-maker --silent # Offset maker engine
+```
+
+### Package scripts
+Convenience aliases are exposed in `package.json`:
+
+```bash
+bun run start:trend:silent
+bun run start:maker:silent
+bun run start:offset:silent
+```
+
+### Daemonising with pm2
+Install `pm2` locally (e.g. `bun add -d pm2`) and launch without a global install:
+
+```bash
+bunx pm2 start bun --name ritmex-trend --cwd . --restart-delay 5000 -- run index.ts --strategy trend --silent
+```
+
+You can also reuse the bundled scripts:
+
+```bash
+bun run pm2:start:trend
+bun run pm2:start:maker
+bun run pm2:start:offset
+```
+
+Adjust `--name`, `--cwd`, or `--restart-delay` to suit your environment and run `pm2 save` if you want the process to auto-start after reboot.
+
 ## Testing
 Vitest powers the unit tests:
 ```bash
@@ -85,6 +121,10 @@ bun x vitest --watch
 ```
 
 ## Troubleshooting
+- You need at least 50–100 USDT of capital before deploying a live strategy.
+- Set leverage on the exchange beforehand (around 50x is recommended); the bot does not change it for you.
+- Keep server/desktop time in sync with real-world time to avoid signature errors.
+- Make sure the exchange account is in one-way position mode.
 - **Env not loading**: ensure `.env` resides in the repository root and variable names are spelled correctly.
 - **Order rejected for precision**: align `PRICE_TICK`, `QTY_STEP`, and `TRADE_SYMBOL` with the exchange filters.
 - **Permission or auth errors**: double-check exchange API scopes.

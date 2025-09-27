@@ -80,6 +80,42 @@ bun run dev        # 调试模式，等价于运行 index.ts
 bun x vitest run   # 执行单元测试
 ```
 
+## 静默启动与后台运行
+### 直接静默启动
+无需进入 Ink 菜单，可用命令行直接拉起指定策略：
+
+```bash
+bun run index.ts --strategy trend --silent        # 启动趋势策略
+bun run index.ts --strategy maker --silent        # 启动做市策略
+bun run index.ts --strategy offset-maker --silent # 启动偏移做市策略
+```
+
+### 项目内置脚本
+`package.json` 提供了便捷脚本：
+
+```bash
+bun run start:trend:silent
+bun run start:maker:silent
+bun run start:offset:silent
+```
+
+### 使用 pm2 守护并自动重启
+将 `pm2` 安装到项目中（示例：`bun add -d pm2`），之后即可在不安装全局 pm2 的情况下运行：
+
+```bash
+bunx pm2 start bun --name ritmex-trend --cwd . --restart-delay 5000 -- run index.ts --strategy trend --silent
+```
+
+亦可直接调用脚本：
+
+```bash
+bun run pm2:start:trend
+bun run pm2:start:maker
+bun run pm2:start:offset
+```
+
+根据需要调整 `--name`、`--cwd`、`--restart-delay` 等参数，完成后可执行 `pm2 save` 持久化进程列表。
+
 ## 测试
 项目使用 Vitest：
 ```bash
