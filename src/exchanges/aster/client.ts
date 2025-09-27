@@ -278,8 +278,14 @@ export class AsterRestClient {
 
   async cancelOrders(params: { symbol: string; orderIdList?: Array<number | string>; origClientOrderIdList?: string[] }): Promise<AsterOrder[]> {
     const payload: Record<string, unknown> = { symbol: params.symbol };
-    if (params.orderIdList) payload.orderIdList = JSON.stringify(params.orderIdList.map((id) => Number(id)));
-    if (params.origClientOrderIdList) payload.origClientOrderIdList = JSON.stringify(params.origClientOrderIdList);
+    if (params.orderIdList?.length) {
+      payload.orderIdList = `[${params.orderIdList
+        .map((id) => (typeof id === "string" ? id.trim() : String(id)))
+        .join(",")}]`;
+    }
+    if (params.origClientOrderIdList?.length) {
+      payload.origClientOrderIdList = JSON.stringify(params.origClientOrderIdList);
+    }
     const response = await this.signedRequest<any[]>({ path: "/fapi/v1/batchOrders", method: "DELETE", params: payload });
     return response.map(toOrderFromRest);
   }
@@ -706,13 +712,15 @@ function updateAccountSnapshot(snapshot: AsterAccountSnapshot | null, event: { e
   return next;
 }
 
-function mergeOrderSnapshot(map: Map<number, AsterOrder>, order: AsterOrder): void {
-  const numericId = typeof order.orderId === "number" ? order.orderId : Number(order.orderId);
-  if (!Number.isFinite(numericId)) return;
+function mergeOrderSnapshot(map: Map<string, AsterOrder>, order: AsterOrder): void {
+  const rawId = order.orderId;
+  if (rawId === undefined || rawId === null) return;
+  const key = String(rawId);
+  if (!key) return;
   if (FINAL_ORDER_STATUSES.has(order.status)) {
-    map.delete(numericId);
+    map.delete(key);
   } else {
-    map.set(numericId, { ...order, orderId: numericId });
+    map.set(key, { ...order, orderId: key });
   }
 }
 
@@ -722,7 +730,7 @@ export class AsterGateway {
   private readonly userStream: AsterUserStream;
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
-  private readonly openOrders = new Map<number, AsterOrder>();
+  private readonly openOrders = new Map<string, AsterOrder>();
   private positionSyncTimer: ReturnType<typeof setInterval> | null = null;
   private positionSyncInFlight = false;
 
@@ -1003,12 +1011,9 @@ export class AsterGateway {
 
   async cancelAllOrders(params: { symbol: string }): Promise<void> {
     await this.rest.cancelAllOrders(params);
-    for (const order of Array.from(this.openOrders.values())) {
+    for (const [key, order] of Array.from(this.openOrders.entries())) {
       if (order.symbol === params.symbol) {
-        const numericId = typeof order.orderId === "number" ? order.orderId : Number(order.orderId);
-        if (Number.isFinite(numericId)) {
-          this.openOrders.delete(numericId);
-        }
+        this.openOrders.delete(key);
       }
     }
     this.ordersEvent.emit(Array.from(this.openOrders.values()));
