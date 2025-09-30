@@ -160,6 +160,33 @@ function createAdapterOrThrow(symbol: string): ExchangeAdapter {
       aster: { apiKey, apiSecret },
     });
   }
+  if (exchangeId === "lighter") {
+    const accountIndex = parseInt(process.env.LIGHTER_ACCOUNT_INDEX ?? "", 10);
+    const privateKey = process.env.LIGHTER_API_PRIVATE_KEY;
+    if (!Number.isFinite(accountIndex) || !privateKey) {
+      throw new Error("LIGHTER_ACCOUNT_INDEX and LIGHTER_API_PRIVATE_KEY environment variables are required for Lighter exchange");
+    }
+    const apiKeyIndex = process.env.LIGHTER_API_KEY_INDEX ? Number(process.env.LIGHTER_API_KEY_INDEX) : 0;
+    const lighterSymbol = process.env.LIGHTER_SYMBOL ?? symbol;
+    const marketId = process.env.LIGHTER_MARKET_ID ? Number(process.env.LIGHTER_MARKET_ID) : undefined;
+    const priceDecimals = process.env.LIGHTER_PRICE_DECIMALS ? Number(process.env.LIGHTER_PRICE_DECIMALS) : undefined;
+    const sizeDecimals = process.env.LIGHTER_SIZE_DECIMALS ? Number(process.env.LIGHTER_SIZE_DECIMALS) : undefined;
+    return createExchangeAdapter({
+      exchange: exchangeId,
+      symbol,
+      lighter: {
+        marketSymbol: lighterSymbol,
+        accountIndex,
+        apiPrivateKey: privateKey,
+        apiKeyIndex,
+        baseUrl: process.env.LIGHTER_BASE_URL,
+        environment: process.env.LIGHTER_ENV,
+        marketId,
+        priceDecimals,
+        sizeDecimals,
+      },
+    });
+  }
 
   return createExchangeAdapter({
     exchange: exchangeId,

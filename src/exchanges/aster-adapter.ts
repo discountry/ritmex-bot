@@ -31,6 +31,10 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
     this.symbol = (credentials.symbol ?? process.env.TRADE_SYMBOL ?? "BTCUSDT").toUpperCase();
   }
 
+  supportsTrailingStops(): boolean {
+    return true;
+  }
+
   private safeInvoke<T extends (...args: any[]) => void>(context: string, cb: T): T {
     const wrapped = ((...args: any[]) => {
       try {

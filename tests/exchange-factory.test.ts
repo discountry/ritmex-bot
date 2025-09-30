@@ -16,6 +16,8 @@ afterEach(() => {
 describe("exchange factory", () => {
   it("defaults to aster when no env is provided", () => {
     delete process.env.EXCHANGE;
+    process.env.ASTER_API_KEY = "key";
+    process.env.ASTER_API_SECRET = "secret";
     const adapter = createExchangeAdapter({ symbol: "BTCUSDT" });
     expect(adapter).toBeInstanceOf(AsterExchangeAdapter);
     expect(adapter.id).toBe("aster");

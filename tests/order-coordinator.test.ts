@@ -32,6 +32,7 @@ const baseOrder: AsterOrder = {
 function createMockExchange(overrides: Partial<ExchangeAdapter> = {}): ExchangeAdapter {
   return {
     id: "mock",
+    supportsTrailingStops: () => true,
     watchAccount: () => undefined,
     watchOrders: () => undefined,
     watchDepth: () => undefined,

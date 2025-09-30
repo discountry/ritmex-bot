@@ -48,6 +48,30 @@ export function MakerApp({ onExit }: MakerAppProps) {
           symbol: makerConfig.symbol,
           aster: { apiKey, apiSecret },
         });
+      } else if (exchangeId === "lighter") {
+        const accountIndexRaw = process.env.LIGHTER_ACCOUNT_INDEX;
+        const apiPrivateKey = process.env.LIGHTER_API_PRIVATE_KEY;
+        if (!accountIndexRaw || !apiPrivateKey) {
+          setError(new Error("缺少 LIGHTER_ACCOUNT_INDEX 或 LIGHTER_API_PRIVATE_KEY 环境变量"));
+          return;
+        }
+        adapter = createExchangeAdapter({
+          exchange: exchangeId,
+          symbol: makerConfig.symbol,
+          lighter: {
+            displaySymbol: makerConfig.symbol,
+            accountIndex: parseInt(accountIndexRaw, 10),
+            apiPrivateKey,
+            apiKeyIndex: process.env.LIGHTER_API_KEY_INDEX ? Number(process.env.LIGHTER_API_KEY_INDEX) : 0,
+            environment: process.env.LIGHTER_ENV,
+            baseUrl: process.env.LIGHTER_BASE_URL,
+            marketId: process.env.LIGHTER_MARKET_ID ? Number(process.env.LIGHTER_MARKET_ID) : undefined,
+            marketSymbol: process.env.LIGHTER_SYMBOL,
+            priceDecimals: process.env.LIGHTER_PRICE_DECIMALS ? Number(process.env.LIGHTER_PRICE_DECIMALS) : undefined,
+            sizeDecimals: process.env.LIGHTER_SIZE_DECIMALS ? Number(process.env.LIGHTER_SIZE_DECIMALS) : undefined,
+            l1Address: process.env.LIGHTER_L1_ADDRESS,
+          },
+        });
       } else {
         adapter = createExchangeAdapter({
           exchange: exchangeId,

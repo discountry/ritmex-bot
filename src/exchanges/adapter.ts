@@ -29,6 +29,7 @@ export interface KlineListener {
 
 export interface ExchangeAdapter {
   readonly id: string;
+  supportsTrailingStops(): boolean;
   watchAccount(cb: AccountListener): void;
   watchOrders(cb: OrderListener): void;
   watchDepth(symbol: string, cb: DepthListener): void;

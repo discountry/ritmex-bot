@@ -93,6 +93,10 @@ export class GrvtExchangeAdapter implements ExchangeAdapter {
     });
   }
 
+  supportsTrailingStops(): boolean {
+    return false;
+  }
+
   watchAccount(cb: AccountListener): void {
     void this.ensureInitialized("watchAccount");
     this.gateway.onAccount(this.safeInvoke("watchAccount", cb));

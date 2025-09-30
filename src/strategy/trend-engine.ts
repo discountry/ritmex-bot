@@ -606,7 +606,7 @@ export class TrendEngine {
       await this.tryPlaceStopLoss(stopSide, roundDownToTick(stopPrice, this.config.priceTick), price);
     }
 
-    if (!currentTrailing) {
+    if (!currentTrailing && this.exchange.supportsTrailingStops()) {
       await this.tryPlaceTrailingStop(
         stopSide,
         roundDownToTick(activationPrice, this.config.priceTick),
@@ -824,6 +824,9 @@ export class TrendEngine {
     activationPrice: number,
     quantity: number
   ): Promise<void> {
+    if (!this.exchange.supportsTrailingStops()) {
+      return;
+    }
     try {
       await placeTrailingStopOrder(
         this.exchange,
