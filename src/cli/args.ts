@@ -1,7 +1,9 @@
 export type StrategyId = "trend" | "maker" | "offset-maker";
+export type ExchangeId = "grvt" | "aster";
 
 export interface CliOptions {
   strategy?: StrategyId;
+  exchange?: ExchangeId;
   silent: boolean;
   help: boolean;
 }
@@ -21,6 +23,14 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions
     }
     if (arg === "--help" || arg === "-h") {
       options.help = true;
+      continue;
+    }
+    if (arg === "-g" || arg === "--grvt") {
+      options.exchange = "grvt";
+      continue;
+    }
+    if (arg === "-a" || arg === "--aster") {
+      options.exchange = "aster";
       continue;
     }
     if (arg.startsWith("--strategy=")) {
@@ -53,10 +63,12 @@ function assignStrategy(options: CliOptions, raw: string): void {
 
 export function printCliHelp(): void {
   // eslint-disable-next-line no-console
-  console.log(`Usage: bun run index.ts [--strategy <trend|maker|offset-maker>] [--silent]\n\n` +
+  console.log(`Usage: bun run index.ts [--strategy <trend|maker|offset-maker>] [--silent] [-g|-a]\n\n` +
     `Options:\n` +
     `  --strategy, -s    Automatically start the specified strategy without the interactive menu.\n` +
     `                    Aliases: offset, offset-maker for the offset maker engine.\n` +
+    `  -g, --grvt        Use GRVT exchange (overrides EXCHANGE in .env)\n` +
+    `  -a, --aster       Use Aster exchange (overrides EXCHANGE in .env)\n` +
     `  --silent, -q      Reduce console output. When used with --strategy, runs in silent daemon mode.\n` +
     `  --help, -h        Show this help message.\n`);
 }

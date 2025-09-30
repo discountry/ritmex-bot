@@ -8,6 +8,11 @@ import { startStrategy } from "./cli/strategy-runner";
 setupGlobalErrorHandlers();
 const options = parseCliArgs();
 
+// Override EXCHANGE environment variable if specified via CLI
+if (options.exchange) {
+  process.env.EXCHANGE = options.exchange;
+}
+
 if (options.help) {
   printCliHelp();
   process.exit(0);
