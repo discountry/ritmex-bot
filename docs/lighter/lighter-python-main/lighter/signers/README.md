@@ -1,0 +1,1 @@
+Check the [go-sdk](https://github.com/elliottech/lighter-go) to see the source code for the binaries or to generate them youself.
