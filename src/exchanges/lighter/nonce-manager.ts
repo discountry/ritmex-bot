@@ -60,6 +60,8 @@ export class HttpNonceManager implements LighterNonceManager {
 
   async refresh(apiKeyIndex: number): Promise<void> {
     const nonce = await this.http.getNextNonce(this.accountIndex, apiKeyIndex);
+    // eslint-disable-next-line no-console
+    console.debug("[LighterNonceManager] refresh", { apiKeyIndex, nonce: nonce.toString() });
     this.slots.set(apiKeyIndex, { apiKeyIndex, next: nonce, lastIssued: null });
   }
 

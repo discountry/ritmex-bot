@@ -171,9 +171,11 @@ function defaultAsset(details: LighterAccountDetails): AsterAccountAsset[] {
 function lighterPositionToAster(symbol: string, position: LighterPosition): AsterAccountPosition {
   const sign = position.sign ?? 0;
   const positionSide = sign > 0 ? "LONG" : sign < 0 ? "SHORT" : "BOTH";
+  const magnitude = Number(position.position ?? 0);
+  const signed = sign < 0 ? -Math.abs(magnitude) : Math.abs(magnitude);
   return {
-    symbol: position.symbol ?? symbol,
-    positionAmt: position.position ?? "0",
+    symbol,
+    positionAmt: Number.isFinite(signed) ? signed.toString() : position.position ?? "0",
     entryPrice: position.avg_entry_price ?? "0",
     unrealizedProfit: position.unrealized_pnl ?? "0",
     positionSide,

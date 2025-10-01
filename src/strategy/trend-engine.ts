@@ -99,6 +99,8 @@ export class TrendEngine {
     markPrice: null,
   };
   private pendingRealized: { pnl: number; timestamp: number } | null = null;
+  private klineInsufficientLogged = false;
+  private klineReadyLogged = false;
 
   // 控制入场频率：同一分钟内最多入场一次
   private lastEntryMinute: number | null = null;
@@ -174,8 +176,16 @@ export class TrendEngine {
       this.exchange.watchOrders.bind(this.exchange),
       (orders) => {
         this.synchronizeLocks(orders);
+        const isActive = (status: string | undefined) => {
+          if (!status) return true;
+          const normalized = status.toLowerCase();
+          return normalized !== "filled" && normalized !== "canceled" && normalized !== "cancelled";
+        };
         this.openOrders = Array.isArray(orders)
-          ? orders.filter((order) => order.type !== "MARKET" && order.symbol === this.config.symbol)
+          ? orders.filter(
+              (order) =>
+                order.type !== "MARKET" && order.symbol === this.config.symbol && isActive(order.status)
+            )
           : [];
         const currentIds = new Set(this.openOrders.map((order) => String(order.orderId)));
         for (const id of Array.from(this.pendingCancelOrders)) {
@@ -226,6 +236,7 @@ export class TrendEngine {
       this.exchange.watchKlines.bind(this.exchange, this.config.symbol, this.config.klineInterval),
       (klines) => {
         this.klineSnapshot = Array.isArray(klines) ? klines : [];
+        this.logKlineSnapshot();
         this.emitUpdate();
       },
       log,
@@ -256,6 +267,31 @@ export class TrendEngine {
         this.depthSnapshot &&
         this.klineSnapshot.length >= minKlines
     );
+  }
+
+  private logKlineSnapshot(): void {
+    const minKlines = Math.max(30, this.config.bollingerLength);
+    const count = this.klineSnapshot.length;
+    if (count < minKlines) {
+      if (!this.klineInsufficientLogged) {
+        const closes = this.klineSnapshot.slice(-5).map((k) => Number(k.close).toFixed(2));
+        this.tradeLog.push(
+          "info",
+          `K线不足 ${count}/${minKlines}，最近收盘(${closes.length}): ${closes.join(", ")}`
+        );
+        this.klineInsufficientLogged = true;
+      }
+      return;
+    }
+    if (!this.klineReadyLogged) {
+      const closes = this.klineSnapshot.slice(-5).map((k) => Number(k.close).toFixed(2));
+      this.tradeLog.push(
+        "info",
+        `K线就绪 ${count} 根，可计算 SMA30。最近收盘: ${closes.join(", ")}`
+      );
+      this.klineReadyLogged = true;
+    }
+    this.klineInsufficientLogged = false;
   }
 
   private async tick(): Promise<void> {

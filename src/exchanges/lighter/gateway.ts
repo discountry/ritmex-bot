@@ -23,7 +23,16 @@ import type {
   LighterOrderBookSnapshot,
   LighterPosition,
 } from "./types";
-import { DEFAULT_AUTH_TOKEN_BUFFER_MS, DEFAULT_LIGHTER_ENVIRONMENT, LIGHTER_HOSTS, LIGHTER_ORDER_TYPE, LIGHTER_TIME_IN_FORCE, DEFAULT_ORDER_EXPIRY_PLACEHOLDER, IMMEDIATE_OR_CANCEL_EXPIRY_PLACEHOLDER } from "./constants";
+import {
+  DEFAULT_AUTH_TOKEN_BUFFER_MS,
+  DEFAULT_LIGHTER_ENVIRONMENT,
+  LIGHTER_HOSTS,
+  LIGHTER_ORDER_TYPE,
+  LIGHTER_TIME_IN_FORCE,
+  DEFAULT_ORDER_EXPIRY_PLACEHOLDER,
+  IMMEDIATE_OR_CANCEL_EXPIRY_PLACEHOLDER,
+  type LighterEnvironment,
+} from "./constants";
 import { decimalToScaled, scaledToDecimalString } from "./decimal";
 import { lighterOrderToAster, toAccountSnapshot, toDepth, toKlines, toOrders, toTicker } from "./mappers";
 
@@ -56,6 +65,47 @@ function createEvent<T>(): SimpleEvent<T> {
       return listeners.size;
     },
   };
+}
+
+function isLighterEnvironment(value: string | undefined | null): value is LighterEnvironment {
+  if (!value) return false;
+  return Object.prototype.hasOwnProperty.call(LIGHTER_HOSTS, value);
+}
+
+function detectEnvironmentFromUrl(baseUrl: string | undefined | null): LighterEnvironment | null {
+  if (!baseUrl) return null;
+  const matchHost = (host: string): LighterEnvironment | null => {
+    for (const [env, config] of Object.entries(LIGHTER_HOSTS)) {
+      try {
+        const restHost = new URL(config.rest).hostname.toLowerCase();
+        if (restHost === host) {
+          return env as LighterEnvironment;
+        }
+      } catch {
+        // ignore invalid config URLs
+      }
+    }
+    if (host.includes("mainnet")) return "mainnet";
+    if (host.includes("testnet")) return "testnet";
+    if (host.includes("staging")) return "staging";
+    if (host.includes("dev")) return "dev";
+    return null;
+  };
+
+  try {
+    const parsed = new URL(baseUrl);
+    return matchHost(parsed.hostname.toLowerCase());
+  } catch {
+    return matchHost(baseUrl.toLowerCase());
+  }
+}
+
+function inferEnvironment(envOption: string | undefined, baseUrl?: string | null): LighterEnvironment {
+  if (isLighterEnvironment(envOption)) {
+    return envOption;
+  }
+  const detected = detectEnvironmentFromUrl(baseUrl ?? undefined);
+  return detected ?? DEFAULT_LIGHTER_ENVIRONMENT;
 }
 
 interface Pollers {
@@ -112,6 +162,7 @@ export class LighterGateway {
   private readonly klinesEvent = createEvent<AsterKline[]>();
   private readonly auth = { token: null as string | null, expiresAt: 0 };
   private readonly l1Address: string | null;
+  private loggedCreateOrderPayload = false;
 
   private marketId: number | null = null;
   private priceDecimals: number | null = null;
@@ -125,6 +176,7 @@ export class LighterGateway {
   private accountDetails: LighterAccountDetails | null = null;
   private positions: LighterPosition[] = [];
   private orders: LighterOrder[] = [];
+  private readonly orderMap = new Map<string, LighterOrder>();
   private orderBook: LighterOrderBookSnapshot | null = null;
   private ticker: LighterMarketStats | null = null;
   private initialized = false;
@@ -135,7 +187,7 @@ export class LighterGateway {
   constructor(options: LighterGatewayOptions) {
     this.displaySymbol = options.symbol;
     this.marketSymbol = (options.marketSymbol ?? options.symbol).toUpperCase();
-    this.environment = options.environment ?? DEFAULT_LIGHTER_ENVIRONMENT;
+    this.environment = inferEnvironment(options.environment, options.baseUrl);
     const host = options.baseUrl ?? LIGHTER_HOSTS[this.environment]?.rest;
     if (!host) {
       throw new Error(`Unknown Lighter environment ${this.environment}`);
@@ -150,6 +202,7 @@ export class LighterGateway {
       accountIndex: options.accountIndex,
       chainId: options.chainId ?? (this.environment === "mainnet" ? 304 : 300),
       apiKeys: options.apiKeys,
+      baseUrl: host,
     });
     this.apiKeyIndices = options.apiKeyIndices ?? Object.keys(options.apiKeys).map(Number);
     this.nonceManager = new HttpNonceManager({
@@ -204,13 +257,21 @@ export class LighterGateway {
     const { baseAmountScaledString, priceScaledString, triggerPriceScaledString, ...signParams } = conversion;
     const { apiKeyIndex, nonce } = this.nonceManager.next();
     try {
-      const signed = this.signer.signCreateOrder({
+      const signed = await this.signer.signCreateOrder({
         ...signParams,
         apiKeyIndex,
         nonce,
       });
+      if (!this.loggedCreateOrderPayload) {
+        this.logger("createOrder.txInfo", signed.txInfo);
+        this.loggedCreateOrderPayload = true;
+      }
       const auth = await this.ensureAuthToken();
-      await this.http.sendTransaction(signed.txType, signed.txInfo, { authToken: auth });
+      const response = await this.http.sendTransaction(signed.txType, signed.txInfo, {
+        authToken: auth,
+        priceProtection: false,
+      });
+      this.logger("createOrder.sendTx.response", response);
       return lighterOrderToAster(this.displaySymbol, {
         order_index: Number(signParams.clientOrderIndex % 1_000_000_000n),
         client_order_index: Number(signParams.clientOrderIndex),
@@ -228,6 +289,7 @@ export class LighterGateway {
       } as LighterOrder);
     } catch (error) {
       this.nonceManager.acknowledgeFailure(apiKeyIndex);
+      this.logger("createOrder", error);
       throw error;
     }
   }
@@ -239,7 +301,7 @@ export class LighterGateway {
     const indexValue = BigInt(typeof params.orderId === "string" ? Number(params.orderId) : params.orderId);
     const { apiKeyIndex, nonce } = this.nonceManager.next();
     try {
-      const signed = this.signer.signCancelOrder({
+      const signed = await this.signer.signCancelOrder({
         marketIndex,
         orderIndex: indexValue,
         nonce,
@@ -259,7 +321,7 @@ export class LighterGateway {
     const time = params?.scheduleMs != null ? BigInt(params.scheduleMs) : 0n;
     const { apiKeyIndex, nonce } = this.nonceManager.next();
     try {
-      const signed = this.signer.signCancelAll({
+      const signed = await this.signer.signCancelAll({
         timeInForce,
         scheduledTime: time,
         nonce,
@@ -479,8 +541,19 @@ export class LighterGateway {
     const ordersObject = message.orders ?? {};
     const buckets = Object.values(ordersObject) as unknown[];
     const allOrders: LighterOrder[] = buckets.flatMap((entry) => Array.isArray(entry) ? (entry as LighterOrder[]) : []);
-    this.orders = allOrders;
-    const mapped = toOrders(this.displaySymbol, allOrders);
+    const terminalStatuses = new Set(["filled", "canceled", "cancelled", "expired"]);
+    for (const order of allOrders) {
+      const key = String(order.order_index ?? order.order_id ?? order.client_order_index ?? "");
+      const status = (order.status ?? "").toLowerCase();
+      if (!key) continue;
+      if (terminalStatuses.has(status)) {
+        this.orderMap.delete(key);
+      } else {
+        this.orderMap.set(key, order);
+      }
+    }
+    this.orders = Array.from(this.orderMap.values());
+    const mapped = toOrders(this.displaySymbol, this.orders);
     this.ordersEvent.emit(mapped);
   }
 
@@ -488,6 +561,7 @@ export class LighterGateway {
     if (!this.orderBook || this.marketId == null) return;
     const depth = toDepth(this.displaySymbol, this.orderBook);
     this.depthEvent.emit(depth);
+    this.emitSyntheticTicker();
   }
 
   private emitAccount(): void {
@@ -521,6 +595,7 @@ export class LighterGateway {
       if (!match) return;
       const ticker = toTicker(this.displaySymbol, match);
       this.tickerEvent.emit(ticker);
+      this.loggedCreateOrderPayload = false;
     } catch (error) {
       this.logger("refreshTicker", error);
     }
@@ -562,9 +637,40 @@ export class LighterGateway {
       startTimestamp: startTs,
       setTimestampToEnd: true,
     });
-    const mapped = toKlines(this.displaySymbol, interval, raw as LighterKline[]);
+    const sorted = (raw as LighterKline[]).slice().sort((a, b) => a.start_timestamp - b.start_timestamp);
+    const mapped = toKlines(this.displaySymbol, interval, sorted);
     this.klineCache.set(interval, mapped);
     this.klinesEvent.emit(cloneKlines(mapped));
+    this.emitSyntheticTicker();
+  }
+
+  private emitSyntheticTicker(): void {
+    if (!this.orderBook) return;
+    const bestBid = getBestPrice(this.orderBook.bids, "bid");
+    const bestAsk = getBestPrice(this.orderBook.asks, "ask");
+    if (bestBid == null && bestAsk == null) return;
+    const last = bestBid != null && bestAsk != null ? (bestBid + bestAsk) / 2 : (bestBid ?? bestAsk ?? 0);
+    const ticker: AsterTicker = {
+      symbol: this.displaySymbol,
+      eventType: "lighterSyntheticTicker",
+      eventTime: Date.now(),
+      lastPrice: last.toString(),
+      openPrice: (bestBid ?? last).toString(),
+      highPrice: (bestAsk ?? last).toString(),
+      lowPrice: (bestBid ?? last).toString(),
+      volume: "0",
+      quoteVolume: "0",
+      priceChange: undefined,
+      priceChangePercent: undefined,
+      weightedAvgPrice: undefined,
+      lastQty: undefined,
+      openTime: Date.now(),
+      closeTime: Date.now(),
+      firstId: undefined,
+      lastId: undefined,
+      count: undefined,
+    };
+    this.tickerEvent.emit(ticker);
   }
 
   private mapCreateOrderParams(params: CreateOrderParams): Omit<CreateOrderSignParams, "nonce"> & {
@@ -657,6 +763,18 @@ function mergeLevels(existing: LighterOrderBookLevel[], updates: LighterOrderBoo
 
 function cloneKlines(klines: AsterKline[]): AsterKline[] {
   return klines.map((kline) => ({ ...kline }));
+}
+
+function getBestPrice(levels: LighterOrderBookLevel[] | Array<any> | undefined, side: "bid" | "ask"): number | null {
+  if (!levels || !levels.length) return null;
+  const sorted = levels
+    .map((level) => {
+      if (Array.isArray(level)) return Number(level[0]);
+      return Number((level as LighterOrderBookLevel).price);
+    })
+    .filter((price) => Number.isFinite(price));
+  if (!sorted.length) return null;
+  return side === "bid" ? Math.max(...sorted) : Math.min(...sorted);
 }
 
 function mapOrderType(type: OrderType): number {

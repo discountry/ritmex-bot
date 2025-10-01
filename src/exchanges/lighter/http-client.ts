@@ -72,7 +72,7 @@ export interface LighterHttpClientOptions {
 
 export class LighterHttpClient {
   readonly baseUrl: string;
-  private readonly priceProtection: boolean;
+  private readonly priceProtection: boolean | undefined;
   private readonly fetcher: typeof fetch;
 
   constructor(options: LighterHttpClientOptions = {}) {
@@ -82,7 +82,7 @@ export class LighterHttpClient {
       throw new Error(`Unknown Lighter environment: ${env}`);
     }
     this.baseUrl = host.replace(/\/$/, "");
-    this.priceProtection = options.priceProtection ?? true;
+    this.priceProtection = options.priceProtection;
     this.fetcher = options.fetcher ?? globalThis.fetch.bind(globalThis);
     if (!this.fetcher) {
       throw new Error("Global fetch is not available; provide a custom fetch implementation");
@@ -195,7 +195,7 @@ export class LighterHttpClient {
     form.set("tx_type", String(txType));
     form.set("tx_info", txInfo);
     const priceProtection = options.priceProtection ?? this.priceProtection;
-    if (priceProtection != null) form.set("price_protection", String(priceProtection));
+    form.set("price_protection", String(priceProtection ?? false));
     return this.postForm<SendTxResponse>("/api/v1/sendTx", form, options.authToken);
   }
 

@@ -1,34 +1,13 @@
-import { LighterPrivateKey, signatureToBytes } from "./crypto/schnorr";
-import { hashToQuinticExtension } from "./crypto/poseidon2";
-import { Fp } from "./crypto/goldilocks";
-import { Fp5 } from "./crypto/goldilocks-fp5";
-import { arrayFromCanonicalLittleEndianBytes } from "./field-array";
-import { bytesToHex } from "./bytes";
-import { DEFAULT_TRANSACTION_EXPIRY_BUFFER_MS, LIGHTER_TX_TYPE } from "./constants";
-import { safeNumberToUint32, toSafeNumber } from "./decimal";
-
-const BASE64_ENCODE = (bytes: Uint8Array): string => Buffer.from(bytes).toString("base64");
-const AUTH_MAX_WINDOW_MS = 7 * 60 * 60 * 1000; // 7 hours
-
-function fpFromUint32(value: number): Fp {
-  const uint32 = safeNumberToUint32(value);
-  return Fp.fromUint32(uint32);
-}
-
-function fpFromInt64(value: bigint | number): Fp {
-  const bigintValue = typeof value === "number" ? BigInt(Math.trunc(value)) : value;
-  return new Fp(bigintValue);
-}
-
-interface KeySlot {
-  index: number;
-  key: LighterPrivateKey;
-}
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import path from "node:path";
+import { createInterface } from "node:readline";
+import { fileURLToPath } from "node:url";
 
 export interface LighterSignerConfig {
   accountIndex: number | bigint;
   chainId: number;
   apiKeys: Record<number, string>;
+  baseUrl: string;
 }
 
 interface BaseSignOptions {
@@ -63,265 +42,238 @@ export interface CancelAllSignParams extends BaseSignOptions {
 export interface SignedTxPayload {
   txType: number;
   txInfo: string;
-  txHash: string;
-  signature: string;
+  txHash?: string;
+  signature?: string;
+}
+
+type PendingResolver = {
+  resolve: (value: any) => void;
+  reject: (error: Error) => void;
+};
+
+class PythonSignerBridge {
+  private readonly child: ChildProcessWithoutNullStreams;
+  private readonly pending = new Map<number, PendingResolver>();
+  private readonly scriptPath: string;
+  private seq = 0;
+
+  constructor(scriptPath: string) {
+    this.scriptPath = scriptPath;
+    this.child = spawn("python3", [this.scriptPath], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const rl = createInterface({ input: this.child.stdout });
+    rl.on("line", (line) => this.onLine(line));
+    this.child.on("error", (error) => {
+      this.rejectAll(new Error(`lighter signer bridge failed to start: ${String(error)}`));
+    });
+    this.child.on("exit", (code, signal) => {
+      this.rejectAll(new Error(`lighter signer bridge exited (code=${code}, signal=${signal ?? ""})`));
+    });
+    this.child.stderr.on("data", (chunk) => {
+      const message = chunk.toString().trim();
+      if (message.length) {
+        console.error(`[LighterSignerBridge] ${message}`);
+      }
+    });
+  }
+
+  private onLine(line: string): void {
+    let payload: any;
+    try {
+      payload = JSON.parse(line);
+    } catch (error) {
+      console.error(`[LighterSignerBridge] invalid JSON: ${line}`, error);
+      return;
+    }
+    const { id, error } = payload;
+    const pending = this.pending.get(Number(id));
+    if (!pending) {
+      if (error) {
+        console.error(`[LighterSignerBridge] error without pending request: ${error}`);
+      }
+      return;
+    }
+    this.pending.delete(Number(id));
+    if (error) {
+      pending.reject(new Error(String(error)));
+      return;
+    }
+    pending.resolve(payload.result ?? null);
+  }
+
+  private rejectAll(error: Error): void {
+    for (const { reject } of this.pending.values()) {
+      reject(error);
+    }
+    this.pending.clear();
+  }
+
+  async call(method: string, params: Record<string, unknown>): Promise<any> {
+    const id = ++this.seq;
+    const payload = JSON.stringify({ id, method, params }, (_key, value) => {
+      if (typeof value === "bigint") return value.toString();
+      return value;
+    });
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject });
+      this.child.stdin.write(payload + "\n", (err) => {
+        if (err) {
+          this.pending.delete(id);
+          reject(err);
+        }
+      });
+    });
+  }
+}
+
+function resolveScriptPath(): string {
+  const current = path.dirname(fileURLToPath(import.meta.url));
+  return path.resolve(current, "../../..", "scripts", "lighter_signer_bridge.py");
 }
 
 export class LighterSigner {
   readonly accountIndex: bigint;
   readonly chainId: number;
-  private readonly keys = new Map<number, LighterPrivateKey>();
-  private readonly defaultKeyIndex: number;
+  readonly defaultKeyIndex: number;
+  private readonly baseUrl: string;
+  private readonly bridge: PythonSignerBridge;
+  private readonly ready: Promise<void>;
 
   constructor(config: LighterSignerConfig) {
-    if (!config || typeof config !== "object") {
-      throw new Error("LighterSigner requires configuration");
+    if (!config.baseUrl) {
+      throw new Error("LighterSigner requires baseUrl for signer bridge");
     }
-    this.chainId = config.chainId >>> 0;
     this.accountIndex = typeof config.accountIndex === "number"
       ? BigInt(Math.trunc(config.accountIndex))
       : config.accountIndex;
-    const entries = Object.entries(config.apiKeys ?? {}).map(([idx, hex]) => ({
-      index: Number(idx),
-      key: LighterPrivateKey.fromHex(hex),
-    }));
+    this.chainId = config.chainId >>> 0;
+    this.baseUrl = config.baseUrl;
+
+    const entries = Object.entries(config.apiKeys ?? {});
     if (!entries.length) {
       throw new Error("At least one Lighter API private key must be provided");
     }
-    for (const entry of entries) {
-      if (!Number.isInteger(entry.index) || entry.index < 0 || entry.index > 255) {
-        throw new Error(`Invalid API key index: ${entry.index}`);
+    this.defaultKeyIndex = Number(entries[0]![0]);
+
+    this.bridge = new PythonSignerBridge(resolveScriptPath());
+    this.ready = (async () => {
+      for (const [index, key] of entries) {
+        await this.bridge.call("create_client", {
+          apiKeyIndex: Number(index),
+          privateKey: key,
+          baseUrl: this.baseUrl,
+          chainId: this.chainId,
+          accountIndex: this.accountIndex.toString(),
+        });
       }
-      this.keys.set(entry.index, entry.key);
-    }
-    this.defaultKeyIndex = entries[0]!.index;
+    })();
   }
 
-  private resolveKey(apiKeyIndex?: number): KeySlot {
-    const index = apiKeyIndex ?? this.defaultKeyIndex;
-    const key = this.keys.get(index);
-    if (!key) {
-      throw new Error(`Missing private key for API key index ${index}`);
-    }
-    return { index, key };
+  private async ensureReady(): Promise<void> {
+    await this.ready;
   }
 
-  signCreateOrder(params: CreateOrderSignParams): SignedTxPayload {
-    const slot = this.resolveKey(params.apiKeyIndex);
-    const expiredAt = params.expiredAt ?? BigInt(Date.now() + DEFAULT_TRANSACTION_EXPIRY_BUFFER_MS);
-    const hash = hashCreateOrder({
-      chainId: this.chainId,
-      accountIndex: this.accountIndex,
-      apiKeyIndex: slot.index,
-      nonce: params.nonce,
-      expiredAt,
+  async signCreateOrder(params: CreateOrderSignParams): Promise<SignedTxPayload> {
+    await this.ensureReady();
+    const apiKeyIndex = params.apiKeyIndex ?? this.defaultKeyIndex;
+
+    const result = await this.bridge.call("sign_create_order", {
+      apiKeyIndex,
       marketIndex: params.marketIndex,
-      clientOrderIndex: params.clientOrderIndex,
-      baseAmount: params.baseAmount,
+      clientOrderIndex: params.clientOrderIndex.toString(),
+      baseAmount: params.baseAmount.toString(),
       price: params.price,
       isAsk: params.isAsk,
       orderType: params.orderType,
       timeInForce: params.timeInForce,
       reduceOnly: params.reduceOnly,
       triggerPrice: params.triggerPrice,
-      orderExpiry: params.orderExpiry,
+      orderExpiry: params.orderExpiry.toString(),
+      nonce: params.nonce.toString(),
     });
 
-    const signature = slot.key.signHashedMessage(hash);
-    const signatureBytes = signatureToBytes(signature);
-    const txInfo = JSON.stringify({
-      AccountIndex: toSafeNumber(this.accountIndex),
-      ApiKeyIndex: slot.index,
-      OrderInfo: {
-        MarketIndex: params.marketIndex,
-        ClientOrderIndex: toSafeNumber(params.clientOrderIndex),
-        BaseAmount: toSafeNumber(params.baseAmount),
-        Price: safeNumberToUint32(params.price),
-        IsAsk: params.isAsk,
-        Type: params.orderType,
-        TimeInForce: params.timeInForce,
-        ReduceOnly: params.reduceOnly,
-        TriggerPrice: safeNumberToUint32(params.triggerPrice),
-        OrderExpiry: toSafeNumber(params.orderExpiry),
-      },
-      ExpiredAt: toSafeNumber(expiredAt),
-      Nonce: toSafeNumber(params.nonce),
-      Sig: BASE64_ENCODE(signatureBytes),
-    });
+    const txInfo = String(result);
+    let signature: string | undefined;
+    let txHash: string | undefined;
+    try {
+      const parsed = JSON.parse(txInfo);
+      if (typeof parsed?.Sig === "string") signature = parsed.Sig;
+      if (typeof parsed?.SignedHash === "string") txHash = parsed.SignedHash;
+    } catch {
+      // ignore parsing errors – txInfo still valid for sendTx
+    }
 
     return {
-      txType: LIGHTER_TX_TYPE.CREATE_ORDER,
+      txType: 14,
       txInfo,
-      txHash: bytesToHex(hash.toBytes()),
-      signature: BASE64_ENCODE(signatureBytes),
+      txHash,
+      signature,
     };
   }
 
-  signCancelOrder(params: CancelOrderSignParams): SignedTxPayload {
-    const slot = this.resolveKey(params.apiKeyIndex);
-    const expiredAt = params.expiredAt ?? BigInt(Date.now() + DEFAULT_TRANSACTION_EXPIRY_BUFFER_MS);
-    const hash = hashCancelOrder({
-      chainId: this.chainId,
-      accountIndex: this.accountIndex,
-      apiKeyIndex: slot.index,
-      nonce: params.nonce,
-      expiredAt,
+  async signCancelOrder(params: CancelOrderSignParams): Promise<SignedTxPayload> {
+    await this.ensureReady();
+    const apiKeyIndex = params.apiKeyIndex ?? this.defaultKeyIndex;
+
+    const result = await this.bridge.call("sign_cancel_order", {
+      apiKeyIndex,
       marketIndex: params.marketIndex,
-      orderIndex: params.orderIndex,
+      orderIndex: params.orderIndex.toString(),
+      nonce: params.nonce.toString(),
     });
-    const signature = slot.key.signHashedMessage(hash);
-    const signatureBytes = signatureToBytes(signature);
-    const txInfo = JSON.stringify({
-      AccountIndex: toSafeNumber(this.accountIndex),
-      ApiKeyIndex: slot.index,
-      MarketIndex: params.marketIndex,
-      Index: toSafeNumber(params.orderIndex),
-      ExpiredAt: toSafeNumber(expiredAt),
-      Nonce: toSafeNumber(params.nonce),
-      Sig: BASE64_ENCODE(signatureBytes),
-    });
+
+    const txInfo = String(result);
+    let signature: string | undefined;
+    try {
+      const parsed = JSON.parse(txInfo);
+      if (typeof parsed?.Sig === "string") signature = parsed.Sig;
+    } catch {
+      // ignore
+    }
+
     return {
-      txType: LIGHTER_TX_TYPE.CANCEL_ORDER,
+      txType: 15,
       txInfo,
-      txHash: bytesToHex(hash.toBytes()),
-      signature: BASE64_ENCODE(signatureBytes),
+      signature,
     };
   }
 
-  signCancelAll(params: CancelAllSignParams): SignedTxPayload {
-    const slot = this.resolveKey(params.apiKeyIndex);
-    const expiredAt = params.expiredAt ?? BigInt(Date.now() + DEFAULT_TRANSACTION_EXPIRY_BUFFER_MS);
-    const hash = hashCancelAll({
-      chainId: this.chainId,
-      accountIndex: this.accountIndex,
-      apiKeyIndex: slot.index,
-      nonce: params.nonce,
-      expiredAt,
+  async signCancelAll(params: CancelAllSignParams): Promise<SignedTxPayload> {
+    await this.ensureReady();
+    const apiKeyIndex = params.apiKeyIndex ?? this.defaultKeyIndex;
+
+    const result = await this.bridge.call("sign_cancel_all", {
+      apiKeyIndex,
       timeInForce: params.timeInForce,
-      time: params.scheduledTime,
+      scheduledTime: params.scheduledTime.toString(),
+      nonce: params.nonce.toString(),
     });
-    const signature = slot.key.signHashedMessage(hash);
-    const signatureBytes = signatureToBytes(signature);
-    const txInfo = JSON.stringify({
-      AccountIndex: toSafeNumber(this.accountIndex),
-      ApiKeyIndex: slot.index,
-      TimeInForce: params.timeInForce,
-      Time: toSafeNumber(params.scheduledTime),
-      ExpiredAt: toSafeNumber(expiredAt),
-      Nonce: toSafeNumber(params.nonce),
-      Sig: BASE64_ENCODE(signatureBytes),
-    });
+
+    const txInfo = String(result);
+    let signature: string | undefined;
+    try {
+      const parsed = JSON.parse(txInfo);
+      if (typeof parsed?.Sig === "string") signature = parsed.Sig;
+    } catch {
+      // ignore
+    }
+
     return {
-      txType: LIGHTER_TX_TYPE.CANCEL_ALL_ORDERS,
+      txType: 16,
       txInfo,
-      txHash: bytesToHex(hash.toBytes()),
-      signature: BASE64_ENCODE(signatureBytes),
+      signature,
     };
   }
 
-  createAuthToken(deadlineMs: number, apiKeyIndex?: number): string {
-    if (!Number.isFinite(deadlineMs) || deadlineMs <= Date.now()) {
-      throw new Error("Auth token deadline must be in the future");
-    }
-    if (deadlineMs - Date.now() > AUTH_MAX_WINDOW_MS) {
-      throw new Error("Auth token deadline must be within 7 hours");
-    }
-    const slot = this.resolveKey(apiKeyIndex);
-    const deadlineSeconds = Math.floor(deadlineMs / 1000);
-    const message = `${deadlineSeconds}:${toSafeNumber(this.accountIndex)}:${slot.index}`;
-    const msgBytes = Buffer.from(message, "utf8");
-    const preimage = arrayFromCanonicalLittleEndianBytes(msgBytes);
-    const hashed = hashToQuinticExtension(preimage);
-    const signature = slot.key.signHashedMessage(hashed);
-    const signatureHex = bytesToHex(signatureToBytes(signature));
-    return `${message}:${signatureHex}`;
+  async createAuthToken(deadlineMs: number, apiKeyIndex?: number): Promise<string> {
+    await this.ensureReady();
+    const index = apiKeyIndex ?? this.defaultKeyIndex;
+    const result = await this.bridge.call("create_auth_token", {
+      apiKeyIndex: index,
+      deadlineMs: Math.floor(deadlineMs / 1000),
+    });
+    return String(result ?? "");
   }
-}
-
-interface CreateOrderHashInput {
-  chainId: number;
-  accountIndex: bigint;
-  apiKeyIndex: number;
-  nonce: bigint;
-  expiredAt: bigint;
-  marketIndex: number;
-  clientOrderIndex: bigint;
-  baseAmount: bigint;
-  price: number;
-  isAsk: number;
-  orderType: number;
-  timeInForce: number;
-  reduceOnly: number;
-  triggerPrice: number;
-  orderExpiry: bigint;
-}
-
-function hashCreateOrder(input: CreateOrderHashInput): Fp5 {
-  const elements = [
-    Fp.fromUint32(input.chainId >>> 0),
-    Fp.fromUint32(LIGHTER_TX_TYPE.CREATE_ORDER),
-    fpFromInt64(input.nonce),
-    fpFromInt64(input.expiredAt),
-    fpFromInt64(input.accountIndex),
-    fpFromUint32(input.apiKeyIndex),
-    fpFromUint32(input.marketIndex),
-    fpFromInt64(input.clientOrderIndex),
-    fpFromInt64(input.baseAmount),
-    fpFromUint32(input.price),
-    fpFromUint32(input.isAsk),
-    fpFromUint32(input.orderType),
-    fpFromUint32(input.timeInForce),
-    fpFromUint32(input.reduceOnly),
-    fpFromUint32(input.triggerPrice),
-    fpFromInt64(input.orderExpiry),
-  ];
-  return hashToQuinticExtension(elements);
-}
-
-interface CancelOrderHashInput {
-  chainId: number;
-  accountIndex: bigint;
-  apiKeyIndex: number;
-  nonce: bigint;
-  expiredAt: bigint;
-  marketIndex: number;
-  orderIndex: bigint;
-}
-
-function hashCancelOrder(input: CancelOrderHashInput): Fp5 {
-  const elements = [
-    Fp.fromUint32(input.chainId >>> 0),
-    Fp.fromUint32(LIGHTER_TX_TYPE.CANCEL_ORDER),
-    fpFromInt64(input.nonce),
-    fpFromInt64(input.expiredAt),
-    fpFromInt64(input.accountIndex),
-    fpFromUint32(input.apiKeyIndex),
-    fpFromUint32(input.marketIndex),
-    fpFromInt64(input.orderIndex),
-  ];
-  return hashToQuinticExtension(elements);
-}
-
-interface CancelAllHashInput {
-  chainId: number;
-  accountIndex: bigint;
-  apiKeyIndex: number;
-  nonce: bigint;
-  expiredAt: bigint;
-  timeInForce: number;
-  time: bigint;
-}
-
-function hashCancelAll(input: CancelAllHashInput): Fp5 {
-  const elements = [
-    Fp.fromUint32(input.chainId >>> 0),
-    Fp.fromUint32(LIGHTER_TX_TYPE.CANCEL_ALL_ORDERS),
-    fpFromInt64(input.nonce),
-    fpFromInt64(input.expiredAt),
-    fpFromInt64(input.accountIndex),
-    fpFromUint32(input.apiKeyIndex),
-    fpFromUint32(input.timeInForce),
-    fpFromInt64(input.time),
-  ];
-  return hashToQuinticExtension(elements);
 }
