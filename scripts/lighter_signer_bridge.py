@@ -17,7 +17,8 @@ class StrOrErr(ctypes.Structure):
 
 def _resolve_signer_path() -> str:
     base = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    signers_dir = os.path.join(base, "docs", "lighter", "lighter-python-main", "lighter", "signers")
+    # Resolve to in-repo module location: src/exchanges/lighter/signers
+    signers_dir = os.path.join(base, "src", "exchanges", "lighter", "signers")
     system = platform.system()
     machine = platform.machine().lower()
 

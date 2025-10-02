@@ -130,7 +130,7 @@ class PythonSignerBridge {
 
 function resolveScriptPath(): string {
   const current = path.dirname(fileURLToPath(import.meta.url));
-  return path.resolve(current, "../../..", "scripts", "lighter_signer_bridge.py");
+  return path.resolve(current, "./lighter_signer_bridge.py");
 }
 
 export class LighterSigner {
