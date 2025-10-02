@@ -46,7 +46,6 @@ export interface MakerConfig {
   symbol: string;
   tradeAmount: number;
   lossLimit: number;
-  priceChaseThreshold: number;
   bidOffset: number;
   askOffset: number;
   refreshIntervalMs: number;
@@ -59,7 +58,6 @@ export const makerConfig: MakerConfig = {
   symbol: process.env.TRADE_SYMBOL ?? "BTCUSDT",
   tradeAmount: parseNumber(process.env.TRADE_AMOUNT, 0.001),
   lossLimit: parseNumber(process.env.MAKER_LOSS_LIMIT, parseNumber(process.env.LOSS_LIMIT, 0.03)),
-  priceChaseThreshold: parseNumber(process.env.MAKER_PRICE_CHASE, 0.3),
   bidOffset: parseNumber(process.env.MAKER_BID_OFFSET, 0),
   askOffset: parseNumber(process.env.MAKER_ASK_OFFSET, 0),
   refreshIntervalMs: parseNumber(process.env.MAKER_REFRESH_INTERVAL_MS, 1500),

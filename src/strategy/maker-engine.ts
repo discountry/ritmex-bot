@@ -327,9 +327,8 @@ export class MakerEngine {
   }
 
   private async syncOrders(targets: DesiredOrder[]): Promise<void> {
-    const tolerance = this.config.priceChaseThreshold;
     const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
-    const { toCancel, toPlace } = makeOrderPlan(availableOrders, targets, tolerance);
+    const { toCancel, toPlace } = makeOrderPlan(availableOrders, targets);
 
     for (const order of toCancel) {
       if (this.pendingCancelOrders.has(String(order.orderId))) continue;

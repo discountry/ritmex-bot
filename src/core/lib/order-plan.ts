@@ -9,8 +9,7 @@ export interface OrderTarget {
 
 export function makeOrderPlan(
   openOrders: AsterOrder[],
-  targets: OrderTarget[],
-  tolerance: number
+  targets: OrderTarget[]
 ): { toCancel: AsterOrder[]; toPlace: OrderTarget[] } {
   const unmatched = new Set(targets.map((_, idx) => idx));
   const toCancel: AsterOrder[] = [];
@@ -27,7 +26,7 @@ export function makeOrderPlan(
         unmatched.has(index) &&
         target.side === order.side &&
         target.reduceOnly === reduceOnly &&
-        Math.abs(price - target.price) <= tolerance
+        price === target.price
       );
     });
     if (matchedIndex >= 0) {
