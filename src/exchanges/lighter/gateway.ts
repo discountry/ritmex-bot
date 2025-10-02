@@ -745,9 +745,10 @@ export class LighterGateway {
     if (params.stopPrice != null) {
       triggerPriceScaled = decimalToScaled(params.stopPrice, this.priceDecimals);
     }
-    const orderExpiry = resultTimeInForce === LIGHTER_TIME_IN_FORCE.IMMEDIATE_OR_CANCEL
-      ? BigInt(IMMEDIATE_OR_CANCEL_EXPIRY_PLACEHOLDER)
-      : BigInt(DEFAULT_ORDER_EXPIRY_PLACEHOLDER);
+    // Align with chain expectations: use absolute future timestamp (ms) for OrderExpiry
+    // and a shorter-lived tx ExpiredAt. 28 days for order expiry, ~10 minutes for tx expiry.
+    const TWENTY_EIGHT_DAYS_MS = 28 * 24 * 60 * 60 * 1000;
+    const orderExpiry = BigInt(Date.now() + TWENTY_EIGHT_DAYS_MS);
 
     return {
       marketIndex: this.marketId,
