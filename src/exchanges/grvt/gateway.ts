@@ -840,7 +840,11 @@ function normalizeCookieValue(value: string): string {
 }
 
 function defaultLogger(context: string, error: unknown): void {
-  console.error(`[GrvtGateway] ${context} failed`, error);
+  // Suppress direct console output from GRVT gateway. Strategy layers already
+  // record failures into the recent events trade log as warnings.
+  // Intentionally no-op to avoid noisy CLI logs.
+  void context;
+  void error;
 }
 
 function parseSetCookieHeader(
