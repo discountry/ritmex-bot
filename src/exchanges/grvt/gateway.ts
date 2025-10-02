@@ -2,6 +2,7 @@ import { setInterval, clearInterval } from "timers";
 import { randomInt } from "crypto";
 import axios, { AxiosHeaders } from "axios";
 import { TDG, MDG } from "@grvt/client";
+import { WS, EStream, type TWSRequest } from "@grvt/client/ws";
 import { ECandlestickInterval } from "@grvt/client/interfaces/codegen/enums/candlestick-interval";
 import { ECandlestickType } from "@grvt/client/interfaces/codegen/enums/candlestick-type";
 import { ETimeInForce } from "@grvt/client/interfaces/codegen/enums/time-in-force";
@@ -217,9 +218,15 @@ export class GrvtGateway {
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private openOrders: AsterOrder[] = [];
   private positions: AsterAccountPosition[] = [];
+  private lastPositionsUpdateAt: number = 0;
   private depthSnapshot: AsterDepth | null = null;
   private tickerSnapshot: AsterTicker | null = null;
   private klineCache: KlineCache | null = null;
+
+  // WebSocket state
+  private ws: WS | null = null;
+  private wsConnected = false;
+  private positionsRefreshTimer: ReturnType<typeof setTimeout> | null = null;
 
   private accountListeners = new Set<(snapshot: AsterAccountSnapshot) => void>();
   private ordersListeners = new Set<(orders: AsterOrder[]) => void>();
@@ -305,6 +312,7 @@ export class GrvtGateway {
       this.refreshKlines(),
     ]);
     this.startPolling();
+    this.startWebsocket();
     this.initialized = true;
   }
 
@@ -417,6 +425,9 @@ export class GrvtGateway {
       const response = await this.tdg.createOrder({ order: toApiOrderPayload(signedOrder) });
       const order = mapCreateOrderResponse(response, this.symbol);
       this.mergeOrder(order);
+      if (signedOrder.reduce_only) {
+        void this.refreshPositions().catch((error) => this.logger("postOrderPositionRefresh", error));
+      }
       return order;
     } catch (error) {
       const payload = {
@@ -500,6 +511,87 @@ export class GrvtGateway {
     }
   }
 
+  private startWebsocket(): void {
+    try {
+      if (this.ws) {
+        this.ws.disconnect();
+        this.ws = null;
+      }
+      const base = this.hosts.trades.replace(/\/?$/g, "");
+      const url = new URL(base.replace(/^http/, "ws") + "/ws/lite");
+      // Pass auth as query params (server reads headers/cookies from params per client implementation)
+      const params: Record<string, string> = {};
+      for (const [key, value] of Object.entries(this.headers)) {
+        params[key] = value;
+      }
+      const ws = new WS({
+        url: url.toString(),
+        timeout: 10000,
+        reconnectStrategy: (retries: number) => {
+          const attempt = Math.max(0, retries);
+          const base = 1000 * Math.pow(2, Math.min(8, attempt));
+          const jitter = Math.floor(Math.random() * 250);
+          return Math.min(30000, base + jitter);
+        },
+      });
+      ws.setParams(params);
+      ws.onConnect(() => {
+        this.wsConnected = true;
+        // Prefer WS: pause HTTP position polling when connected
+        if (this.accountTimer) {
+          clearInterval(this.accountTimer);
+          this.accountTimer = null;
+        }
+        // Subscribe to position/order/state feeds
+        const subs: TWSRequest[] = [
+          {
+            stream: EStream.POSITION,
+            params: { sub_account_id: this.subAccountId, instrument: this.instrument },
+            onData: () => this.schedulePositionsRefresh(150),
+          } as any,
+          {
+            stream: EStream.ORDER,
+            params: { sub_account_id: this.subAccountId, instrument: this.instrument },
+            onData: () => this.schedulePositionsRefresh(100),
+          } as any,
+          {
+            stream: EStream.STATE,
+            params: { sub_account_id: this.subAccountId, instrument: this.instrument },
+            onData: () => this.schedulePositionsRefresh(100),
+          } as any,
+        ];
+        ws.subscribes(...subs);
+      });
+      ws.onClose(() => {
+        this.wsConnected = false;
+        // Resume HTTP position polling when WS closes
+        if (!this.accountTimer) {
+          this.accountTimer = setInterval(() => {
+            void this.refreshAccountSnapshot().catch((error) => this.logger("accountPoll", error));
+            void this.refreshPositions().catch((error) => this.logger("positionPoll", error));
+          }, this.pollIntervals.account);
+        }
+      });
+      ws.onError((e) => {
+        this.logger("ws", e);
+      });
+      ws.connect();
+      this.ws = ws;
+    } catch (error) {
+      this.logger("startWebsocket", error);
+    }
+  }
+
+  private schedulePositionsRefresh(delayMs: number): void {
+    if (this.positionsRefreshTimer) {
+      clearTimeout(this.positionsRefreshTimer);
+    }
+    this.positionsRefreshTimer = setTimeout(() => {
+      this.positionsRefreshTimer = null;
+      void this.refreshPositions().catch((error) => this.logger("wsPositionsRefresh", error));
+    }, Math.max(0, delayMs));
+  }
+
   private async refreshAccountSnapshot(): Promise<void> {
     const response = await this.tdg.subAccountSummary({ sub_account_id: this.subAccountId });
     const snapshot = mapAccountSnapshot(response, this.symbol, this.instrument);
@@ -509,7 +601,13 @@ export class GrvtGateway {
 
   private async refreshPositions(): Promise<void> {
     const response = await this.tdg.positions({ sub_account_id: this.subAccountId });
-    this.positions = mapPositions(response, this.symbol, this.instrument);
+    const mapped = mapPositions(response, this.symbol, this.instrument);
+    const newestEventTime = getNewestPositionEventTime(mapped);
+    if (newestEventTime < this.lastPositionsUpdateAt) {
+      return;
+    }
+    this.positions = mapped;
+    this.lastPositionsUpdateAt = newestEventTime;
     const snapshot = this.accountSnapshot;
     if (snapshot) {
       snapshot.positions = this.positions.map((position) => ({ ...position }));
@@ -927,6 +1025,11 @@ function scaleDecimal(value: string | number | undefined, decimals: number): big
 
 function sumUnrealized(positions: AsterAccountPosition[]): number {
   return positions.reduce((total, position) => total + Number(position.unrealizedProfit ?? 0), 0);
+}
+
+function getNewestPositionEventTime(positions: AsterAccountPosition[]): number {
+  if (!positions.length) return Date.now();
+  return positions.reduce((max, p) => Math.max(max, Number(p.updateTime) || 0), 0);
 }
 
 function mapAccountSnapshot(
