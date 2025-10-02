@@ -566,9 +566,14 @@ export class LighterGateway {
 
   private handleAccountAll(message: any): void {
     if (!message) return;
-    const positionsObject = message.positions ?? {};
-    const positions: LighterPosition[] = Object.values(positionsObject) as LighterPosition[];
-    this.positions = positions;
+    // account_all messages may be partial updates; if positions is omitted, retain existing positions
+    if (Object.prototype.hasOwnProperty.call(message, "positions")) {
+      const positionsObject = message.positions ?? {};
+      const positions: LighterPosition[] = (Array.isArray(positionsObject)
+        ? (positionsObject as LighterPosition[])
+        : (Object.values(positionsObject) as LighterPosition[])) as LighterPosition[];
+      this.positions = positions;
+    }
     this.emitAccount();
   }
 
@@ -727,7 +732,7 @@ export class LighterGateway {
     const baseAmountScaledString = scaledToDecimalString(baseAmount, this.sizeDecimals);
     const clientOrderIndex = BigInt(Date.now() % Number.MAX_SAFE_INTEGER);
     let priceScaled = params.price != null ? decimalToScaled(params.price, this.priceDecimals) : null;
-    if (params.type === "MARKET" && priceScaled == null) {
+    if ((params.type === "MARKET" || params.type === "STOP_MARKET") && priceScaled == null) {
       priceScaled = decimalToScaled(this.estimateMarketPrice(side), this.priceDecimals);
     }
     if (priceScaled == null) {
@@ -840,7 +845,12 @@ function mapOrderType(type: OrderType): number {
 }
 
 function mapTimeInForce(timeInForce: string | undefined, type: OrderType): number {
-  const value = (timeInForce ?? (type === "MARKET" ? "IOC" : "GTC")).toUpperCase();
+  // Lighter expects STOP orders to be immediate-or-cancel at trigger time.
+  // Force IOC for MARKET and STOP_MARKET to satisfy chain validation.
+  if (type === "MARKET" || type === "STOP_MARKET") {
+    return LIGHTER_TIME_IN_FORCE.IMMEDIATE_OR_CANCEL;
+  }
+  const value = (timeInForce ?? "GTC").toUpperCase();
   switch (value) {
     case "IOC":
       return LIGHTER_TIME_IN_FORCE.IMMEDIATE_OR_CANCEL;
