@@ -7,7 +7,7 @@ export interface LighterSignerConfig {
   accountIndex: number | bigint;
   chainId: number;
   apiKeys: Record<number, string>;
-  baseUrl: string;
+  baseUrl?: string; // optional for offline signing/tests
 }
 
 interface BaseSignOptions {
@@ -142,14 +142,12 @@ export class LighterSigner {
   private readonly ready: Promise<void>;
 
   constructor(config: LighterSignerConfig) {
-    if (!config.baseUrl) {
-      throw new Error("LighterSigner requires baseUrl for signer bridge");
-    }
     this.accountIndex = typeof config.accountIndex === "number"
       ? BigInt(Math.trunc(config.accountIndex))
       : config.accountIndex;
     this.chainId = config.chainId >>> 0;
-    this.baseUrl = config.baseUrl;
+    // Default to localhost to allow offline signing in tests
+    this.baseUrl = config.baseUrl ?? "http://localhost";
 
     const entries = Object.entries(config.apiKeys ?? {});
     if (!entries.length) {
@@ -157,15 +155,19 @@ export class LighterSigner {
     }
     this.defaultKeyIndex = Number(entries[0]![0]);
 
-    this.bridge = new PythonSignerBridge(resolveScriptPath());
+    const bridge = new PythonSignerBridge(resolveScriptPath());
+    this.bridge = bridge;
+    const baseUrl = this.baseUrl;
+    const chainId = this.chainId;
+    const accountIndexStr = this.accountIndex.toString();
     this.ready = (async () => {
       for (const [index, key] of entries) {
-        await this.bridge.call("create_client", {
+        await bridge.call("create_client", {
           apiKeyIndex: Number(index),
           privateKey: key,
-          baseUrl: this.baseUrl,
-          chainId: this.chainId,
-          accountIndex: this.accountIndex.toString(),
+          baseUrl,
+          chainId,
+          accountIndex: accountIndexStr,
         });
       }
     })();
