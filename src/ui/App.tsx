@@ -4,6 +4,7 @@ import { TrendApp } from "./TrendApp";
 import { MakerApp } from "./MakerApp";
 import { OffsetMakerApp } from "./OffsetMakerApp";
 import { loadCopyrightFragments, verifyCopyrightIntegrity } from "../utils/copyright";
+import { resolveExchangeId } from "../exchanges/create-adapter";
 
 interface StrategyOption {
   id: "trend" | "maker" | "offset-maker";
@@ -40,16 +41,23 @@ export function App() {
   const [selected, setSelected] = useState<StrategyOption | null>(null);
   const copyright = useMemo(() => loadCopyrightFragments(), []);
   const integrityOk = useMemo(() => verifyCopyrightIntegrity(), []);
+  const exchangeId = useMemo(() => resolveExchangeId(), []);
+  const strategies = useMemo(() => {
+    if (exchangeId === "lighter") {
+      return STRATEGIES.filter((s) => s.id !== "trend");
+    }
+    return STRATEGIES;
+  }, [exchangeId]);
 
   useInput(
     (input, key) => {
       if (selected) return;
       if (key.upArrow) {
-        setCursor((prev) => (prev - 1 + STRATEGIES.length) % STRATEGIES.length);
+        setCursor((prev) => (prev - 1 + strategies.length) % strategies.length);
       } else if (key.downArrow) {
-        setCursor((prev) => (prev + 1) % STRATEGIES.length);
+        setCursor((prev) => (prev + 1) % strategies.length);
       } else if (key.return) {
-        const strategy = STRATEGIES[cursor];
+        const strategy = strategies[cursor];
         if (strategy) {
           setSelected(strategy);
         }
@@ -75,7 +83,7 @@ export function App() {
       <Text color="cyanBright">请选择要运行的策略</Text>
       <Text color="gray">使用 ↑/↓ 选择，回车开始，Ctrl+C 退出。</Text>
       <Box flexDirection="column" marginTop={1}>
-        {STRATEGIES.map((strategy, index) => {
+        {strategies.map((strategy, index) => {
           const active = index === cursor;
           return (
             <Box key={strategy.id} flexDirection="column" marginBottom={1}>

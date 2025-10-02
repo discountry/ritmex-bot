@@ -4,6 +4,7 @@ export interface CliOptions {
   strategy?: StrategyId;
   silent: boolean;
   help: boolean;
+  exchange?: "aster" | "grvt" | "lighter";
 }
 
 const STRATEGY_VALUES = new Set<StrategyId>(["trend", "maker", "offset-maker"]);
@@ -36,6 +37,19 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions
       }
       continue;
     }
+    if (arg.startsWith("--exchange=")) {
+      const value = arg.split("=", 2)[1] ?? "";
+      assignExchange(options, value);
+      continue;
+    }
+    if (arg === "--exchange" || arg === "-e") {
+      const value = argv[i + 1];
+      if (value) {
+        assignExchange(options, value);
+        i += 1;
+      }
+      continue;
+    }
   }
 
   return options;
@@ -51,12 +65,23 @@ function assignStrategy(options: CliOptions, raw: string): void {
   }
 }
 
+function assignExchange(options: CliOptions, raw: string): void {
+  const normalized = raw.trim().toLowerCase();
+  if (!normalized) return;
+  if (normalized === "aster" || normalized === "grvt" || normalized === "lighter") {
+    options.exchange = normalized as CliOptions["exchange"];
+  } else if (normalized === "gravity" || normalized === "grav" || normalized === "grv") {
+    options.exchange = "grvt";
+  }
+}
+
 export function printCliHelp(): void {
   // eslint-disable-next-line no-console
-  console.log(`Usage: bun run index.ts [--strategy <trend|maker|offset-maker>] [--silent]\n\n` +
+  console.log(`Usage: bun run index.ts [--strategy <trend|maker|offset-maker>] [--exchange <aster|grvt|lighter>] [--silent]\n\n` +
     `Options:\n` +
     `  --strategy, -s    Automatically start the specified strategy without the interactive menu.\n` +
     `                    Aliases: offset, offset-maker for the offset maker engine.\n` +
+    `  --exchange, -e    Choose exchange. Overrides EXCHANGE/TRADE_EXCHANGE environment variables.\n` +
     `  --silent, -q      Reduce console output. When used with --strategy, runs in silent daemon mode.\n` +
     `  --help, -h        Show this help message.\n`);
 }

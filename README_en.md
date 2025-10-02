@@ -69,6 +69,12 @@ The most important settings shipped in `.env.example` are summarised below:
 
 To trade on GRVT, set `EXCHANGE=grvt` and populate `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID`, plus any optional overrides documented in `.env.example`.
 
+> Tip: you can temporarily override the exchange via CLI flags (takes precedence over environment):
+> ```bash
+> bun run index.ts --exchange grvt
+> bun run index.ts -e lighter
+> ```
+
 ## Common Commands
 ```bash
 bun run index.ts   # Launch the CLI
@@ -85,6 +91,13 @@ Skip the Ink menu and start a strategy straight from the CLI:
 bun run index.ts --strategy trend --silent        # Trend engine
 bun run index.ts --strategy maker --silent        # Maker engine
 bun run index.ts --strategy offset-maker --silent # Offset maker engine
+```
+
+Combine with `--exchange/-e` to explicitly choose the venue (overrides `EXCHANGE`/`TRADE_EXCHANGE` from `.env`):
+
+```bash
+bun run index.ts --exchange grvt --strategy maker --silent
+bun run index.ts -e lighter -s offset-maker --silent
 ```
 
 ### Package scripts

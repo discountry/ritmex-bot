@@ -72,6 +72,12 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 
 切换到 GRVT 时，将 `EXCHANGE=grvt` 并补齐 `GRVT_API_KEY`、`GRVT_API_SECRET`、`GRVT_SUB_ACCOUNT_ID` 等变量；详情见 `.env.example`。
 
+> 提示：你也可以通过命令行参数临时指定交易所（优先级高于环境变量）：
+> ```bash
+> bun run index.ts --exchange grvt
+> bun run index.ts -e lighter
+> ```
+
 ## 常用命令
 ```bash
 bun run index.ts   # 启动 CLI（默认）
@@ -88,6 +94,13 @@ bun x vitest run   # 执行单元测试
 bun run index.ts --strategy trend --silent        # 启动趋势策略
 bun run index.ts --strategy maker --silent        # 启动做市策略
 bun run index.ts --strategy offset-maker --silent # 启动偏移做市策略
+```
+
+如需同时指定交易所，可叠加 `--exchange/-e`（将覆盖 `.env` 中的 `EXCHANGE`/`TRADE_EXCHANGE`）：
+
+```bash
+bun run index.ts --exchange grvt --strategy maker --silent
+bun run index.ts -e lighter -s offset-maker --silent
 ```
 
 ### 项目内置脚本
