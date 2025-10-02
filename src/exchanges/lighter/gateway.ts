@@ -184,6 +184,10 @@ export class LighterGateway {
   private readonly tickerPollMs: number;
   private readonly klinePollMs: number;
 
+  // Track last applied order book sequence to drop stale WS messages
+  private lastOrderBookOffset: number = 0;
+  private lastOrderBookTimestamp: number = 0;
+
   constructor(options: LighterGatewayOptions) {
     this.displaySymbol = options.symbol;
     this.marketSymbol = (options.marketSymbol ?? options.symbol).toUpperCase();
@@ -514,6 +518,14 @@ export class LighterGateway {
 
   private handleOrderBookSnapshot(message: any): void {
     if (!message?.order_book) return;
+    const incomingOffset = Number(message.offset ?? message.order_book?.offset ?? 0);
+    const incomingTs = Number(message.timestamp ?? 0);
+    if (this.lastOrderBookOffset && incomingOffset && incomingOffset < this.lastOrderBookOffset) {
+      return;
+    }
+    if (incomingOffset === this.lastOrderBookOffset && incomingTs && incomingTs <= this.lastOrderBookTimestamp) {
+      return;
+    }
     const snapshot: LighterOrderBookSnapshot = {
       market_id: this.marketId ?? 0,
       offset: message.order_book.offset ?? Date.now(),
@@ -521,11 +533,21 @@ export class LighterGateway {
       asks: normalizeLevels(message.order_book.asks ?? []),
     };
     this.orderBook = snapshot;
+    this.lastOrderBookOffset = snapshot.offset ?? incomingOffset ?? this.lastOrderBookOffset;
+    this.lastOrderBookTimestamp = incomingTs || Date.now();
     this.emitDepth();
   }
 
   private handleOrderBookUpdate(message: any): void {
     if (!this.orderBook) return;
+    const incomingOffset = Number(message.offset ?? message.order_book?.offset ?? 0);
+    const incomingTs = Number(message.timestamp ?? 0);
+    if (this.lastOrderBookOffset && incomingOffset && incomingOffset < this.lastOrderBookOffset) {
+      return;
+    }
+    if (incomingOffset === this.lastOrderBookOffset && incomingTs && incomingTs <= this.lastOrderBookTimestamp) {
+      return;
+    }
     const update = message?.order_book;
     if (!update) return;
     if (Array.isArray(update.asks)) {
@@ -537,6 +559,8 @@ export class LighterGateway {
       this.orderBook.bids = mergeLevels(this.orderBook.bids ?? [], bids);
     }
     this.orderBook.offset = update.offset ?? this.orderBook.offset;
+    this.lastOrderBookOffset = Number(this.orderBook.offset ?? incomingOffset ?? this.lastOrderBookOffset);
+    this.lastOrderBookTimestamp = incomingTs || Date.now();
     this.emitDepth();
   }
 
