@@ -210,7 +210,13 @@ export class LighterGateway {
       apiKeyIndices: this.apiKeyIndices,
       http: this.http,
     });
-    this.logger = options.logger ?? ((context, error) => console.error(`[LighterGateway] ${context}`, error));
+    const debugEnabled = process.env.LIGHTER_DEBUG === "1" || process.env.LIGHTER_DEBUG === "true";
+    this.logger = options.logger ?? ((context, error) => {
+      if (debugEnabled) {
+        // eslint-disable-next-line no-console
+        console.error(`[LighterGateway] ${context}`, error);
+      }
+    });
     this.marketId = options.marketId != null ? Number(options.marketId) : null;
     this.priceDecimals = options.priceDecimals ?? null;
     this.sizeDecimals = options.sizeDecimals ?? null;
@@ -263,7 +269,9 @@ export class LighterGateway {
         nonce,
       });
       if (!this.loggedCreateOrderPayload) {
-        this.logger("createOrder.txInfo", signed.txInfo);
+        if (process.env.LIGHTER_DEBUG === "1" || process.env.LIGHTER_DEBUG === "true") {
+          this.logger("createOrder.txInfo", signed.txInfo);
+        }
         this.loggedCreateOrderPayload = true;
       }
       const auth = await this.ensureAuthToken();
@@ -271,7 +279,9 @@ export class LighterGateway {
         authToken: auth,
         priceProtection: false,
       });
-      this.logger("createOrder.sendTx.response", response);
+      if (process.env.LIGHTER_DEBUG === "1" || process.env.LIGHTER_DEBUG === "true") {
+        this.logger("createOrder.sendTx.response", response);
+      }
       return lighterOrderToAster(this.displaySymbol, {
         order_index: Number(signParams.clientOrderIndex % 1_000_000_000n),
         client_order_index: Number(signParams.clientOrderIndex),
@@ -458,7 +468,7 @@ export class LighterGateway {
       return this.auth.token;
     }
     const deadline = now + 10 * 60 * 1000; // 10 minutes horizon
-    const token = this.signer.createAuthToken(deadline);
+    const token = await this.signer.createAuthToken(deadline);
     this.auth.token = token;
     this.auth.expiresAt = deadline;
     return token;
@@ -507,8 +517,8 @@ export class LighterGateway {
     const snapshot: LighterOrderBookSnapshot = {
       market_id: this.marketId ?? 0,
       offset: message.order_book.offset ?? Date.now(),
-      bids: message.order_book.bids ?? [],
-      asks: message.order_book.asks ?? [],
+      bids: normalizeLevels(message.order_book.bids ?? []),
+      asks: normalizeLevels(message.order_book.asks ?? []),
     };
     this.orderBook = snapshot;
     this.emitDepth();
@@ -519,10 +529,12 @@ export class LighterGateway {
     const update = message?.order_book;
     if (!update) return;
     if (Array.isArray(update.asks)) {
-      this.orderBook.asks = mergeLevels(this.orderBook.asks ?? [], update.asks);
+      const asks = normalizeLevels(update.asks);
+      this.orderBook.asks = mergeLevels(this.orderBook.asks ?? [], asks);
     }
     if (Array.isArray(update.bids)) {
-      this.orderBook.bids = mergeLevels(this.orderBook.bids ?? [], update.bids);
+      const bids = normalizeLevels(update.bids);
+      this.orderBook.bids = mergeLevels(this.orderBook.bids ?? [], bids);
     }
     this.orderBook.offset = update.offset ?? this.orderBook.offset;
     this.emitDepth();
@@ -775,6 +787,21 @@ function getBestPrice(levels: LighterOrderBookLevel[] | Array<any> | undefined, 
     .filter((price) => Number.isFinite(price));
   if (!sorted.length) return null;
   return side === "bid" ? Math.max(...sorted) : Math.min(...sorted);
+}
+
+function normalizeLevels(raw: Array<LighterOrderBookLevel | [string | number, string | number]>): LighterOrderBookLevel[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => {
+      if (Array.isArray(entry)) {
+        const price = String(entry[0]);
+        const size = String(entry[1]);
+        return { price, size } as LighterOrderBookLevel;
+      }
+      const obj = entry as LighterOrderBookLevel;
+      return { price: String(obj.price), size: String(obj.size) } as LighterOrderBookLevel;
+    })
+    .filter((lvl) => lvl.price != null && lvl.size != null);
 }
 
 function mapOrderType(type: OrderType): number {

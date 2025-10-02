@@ -140,7 +140,9 @@ export class LighterExchangeAdapter implements ExchangeAdapter {
   }
 
   private logError(context: string, error: unknown): void {
-    console.error(`[LighterExchangeAdapter] ${context} failed: ${extractMessage(error)}`);
+    if (process.env.LIGHTER_DEBUG === "1" || process.env.LIGHTER_DEBUG === "true") {
+      console.error(`[LighterExchangeAdapter] ${context} failed: ${extractMessage(error)}`);
+    }
   }
 }
 
