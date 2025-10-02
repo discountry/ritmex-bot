@@ -60,7 +60,7 @@ export const makerConfig: MakerConfig = {
   lossLimit: parseNumber(process.env.MAKER_LOSS_LIMIT, parseNumber(process.env.LOSS_LIMIT, 0.03)),
   bidOffset: parseNumber(process.env.MAKER_BID_OFFSET, 0),
   askOffset: parseNumber(process.env.MAKER_ASK_OFFSET, 0),
-  refreshIntervalMs: parseNumber(process.env.MAKER_REFRESH_INTERVAL_MS, 1500),
+  refreshIntervalMs: parseNumber(process.env.MAKER_REFRESH_INTERVAL_MS, 500),
   maxLogEntries: parseNumber(process.env.MAKER_MAX_LOG_ENTRIES, 200),
   maxCloseSlippagePct: parseNumber(
     process.env.MAKER_MAX_CLOSE_SLIPPAGE_PCT ?? process.env.MAX_CLOSE_SLIPPAGE_PCT,
