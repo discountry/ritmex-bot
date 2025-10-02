@@ -1,6 +1,6 @@
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import type { AsterOrder, CreateOrderParams } from "../exchanges/types";
-import { roundDownToTick, roundQtyDownToStep } from "../utils/math";
+import { roundDownToTick, roundQtyDownToStep, formatPriceToString } from "../utils/math";
 import { isUnknownOrderError } from "../utils/errors";
 import { isOrderPriceAllowedByMark } from "../utils/strategy";
 
@@ -122,7 +122,7 @@ export async function placeOrder(
   timers: OrderTimerMap,
   pendings: OrderPendingMap,
   side: "BUY" | "SELL",
-  price: number,
+  price: string, // 改为字符串价格
   amount: number,
   log: LogHandler,
   reduceOnly = false,
@@ -131,7 +131,8 @@ export async function placeOrder(
 ): Promise<AsterOrder | undefined> {
   const type = "LIMIT";
   if (isOperating(locks, type)) return;
-  if (!enforceMarkPriceGuard(side, price, guard, log, "限价单")) return;
+  const priceNum = Number(price);
+  if (!enforceMarkPriceGuard(side, priceNum, guard, log, "限价单")) return;
   const priceTick = opts?.priceTick ?? 0.1;
   const qtyStep = opts?.qtyStep ?? 0.001;
   const params: CreateOrderParams = {
@@ -139,7 +140,7 @@ export async function placeOrder(
     side,
     type,
     quantity: roundQtyDownToStep(amount, qtyStep),
-    price: roundDownToTick(price, priceTick),
+    price: priceNum, // 直接使用字符串转换的数字，不再格式化
     timeInForce: "GTX",
   };
   if (reduceOnly) params.reduceOnly = "true";

@@ -7,7 +7,7 @@ import type {
   AsterOrder,
   AsterTicker,
 } from "../exchanges/types";
-import { roundDownToTick } from "../utils/math";
+import { formatPriceToString } from "../utils/math";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { isUnknownOrderError, isRateLimitError } from "../utils/errors";
 import { getPosition } from "../utils/strategy";
@@ -30,7 +30,7 @@ import { SessionVolumeTracker } from "./common/session-volume";
 
 interface DesiredOrder {
   side: "BUY" | "SELL";
-  price: number;
+  price: string; // 改为字符串价格
   amount: number;
   reduceOnly: boolean;
 }
@@ -244,10 +244,12 @@ export class MakerEngine {
         return;
       }
 
-      const closeBidPrice = roundDownToTick(topBid, this.config.priceTick);
-      const closeAskPrice = roundDownToTick(topAsk, this.config.priceTick);
-      const bidPrice = roundDownToTick(topBid - this.config.bidOffset, this.config.priceTick);
-      const askPrice = roundDownToTick(topAsk + this.config.askOffset, this.config.priceTick);
+      // 直接使用orderbook价格，格式化为字符串避免精度问题
+      const priceDecimals = Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)));
+      const closeBidPrice = formatPriceToString(topBid, priceDecimals);
+      const closeAskPrice = formatPriceToString(topAsk, priceDecimals);
+      const bidPrice = formatPriceToString(topBid - this.config.bidOffset, priceDecimals);
+      const askPrice = formatPriceToString(topAsk + this.config.askOffset, priceDecimals);
       const position = getPosition(this.accountSnapshot, this.config.symbol);
       const absPosition = Math.abs(position.positionAmt);
       const desired: DesiredOrder[] = [];
@@ -268,7 +270,7 @@ export class MakerEngine {
       this.desiredOrders = desired;
       this.sessionVolume.update(position, this.getReferencePrice());
       await this.syncOrders(desired);
-      await this.checkRisk(position, closeBidPrice, closeAskPrice);
+      await this.checkRisk(position, Number(closeBidPrice), Number(closeAskPrice));
       this.emitUpdate();
     } catch (error) {
       if (isRateLimitError(error)) {
@@ -291,9 +293,10 @@ export class MakerEngine {
     if (Math.abs(position.positionAmt) < EPS) return;
     const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
     if (topBid == null || topAsk == null) return;
-    const closeBidPrice = roundDownToTick(topBid, this.config.priceTick);
-    const closeAskPrice = roundDownToTick(topAsk, this.config.priceTick);
-    await this.checkRisk(position, closeBidPrice, closeAskPrice);
+    const priceDecimals = Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)));
+    const closeBidPrice = formatPriceToString(topBid, priceDecimals);
+    const closeAskPrice = formatPriceToString(topAsk, priceDecimals);
+    await this.checkRisk(position, Number(closeBidPrice), Number(closeAskPrice));
     await this.flushOrders();
   }
 
@@ -368,13 +371,17 @@ export class MakerEngine {
           this.timers,
           this.pending,
           target.side,
-          target.price,
+          target.price, // 已经是字符串价格
           target.amount,
           (type, detail) => this.tradeLog.push(type, detail),
           target.reduceOnly,
           {
             markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice,
             maxPct: this.config.maxCloseSlippagePct,
+          },
+          {
+            priceTick: this.config.priceTick,
+            qtyStep: 0.001, // 默认数量步长
           }
         );
       } catch (error) {

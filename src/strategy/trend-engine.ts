@@ -27,7 +27,7 @@ import {
 } from "../core/order-coordinator";
 import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
 import { extractMessage, isUnknownOrderError } from "../utils/errors";
-import { roundDownToTick } from "../utils/math";
+import { formatPriceToString } from "../utils/math";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { decryptCopyright } from "../utils/copyright";
 import { isRateLimitError } from "../utils/errors";
@@ -557,7 +557,7 @@ export class TrendEngine {
           const rawTarget = direction === "long"
             ? position.entryPrice + steps * stepPx
             : position.entryPrice - steps * stepPx;
-          let targetStop = roundDownToTick(rawTarget, this.config.priceTick);
+          let targetStop = Number(formatPriceToString(rawTarget, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)))));
 
           // 不允许下一次移动超过动态止盈订单的激活价
           if (Number.isFinite(trailingActivate)) {
@@ -639,13 +639,13 @@ export class TrendEngine {
     }
 
     if (!currentStop) {
-      await this.tryPlaceStopLoss(stopSide, roundDownToTick(stopPrice, this.config.priceTick), price);
+      await this.tryPlaceStopLoss(stopSide, Number(formatPriceToString(stopPrice, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick))))), price);
     }
 
     if (!currentTrailing && this.exchange.supportsTrailingStops()) {
       await this.tryPlaceTrailingStop(
         stopSide,
-        roundDownToTick(activationPrice, this.config.priceTick),
+        Number(formatPriceToString(activationPrice, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick))))),
         Math.abs(position.positionAmt)
       );
     }
@@ -815,7 +815,7 @@ export class TrendEngine {
         { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
       );
       if (order) {
-        this.tradeLog.push("stop", `移动止损到 ${roundDownToTick(nextStopPrice, this.config.priceTick)}`);
+        this.tradeLog.push("stop", `移动止损到 ${formatPriceToString(nextStopPrice, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick))))}`);
       }
     } catch (err) {
       this.tradeLog.push("error", `移动止损失败: ${String(err)}`);
@@ -846,7 +846,7 @@ export class TrendEngine {
             { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
           );
           if (restored) {
-            this.tradeLog.push("order", `恢复原止损 @ ${roundDownToTick(existingStopPrice, this.config.priceTick)}`);
+            this.tradeLog.push("order", `恢复原止损 @ ${formatPriceToString(existingStopPrice, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick))))}`);
           }
         }
       } catch (recoverErr) {
