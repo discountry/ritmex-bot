@@ -541,8 +541,8 @@ export class LighterGateway {
     const snapshot: LighterOrderBookSnapshot = {
       market_id: this.marketId ?? 0,
       offset: message.order_book.offset ?? Date.now(),
-      bids: normalizeLevels(message.order_book.bids ?? []),
-      asks: normalizeLevels(message.order_book.asks ?? []),
+      bids: sortAndTrimLevels(normalizeLevels(message.order_book.bids ?? []), "bid"),
+      asks: sortAndTrimLevels(normalizeLevels(message.order_book.asks ?? []), "ask"),
     };
     this.orderBook = snapshot;
     this.lastOrderBookOffset = snapshot.offset ?? incomingOffset ?? this.lastOrderBookOffset;
@@ -564,11 +564,11 @@ export class LighterGateway {
     if (!update) return;
     if (Array.isArray(update.asks)) {
       const asks = normalizeLevels(update.asks);
-      this.orderBook.asks = mergeLevels(this.orderBook.asks ?? [], asks);
+      this.orderBook.asks = sortAndTrimLevels(mergeLevels(this.orderBook.asks ?? [], asks), "ask");
     }
     if (Array.isArray(update.bids)) {
       const bids = normalizeLevels(update.bids);
-      this.orderBook.bids = mergeLevels(this.orderBook.bids ?? [], bids);
+      this.orderBook.bids = sortAndTrimLevels(mergeLevels(this.orderBook.bids ?? [], bids), "bid");
     }
     this.orderBook.offset = update.offset ?? this.orderBook.offset;
     this.lastOrderBookOffset = Number(this.orderBook.offset ?? incomingOffset ?? this.lastOrderBookOffset);
@@ -890,6 +890,22 @@ function normalizeLevels(raw: Array<LighterOrderBookLevel | [string | number, st
       return { price: String(obj.price), size: String(obj.size) } as LighterOrderBookLevel;
     })
     .filter((lvl) => lvl.price != null && lvl.size != null);
+}
+
+// Ensure correct side ordering and limit depth size
+function sortAndTrimLevels(
+  levels: LighterOrderBookLevel[] | undefined,
+  side: "bid" | "ask",
+  limit: number = 200
+): LighterOrderBookLevel[] {
+  const list = Array.isArray(levels) ? levels.slice() : [];
+  list.sort((a, b) => {
+    const pa = Number(a.price);
+    const pb = Number(b.price);
+    if (!Number.isFinite(pa) || !Number.isFinite(pb)) return 0;
+    return side === "bid" ? pb - pa : pa - pb;
+  });
+  return list.slice(0, Math.max(1, limit));
 }
 
 function mapOrderType(type: OrderType): number {
