@@ -80,11 +80,21 @@ export class OffsetMakerEngine {
   private lastSkipSell = false;
   private lastImbalance: "balanced" | "buy_dominant" | "sell_dominant" = "balanced";
 
+  // Reprice suppression for fast-ticking Lighter order book
+  private readonly repriceDwellMs: number;
+  private readonly minRepriceTicks: number = 2;
+  private lastEntryOrderBySide: Record<"BUY" | "SELL", { price: string; ts: number } | null> = {
+    BUY: null,
+    SELL: null,
+  };
+
   constructor(private readonly config: MakerConfig, private readonly exchange: ExchangeAdapter) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
     this.rateLimit = new RateLimitController(this.config.refreshIntervalMs, (type, detail) =>
       this.tradeLog.push(type, detail)
     );
+    // Debounce window defaults to 3x refresh interval, min 1s
+    this.repriceDwellMs = Math.max(1000, this.config.refreshIntervalMs * 3);
     this.bootstrap();
   }
 
@@ -439,7 +449,32 @@ export class OffsetMakerEngine {
 
   private async syncOrders(targets: DesiredOrder[]): Promise<void> {
     const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
-    const { toCancel, toPlace } = makeOrderPlan(availableOrders, targets);
+
+    // Coalesce reprices for entry orders: if within tick threshold or within dwell window, keep existing order
+    const adjustedTargets: DesiredOrder[] = targets.map((t) => ({ ...t }));
+    for (let i = 0; i < adjustedTargets.length; i++) {
+      const t = adjustedTargets[i];
+      if (!t || t.reduceOnly) continue; // only suppress entry orders
+      const existing = availableOrders.find((o) => o.side === t.side && o.reduceOnly !== true);
+      if (!existing) continue;
+      const newPrice = Number(t.price);
+      const oldPrice = Number(existing.price);
+      if (!Number.isFinite(newPrice) || !Number.isFinite(oldPrice)) continue;
+      const ticksDiff = Math.abs(newPrice - oldPrice) / this.config.priceTick;
+      const recentPlaced = this.lastEntryOrderBySide[t.side]?.ts ?? 0;
+      const withinDwell = Date.now() - recentPlaced < this.repriceDwellMs;
+      if (ticksDiff < this.minRepriceTicks || withinDwell) {
+        // Keep the existing resting order to avoid cancel/place churn
+        adjustedTargets[i] = {
+          side: t.side,
+          price: String(existing.price),
+          amount: t.amount,
+          reduceOnly: false,
+        };
+      }
+    }
+
+    const { toCancel, toPlace } = makeOrderPlan(availableOrders, adjustedTargets);
 
     for (const order of toCancel) {
       if (this.pendingCancelOrders.has(String(order.orderId))) continue;
@@ -494,6 +529,10 @@ export class OffsetMakerEngine {
             qtyStep: 0.001, // 默认数量步长
           }
         );
+        // Record last placed entry order timing and price
+        if (!target.reduceOnly) {
+          this.lastEntryOrderBySide[target.side] = { price: target.price, ts: Date.now() };
+        }
       } catch (error) {
         this.tradeLog.push("error", `挂单失败(${target.side} ${target.price}): ${String(error)}`);
       }
