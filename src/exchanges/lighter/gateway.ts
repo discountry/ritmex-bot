@@ -457,6 +457,14 @@ export class LighterGateway {
     ws.send(JSON.stringify({ type: "subscribe", channel: `order_book/${marketId}` }));
     ws.send(JSON.stringify({ type: "subscribe", channel: `account_all/${Number(this.signer.accountIndex)}` }));
     const auth = await this.ensureAuthToken();
+    // Subscribe to per-market account updates to receive timely position changes
+    ws.send(
+      JSON.stringify({
+        type: "subscribe",
+        channel: `account_market/${Number(marketId)}/${Number(this.signer.accountIndex)}`,
+        auth,
+      })
+    );
     ws.send(
       JSON.stringify({
         type: "subscribe",
@@ -503,6 +511,10 @@ export class LighterGateway {
         case "subscribed/account_all":
         case "update/account_all":
           this.handleAccountAll(message);
+          break;
+        case "subscribed/account_market":
+        case "update/account_market":
+          this.handleAccountMarket(message);
           break;
         case "subscribed/account_all_orders":
         case "update/account_all_orders":
@@ -566,13 +578,54 @@ export class LighterGateway {
 
   private handleAccountAll(message: any): void {
     if (!message) return;
-    // account_all messages may be partial updates; if positions is omitted, retain existing positions
+    // account_all may be partial; merge provided markets into existing positions
     if (Object.prototype.hasOwnProperty.call(message, "positions")) {
       const positionsObject = message.positions ?? {};
-      const positions: LighterPosition[] = (Array.isArray(positionsObject)
+      const incoming: LighterPosition[] = (Array.isArray(positionsObject)
         ? (positionsObject as LighterPosition[])
         : (Object.values(positionsObject) as LighterPosition[])) as LighterPosition[];
-      this.positions = positions;
+
+      const byMarket = new Map<number, LighterPosition>();
+      for (const p of this.positions ?? []) {
+        const mid = Number(p.market_id);
+        if (Number.isFinite(mid)) byMarket.set(mid, p);
+      }
+      for (const p of incoming) {
+        const mid = Number(p.market_id);
+        if (!Number.isFinite(mid)) continue;
+        const sign = Number(p.sign ?? 0);
+        const size = Number(p.position ?? 0);
+        if (sign === 0 || Math.abs(size) < 1e-12) {
+          byMarket.delete(mid);
+        } else {
+          byMarket.set(mid, p);
+        }
+      }
+      this.positions = Array.from(byMarket.values());
+    }
+    this.emitAccount();
+  }
+
+  private handleAccountMarket(message: any): void {
+    if (!message) return;
+    const position: LighterPosition | undefined = message.position as LighterPosition | undefined;
+    if (!position || !Number.isFinite(Number(position.market_id))) return;
+    const marketId = Number(position.market_id);
+    const sign = Number(position.sign ?? 0);
+    const size = Number(position.position ?? 0);
+    const shouldRemove = sign === 0 || Math.abs(size) < 1e-12;
+    if (shouldRemove) {
+      this.positions = (this.positions ?? []).filter((p) => Number(p.market_id) !== marketId);
+    } else {
+      let updated = false;
+      this.positions = (this.positions ?? []).map((p) => {
+        if (Number(p.market_id) === marketId) {
+          updated = true;
+          return position;
+        }
+        return p;
+      });
+      if (!updated) this.positions.push(position);
     }
     this.emitAccount();
   }

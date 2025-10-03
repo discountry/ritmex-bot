@@ -172,7 +172,8 @@ function lighterPositionToAster(symbol: string, position: LighterPosition): Aste
   const sign = position.sign ?? 0;
   const positionSide = sign > 0 ? "LONG" : sign < 0 ? "SHORT" : "BOTH";
   const magnitude = Number(position.position ?? 0);
-  const signed = sign < 0 ? -Math.abs(magnitude) : Math.abs(magnitude);
+  // Normalize: when sign is 0, treat as flat regardless of reported magnitude
+  const signed = sign === 0 ? 0 : sign < 0 ? -Math.abs(magnitude) : Math.abs(magnitude);
   return {
     symbol,
     positionAmt: Number.isFinite(signed) ? signed.toString() : position.position ?? "0",
