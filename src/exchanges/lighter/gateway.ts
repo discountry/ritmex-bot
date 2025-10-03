@@ -746,13 +746,11 @@ export class LighterGateway {
       triggerPriceScaled = decimalToScaled(params.stopPrice, this.priceDecimals);
     }
     // Align with chain expectations:
-    // - IOC and MARKET/STOP_MARKET orders must use Nil/Immediate expiry
+    // - Pure MARKET orders use immediate expiry (0)
+    // - STOP orders rest until trigger, so they require an absolute future expiry
     // - All other orders use absolute future timestamp (ms) for ~28 days
     const TWENTY_EIGHT_DAYS_MS = 28 * 24 * 60 * 60 * 1000;
-    const isImmediate =
-      resultTimeInForce === LIGHTER_TIME_IN_FORCE.IMMEDIATE_OR_CANCEL ||
-      resultType === LIGHTER_ORDER_TYPE.MARKET ||
-      resultType === LIGHTER_ORDER_TYPE.STOP_LOSS;
+    const isImmediate = resultType === LIGHTER_ORDER_TYPE.MARKET;
     const orderExpiry = isImmediate
       ? BigInt(IMMEDIATE_OR_CANCEL_EXPIRY_PLACEHOLDER)
       : BigInt(Date.now() + TWENTY_EIGHT_DAYS_MS);

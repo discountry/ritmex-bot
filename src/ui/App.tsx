@@ -42,12 +42,7 @@ export function App() {
   const copyright = useMemo(() => loadCopyrightFragments(), []);
   const integrityOk = useMemo(() => verifyCopyrightIntegrity(), []);
   const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const strategies = useMemo(() => {
-    if (exchangeId === "lighter") {
-      return STRATEGIES.filter((s) => s.id !== "trend");
-    }
-    return STRATEGIES;
-  }, [exchangeId]);
+  const strategies = useMemo(() => STRATEGIES, []);
 
   useInput(
     (input, key) => {
