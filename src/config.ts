@@ -1,3 +1,18 @@
+/**
+ * Trading Configuration
+ * 
+ * Environment Variables for Backpack Exchange:
+ * - BACKPACK_API_KEY: Required API key for Backpack
+ * - BACKPACK_API_SECRET: Required API secret for Backpack  
+ * - BACKPACK_PASSWORD: Optional password for Backpack (if required)
+ * - BACKPACK_SUBACCOUNT: Optional subaccount name
+ * - BACKPACK_SYMBOL: Override symbol (defaults to TRADE_SYMBOL)
+ * - BACKPACK_SANDBOX: Set to "true" for sandbox mode
+ * - BACKPACK_DEBUG: Set to "true" for debug logging
+ * 
+ * Usage: Set EXCHANGE=backpack to use Backpack exchange
+ */
+
 export interface TradingConfig {
   symbol: string;
   tradeAmount: number;

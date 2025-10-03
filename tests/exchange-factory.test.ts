@@ -2,6 +2,7 @@ import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { createExchangeAdapter, resolveExchangeId } from "../src/exchanges/create-adapter";
 import { AsterExchangeAdapter } from "../src/exchanges/aster-adapter";
 import { GrvtExchangeAdapter } from "../src/exchanges/grvt/adapter";
+import { BackpackExchangeAdapter } from "../src/exchanges/backpack/adapter";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -26,6 +27,7 @@ describe("exchange factory", () => {
   it("resolves exchange id case-insensitively", () => {
     expect(resolveExchangeId("Grvt")).toBe("grvt");
     expect(resolveExchangeId("ASTER")).toBe("aster");
+    expect(resolveExchangeId("BACKPACK")).toBe("backpack");
   });
 
   it("creates grvt adapter when EXCHANGE=grvt", () => {
@@ -40,5 +42,16 @@ describe("exchange factory", () => {
     const adapter = createExchangeAdapter({ symbol: "BTCUSDT" });
     expect(adapter).toBeInstanceOf(GrvtExchangeAdapter);
     expect(adapter.id).toBe("grvt");
+  });
+
+  it("creates backpack adapter when EXCHANGE=backpack", () => {
+    process.env.EXCHANGE = "backpack";
+    process.env.BACKPACK_API_KEY = "api-key";
+    process.env.BACKPACK_API_SECRET = "secret";
+    process.env.TRADE_SYMBOL = "BTCUSDC";
+
+    const adapter = createExchangeAdapter({ symbol: "BTCUSDC" });
+    expect(adapter).toBeInstanceOf(BackpackExchangeAdapter);
+    expect(adapter.id).toBe("backpack");
   });
 });
