@@ -111,6 +111,12 @@ export class TrendEngine {
   private ordersSnapshotReady = false;
   private startupLogged = false;
   private entryPricePendingLogged = false;
+  // 记录最近一次止损下单尝试，用于抑制在无订单流识别时的重复挂单
+  private lastStopAttempt: { side: "BUY" | "SELL" | null; price: number | null; at: number } = {
+    side: null,
+    price: null,
+    at: 0,
+  };
   private readonly copyrightFingerprint = crypto
     .createHash("sha256")
     .update(decryptCopyright())
@@ -522,9 +528,12 @@ export class TrendEngine {
       this.config.trailingProfit
     );
 
-    const currentStop = this.openOrders.find(
-      (o) => o.type === "STOP_MARKET" && o.side === stopSide
-    );
+    // 对于部分交易所（如 Lighter），触发类订单在订单流中可能显示为 LIMIT，但会带有 stopPrice。
+    // 因此将带有有效 stopPrice 的同向订单也视为当前止损单。
+    const currentStop = this.openOrders.find((o) => {
+      const hasStopPrice = Number.isFinite(Number(o.stopPrice)) && Number(o.stopPrice) > 0;
+      return o.side === stopSide && (o.type === "STOP_MARKET" || hasStopPrice);
+    });
     const currentTrailing = this.openOrders.find(
       (o) => o.type === "TRAILING_STOP_MARKET" && o.side === stopSide
     );
@@ -639,7 +648,16 @@ export class TrendEngine {
     }
 
     if (!currentStop) {
-      await this.tryPlaceStopLoss(stopSide, Number(formatPriceToString(stopPrice, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick))))), price);
+      await this.tryPlaceStopLoss(
+        stopSide,
+        Number(
+          formatPriceToString(
+            stopPrice,
+            Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)))
+          )
+        ),
+        price
+      );
     }
 
     if (!currentTrailing && this.exchange.supportsTrailingStops()) {
@@ -740,6 +758,18 @@ export class TrendEngine {
     stopPrice: number,
     lastPrice: number
   ): Promise<void> {
+    // 短期去抖：在订单流无法正确识别止损单时，避免在极短时间内重复提交同价同向止损
+    const tick = Math.max(1e-9, this.config.priceTick);
+    const now = Date.now();
+    if (
+      this.lastStopAttempt.side === side &&
+      this.lastStopAttempt.price != null &&
+      Math.abs(stopPrice - Number(this.lastStopAttempt.price)) < tick &&
+      now - this.lastStopAttempt.at < 5000
+    ) {
+      // 5 秒内同向同价重复尝试，直接跳过
+      return;
+    }
     try {
       const position = getPosition(this.accountSnapshot, this.config.symbol);
       const quantity = Math.abs(position.positionAmt) || this.config.tradeAmount;
@@ -761,8 +791,11 @@ export class TrendEngine {
         },
         { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
       );
+      this.lastStopAttempt = { side, price: stopPrice, at: Date.now() };
     } catch (err) {
       this.tradeLog.push("error", `挂止损单失败: ${String(err)}`);
+      // 记录尝试以避免在错误被抛回时立即再次重复尝试
+      this.lastStopAttempt = { side, price: stopPrice, at: Date.now() };
     }
   }
 
