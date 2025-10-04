@@ -3,6 +3,7 @@ import { AsterExchangeAdapter, type AsterCredentials } from "./aster-adapter";
 import { GrvtExchangeAdapter, type GrvtCredentials } from "./grvt/adapter";
 import { LighterExchangeAdapter, type LighterCredentials } from "./lighter/adapter";
 import { BackpackExchangeAdapter, type BackpackCredentials } from "./backpack/adapter";
+import { EdgeXExchangeAdapter, type EdgeXCredentials } from "./edgex/adapter";
 
 export interface ExchangeFactoryOptions {
   symbol: string;
@@ -11,9 +12,10 @@ export interface ExchangeFactoryOptions {
   grvt?: GrvtCredentials;
   lighter?: LighterCredentials;
   backpack?: BackpackCredentials;
+  edgex?: EdgeXCredentials;
 }
 
-export type SupportedExchangeId = "aster" | "grvt" | "lighter" | "backpack";
+export type SupportedExchangeId = "aster" | "grvt" | "lighter" | "backpack" | "edgex";
 
 export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   const fallback = (value ?? process.env.EXCHANGE ?? process.env.TRADE_EXCHANGE ?? "aster")
@@ -23,6 +25,7 @@ export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   if (fallback === "grvt") return "grvt";
   if (fallback === "lighter") return "lighter";
   if (fallback === "backpack") return "backpack";
+  if (fallback === "edgex") return "edgex";
   return "aster";
 }
 
@@ -30,6 +33,7 @@ export function getExchangeDisplayName(id: SupportedExchangeId): string {
   if (id === "grvt") return "GRVT";
   if (id === "lighter") return "Lighter";
   if (id === "backpack") return "Backpack";
+  if (id === "edgex") return "EdgeX";
   return "AsterDex";
 }
 
@@ -43,6 +47,9 @@ export function createExchangeAdapter(options: ExchangeFactoryOptions): Exchange
   }
   if (id === "backpack") {
     return new BackpackExchangeAdapter({ ...options.backpack, symbol: options.symbol });
+  }
+  if (id === "edgex") {
+    return new EdgeXExchangeAdapter(options.symbol, options.edgex);
   }
   return new AsterExchangeAdapter({ ...options.aster, symbol: options.symbol });
 }

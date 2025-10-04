@@ -3,7 +3,10 @@
 基于 Bun 的 Aster 永续合约量化终端，内置趋势跟随（SMA30）与做市策略，支持快速恢复、实时行情订阅与日志追踪。
 
 * [Aster 30% 手续费优惠注册链接](https://www.asterdex.com/zh-CN/referral/4665f3)
+* [Binance 手续费优惠注册链接](https://www.binance.com/join?ref=KNKCA9XC)
 * [GRVT 手续费优惠注册链接](https://grvt.io/exchange/sign-up?ref=sea)
+* [Backpack 手续费优惠注册链接](https://backpack.exchange/join/41d60948-2a75-4d16-b7e9-523df74f2904)
+* [edgex 手续费优惠注册链接](https://pro.edgex.exchange/referral/BULL)
 
 ## 文档索引
 - [English README](README_en.md)
