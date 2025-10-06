@@ -1,1 +1,1 @@
-import "./src/index.tsx";
+import './src/index.tsx';

@@ -1,35 +1,39 @@
 {
-  "name": "ritmex-bot",
-  "module": "index.ts",
-  "type": "module",
-  "private": true,
-  "scripts": {
-    "dev": "bun run index.ts",
-    "start": "bun run index.ts",
-    "test": "bun x vitest run",
-    "test:watch": "bun x vitest",
-    "start:trend:silent": "bun run index.ts --strategy trend --silent",
-    "start:maker:silent": "bun run index.ts --strategy maker --silent",
-    "start:offset:silent": "bun run index.ts --strategy offset-maker --silent",
-    "pm2:start:trend": "pm2 start bun --name ritmex-trend --cwd . --restart-delay 5000 -- run index.ts --strategy trend --silent",
-    "pm2:start:maker": "pm2 start bun --name ritmex-maker --cwd . --restart-delay 5000 -- run index.ts --strategy maker --silent",
-    "pm2:start:offset": "pm2 start bun --name ritmex-offset --cwd . --restart-delay 5000 -- run index.ts --strategy offset-maker --silent"
-  },
-  "devDependencies": {
-    "@types/bun": "latest",
-    "vitest": "^3.2.4"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
-  },
-  "dependencies": {
-    "@grvt/client": "^1.6.4",
-    "axios": "^1.12.2",
-    "ccxt": "^4.5.5",
-    "dotenv": "^17.2.2",
-    "ethereum-cryptography": "^2.1.3",
-    "ink": "^6.3.1",
-    "react": "^19.1.1",
-    "ws": "^8.18.3"
-  }
+   "name": "ritmex-bot",
+   "module": "index.ts",
+   "type": "module",
+   "private": true,
+   "scripts": {
+      "dev": "bun run index.ts",
+      "start": "bun run index.ts",
+      "test": "bun x vitest run",
+      "test:watch": "bun x vitest",
+      "start:trend:silent": "bun run index.ts --strategy trend --silent",
+      "start:maker:silent": "bun run index.ts --strategy maker --silent",
+      "start:offset:silent": "bun run index.ts --strategy offset-maker --silent",
+      "pm2:start:trend": "pm2 start bun --name ritmex-trend --cwd . --restart-delay 5000 -- run index.ts --strategy trend --silent",
+      "pm2:start:maker": "pm2 start bun --name ritmex-maker --cwd . --restart-delay 5000 -- run index.ts --strategy maker --silent",
+      "pm2:start:offset": "pm2 start bun --name ritmex-offset --cwd . --restart-delay 5000 -- run index.ts --strategy offset-maker --silent"
+   },
+   "devDependencies": {
+      "@types/bun": "latest",
+      "@types/node": "latest",
+      "@types/ws": "^8.18.1",
+      "oxlint": "^1.19.0",
+      "protobufjs": "^7.5.4",
+      "vitest": "^3.2.4"
+   },
+   "peerDependencies": {
+      "typescript": "^5"
+   },
+   "dependencies": {
+      "@grvt/client": "^1.6.5",
+      "axios": "^1.12.2",
+      "ccxt": "^4.5.7",
+      "dotenv": "^17.2.3",
+      "ethereum-cryptography": "^3.2.0",
+      "ink": "^6.3.1",
+      "react": "^19.2.0",
+      "ws": "^8.18.3"
+   }
 }

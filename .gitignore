@@ -1,9 +1,10 @@
 # dependencies (bun install)
 node_modules
 data/*
+docs/perp-dex-tools/*
 
 # output
-out
+out/*
 dist
 *.tgz
 
@@ -33,3 +34,5 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 # Finder (MacOS) folder config
 .DS_Store
+/package-lock.json
+/pnpm-lock.yaml
