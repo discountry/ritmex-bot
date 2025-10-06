@@ -219,6 +219,28 @@ describe("GridEngine", () => {
     engine.stop();
   });
 
+  it("keeps level side assignments stable regardless of price", () => {
+    const adapter = new StubAdapter();
+    const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+    adapter.emitOrders([]);
+
+    const desiredHigh = (engine as any).computeDesiredOrders(2.45) as Array<{ level: number; side: string }>;
+    expect(desiredHigh.every((order) => {
+      const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
+      return isBuyLevel ? order.side === "BUY" : order.side === "SELL";
+    })).toBe(true);
+
+    const desiredLow = (engine as any).computeDesiredOrders(1.55) as Array<{ level: number; side: string }>;
+    expect(desiredLow.every((order) => {
+      const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
+      return isBuyLevel ? order.side === "BUY" : order.side === "SELL";
+    })).toBe(true);
+
+    engine.stop();
+  });
+
   it("halts the grid and closes positions when stop loss triggers", async () => {
     const adapter = new StubAdapter();
     const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });

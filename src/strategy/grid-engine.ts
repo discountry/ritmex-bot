@@ -81,6 +81,8 @@ export class GridEngine {
   private readonly levelExposure = new Map<number, number>();
   private readonly lastOrderBook = new Map<string, { side: "BUY" | "SELL"; level: number; quantity: number }>();
   private readonly pendingCancelKeys = new Set<string>();
+  private readonly buyLevelIndices: number[];
+  private readonly sellLevelIndices: number[];
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -119,6 +121,23 @@ export class GridEngine {
     this.now = options.now ?? Date.now;
     this.configValid = this.validateConfig();
     this.gridLevels = this.computeGridLevels();
+    const pivotIndex = Math.floor(Math.max(this.gridLevels.length - 1, 0) / 2);
+    this.buyLevelIndices = [];
+    this.sellLevelIndices = [];
+    for (let i = 0; i < this.gridLevels.length; i += 1) {
+      if (i <= pivotIndex) {
+        this.buyLevelIndices.push(i);
+      }
+      if (i >= pivotIndex + 1) {
+        this.sellLevelIndices.push(i);
+      }
+    }
+    if (!this.sellLevelIndices.length && this.gridLevels.length > 1) {
+      const highest = this.gridLevels.length - 1;
+      if (!this.sellLevelIndices.includes(highest)) {
+        this.sellLevelIndices.push(highest);
+      }
+    }
     this.running = this.configValid;
     if (!this.configValid) {
       this.stopReason = "配置无效，已暂停网格";
@@ -470,12 +489,12 @@ export class GridEngine {
     let availableToBuy = Math.max(-this.position.positionAmt, 0);
 
     const halfTick = this.config.priceTick / 2;
-    const belowPrice = this.gridLevels
-      .map((levelPrice, level) => ({ level, levelPrice }))
+    const belowPrice = this.buyLevelIndices
+      .map((level) => ({ level, levelPrice: this.gridLevels[level]! }))
       .filter(({ levelPrice }) => levelPrice < price - halfTick)
       .sort((a, b) => b.levelPrice - a.levelPrice);
-    const abovePrice = this.gridLevels
-      .map((levelPrice, level) => ({ level, levelPrice }))
+    const abovePrice = this.sellLevelIndices
+      .map((level) => ({ level, levelPrice: this.gridLevels[level]! }))
       .filter(({ levelPrice }) => levelPrice > price + halfTick)
       .sort((a, b) => a.levelPrice - b.levelPrice);
 
@@ -505,6 +524,10 @@ export class GridEngine {
     for (const { level, levelPrice } of abovePrice) {
       const amount = this.config.orderSize;
       const reduceOnly = this.config.direction === "long";
+      const heldLong = this.levelExposure.get(level) ?? 0;
+      if (!reduceOnly && heldLong > EPSILON) {
+        continue;
+      }
       if (!reduceOnly) {
         if (remainingShortHeadroom < amount - EPSILON) break;
         remainingShortHeadroom -= amount;
@@ -554,7 +577,8 @@ export class GridEngine {
 
     const gridLines: GridLineSnapshot[] = this.gridLevels.map((price, level) => {
       const desired = this.desiredOrders.find((order) => order.level === level);
-      const side = desired?.side ?? (price < (lastPrice ?? price) ? "BUY" : "SELL");
+      const defaultSide = this.buyLevelIndices.includes(level) ? "BUY" : "SELL";
+      const side = desired?.side ?? defaultSide;
       const key = desired ? this.getOrderKey(desired.side, desired.price) : null;
       const hasOrder = key ? openOrderKeys.has(key) : false;
       const active = Boolean(desired && key && desiredKeys.has(key));
