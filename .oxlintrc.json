@@ -1,0 +1,60 @@
+{
+   "env": {
+      "browser": true
+   },
+   "globals": {
+      "foo": "readonly"
+   },
+   "ignorePatterns": [
+      "docs/**"
+   ],
+   "overrides": [
+      {
+         "files": [
+            "*.test.ts",
+            "*.spec.ts"
+         ],
+         "rules": {
+            "@typescript-eslint/no-explicit-any": "off"
+         }
+      }
+   ],
+   "plugins": [
+      "import",
+      "typescript"
+   ],
+   "rules": {
+      "@typescript-eslint/no-duplicate-enum-values": "off",
+      "@typescript-eslint/no-empty-function": "off",
+      "@typescript-eslint/no-explicit-any": "off",
+      "@typescript-eslint/no-inferrable-types": "off",
+      "@typescript-eslint/no-namespace": "off",
+      "@typescript-eslint/no-non-null-assertion": "off",
+      "@typescript-eslint/no-this-alias": "off",
+      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/no-use-before-define": "off",
+      "@typescript-eslint/no-var-requires": "off",
+      "eqeqeq": "warn",
+      "import/default": "off",
+      "import/no-cycle": "off",
+      "linebreak-style": [
+         "error",
+         "unix"
+      ],
+      "no-console": "off",
+      "no-debugger": "off",
+      "no-inner-declarations": "off",
+      "no-undef": "off",
+      "no-useless-catch": "off",
+      "no-useless-fallback-in-spread": "off",
+      "quotes": [
+         "error",
+         "single"
+      ],
+      "semi": [
+         "error",
+         "never"
+      ]
+   },
+   "settings": {}
+}

@@ -1,0 +1,92 @@
+{
+   "files": {
+      "maxSize": 10485760,
+      "includes": [
+         "**/src/**",
+         "**/tests/**",
+         "!**/src/**/*.js",
+         "!**/dist/**/*.js",
+         "!**/docs",
+         "!**/data/**/*.js"
+      ]
+   },
+   "formatter": {
+      "enabled": true,
+      "lineWidth": 256,
+      "indentStyle": "space",
+      "indentWidth": 3
+   },
+   "javascript": {
+      "parser": {
+         "unsafeParameterDecoratorsEnabled": true
+      },
+      "formatter": {
+         "quoteStyle": "single"
+      }
+   },
+   "json": {
+      "parser": {
+         "allowComments": true
+      }
+   },
+   "linter": {
+      "enabled": true,
+      "rules": {
+         "style": {
+            "useConst": "off",
+            "noUselessElse": "off",
+            "noInferrableTypes": "off",
+            "noParameterAssign": "off",
+            "noUnusedTemplateLiteral": "off",
+            "useImportType": "off",
+            "useTemplate": "off",
+            "useLiteralEnumMembers": "error",
+            "useNodejsImportProtocol": "error",
+            "useAsConstAssertion": "error",
+            "useEnumInitializers": "error",
+            "useSelfClosingElements": "error",
+            "useSingleVarDeclarator": "error",
+            "useNumberNamespace": "error",
+            "useExponentiationOperator": "error",
+            "noNonNullAssertion": "off",
+            "useDefaultParameterLast": "error",
+            "useExportType": "error",
+            "useShorthandFunctionType": "error"
+         },
+         "correctness": {
+            "useParseIntRadix": "off",
+            "noUnusedVariables": "off",
+            "noUnusedImports": "off",
+            "noUnusedPrivateClassMembers": "off",
+            "noUnusedFunctionParameters": "off",
+            "noUnreachable": "warn"
+         },
+         "complexity": {
+            "noUselessSwitchCase": "off",
+            "useOptionalChain": "off",
+            "noUselessUndefinedInitialization": "off",
+            "noBannedTypes": "off",
+            "useDateNow": "off",
+            "useRegexLiterals": "off",
+            "noForEach": "off",
+            "noStaticOnlyClass": "off",
+            "noUselessCatch": "off",
+            "useLiteralKeys": "off",
+            "noCommaOperator": "error",
+            "useNumericLiterals": "error",
+            "noArguments": "error"
+         },
+         "suspicious": {
+            "useIterableCallbackReturn": "off",
+            "noTemplateCurlyInString": "off",
+            "noFocusedTests": "off",
+            "noDoubleEquals": "warn",
+            "noRedeclare": "off",
+            "noArrayIndexKey": "off",
+            "noImplicitAnyLet": "off",
+            "noUnknownAtRules": "off",
+            "noExplicitAny": "off"
+         }
+      }
+   }
+}
