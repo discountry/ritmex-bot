@@ -12,13 +12,15 @@ check:
 # build all codes
 build:
   bun build --target=bun --minify --outfile=../ritmex/ritmex-bot.js ./index.ts
-# bbgo backtest -v --config bbgo.yaml
+  bun build --target=bun --minify --outfile=./backtest.js ./src/cli/backtest.ts
+# run backtest
 backtest:
   bun run --watch .\src\cli\backtest.ts
+# run klineUpdater
 klineUpdater:
-  bun run --watch .\test\tasks\klineUpdater.ts
+  bun run .\test\tasks\klineUpdater.ts
 dl-klines symbol='BTC' days='300' timeframe='4h' usdt='USDT':
-  ninjabot download -p {{symbol}}{{usdt}} -d {{days}} -t {{timeframe}} -o ./test/data/{{symbol}}-{{timeframe}}.csv -f
+  ninjabot download -p {{symbol}}{{usdt}} -d {{days}} -t {{timeframe}} -o ./tests/data/{{symbol}}-{{timeframe}}.csv -f
 dlAll:
   just dl-klines BTC
   just dl-klines ETH

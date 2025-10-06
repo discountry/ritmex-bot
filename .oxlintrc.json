@@ -6,7 +6,8 @@
       "foo": "readonly"
    },
    "ignorePatterns": [
-      "docs/**"
+      "docs/**",
+      "**/*.js"
    ],
    "overrides": [
       {

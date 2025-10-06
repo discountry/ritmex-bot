@@ -20,6 +20,9 @@
    ],
    "excludes": [
       "docs/**",
+      "*.md",
+      "*.js",
+      "**/*.js",
       "**/dist",
       "**/node_modules",
       "**/*-lock.json"
