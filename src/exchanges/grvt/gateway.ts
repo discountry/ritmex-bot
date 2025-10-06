@@ -73,7 +73,7 @@ const ENVIRONMENT_ALIASES: Record<string, keyof typeof ENVIRONMENT_HOSTS> = {
   production: "prod",
 };
 
-const DEFAULT_MARK_PRICE_TRIGGER = "MARK";
+const DEFAULT_MARK_PRICE_TRIGGER = "LAST";
 const DEFAULT_TIME_IN_FORCE: GrvtTimeInForce = "GOOD_TILL_TIME";
 const TRAILING_NOT_SUPPORTED_ERROR =
   "GRVT exchange adapter does not yet support trailing stop orders";
@@ -1097,12 +1097,16 @@ function mapOrder(order: IOrder, symbol: string): AsterOrder {
   const avgFillPrice = Array.isArray(state?.avg_fill_price)
     ? state?.avg_fill_price?.[0] ?? undefined
     : state?.avg_fill_price ?? undefined;
+  const hasTrigger = Boolean(trigger?.tpsl?.trigger_price);
+  const derivedType = hasTrigger
+    ? (order.is_market ? "STOP_MARKET" : "LIMIT")
+    : (order.is_market ? "MARKET" : "LIMIT");
   return {
     orderId: order.order_id ?? metadata?.client_order_id ?? cryptoRandomId(),
     clientOrderId: metadata?.client_order_id ?? "",
     symbol,
     side: leg?.is_buying_asset ? "BUY" : "SELL",
-    type: order.is_market ? "MARKET" : "LIMIT",
+    type: derivedType,
     status: state?.status ?? "NEW",
     price: leg?.limit_price ?? "0",
     origQty: leg?.size ?? "0",

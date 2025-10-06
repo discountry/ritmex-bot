@@ -238,6 +238,7 @@ export async function placeStopLossOrder(
     side,
     type,
     stopPrice: roundDownToTick(stopPrice, priceTick),
+    reduceOnly: "true",
     closePosition: "true",
     timeInForce: "GTC",
     quantity: roundQtyDownToStep(quantity, qtyStep),
