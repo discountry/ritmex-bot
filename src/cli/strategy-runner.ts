@@ -1,4 +1,4 @@
-import { makerConfig, tradingConfig } from "../config";
+import { basisConfig, isBasisStrategyEnabled, makerConfig, tradingConfig } from "../config";
 import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
@@ -8,6 +8,7 @@ import {
 } from "../strategy/maker-engine";
 import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
 import { TrendEngine, type TrendEngineSnapshot } from "../strategy/trend-engine";
+import { BasisArbEngine, type BasisArbSnapshot } from "../strategy/basis-arb-engine";
 import { extractMessage } from "../utils/errors";
 import type { StrategyId } from "./args";
 
@@ -21,6 +22,7 @@ export const STRATEGY_LABELS: Record<StrategyId, string> = {
   trend: "Trend Following",
   maker: "Maker",
   "offset-maker": "Offset Maker",
+  basis: "Basis Arbitrage",
 };
 
 export async function startStrategy(strategyId: StrategyId, options: RunnerOptions = {}): Promise<void> {
@@ -71,6 +73,25 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       offUpdate: (emitter) => engine.off("update", emitter),
     });
   },
+  basis: async (opts) => {
+    if (!isBasisStrategyEnabled()) {
+      throw new Error("Basis arbitrage strategy is disabled. Set ENABLE_BASIS_STRATEGY=true to enable it.");
+    }
+    const exchangeId = resolveExchangeId();
+    if (exchangeId !== "aster") {
+      throw new Error("Basis arbitrage strategy currently only supports the Aster exchange");
+    }
+    const adapter = createAdapterOrThrow(basisConfig.futuresSymbol);
+    const engine = new BasisArbEngine(basisConfig, adapter);
+    await runEngine({
+      engine,
+      strategy: "basis",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
 };
 
 interface EngineHarness<TSnapshot> {
@@ -82,7 +103,7 @@ interface EngineHarness<TSnapshot> {
   offUpdate: (handler: (snapshot: TSnapshot) => void) => void;
 }
 
-async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnapshot | OffsetMakerEngineSnapshot>(
+async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnapshot | OffsetMakerEngineSnapshot | BasisArbSnapshot>(
   harness: EngineHarness<TSnapshot>
 ): Promise<void> {
   const { engine, strategy, silent, getSnapshot, onUpdate, offUpdate } = harness;

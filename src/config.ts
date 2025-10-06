@@ -1,26 +1,6 @@
 /**
  * Trading Configuration
  * 
- * Environment Variables for Backpack Exchange:
- * - BACKPACK_API_KEY: Required API key for Backpack
- * - BACKPACK_API_SECRET: Required API secret for Backpack  
- * - BACKPACK_PASSWORD: Optional password for Backpack (if required)
- * - BACKPACK_SUBACCOUNT: Optional subaccount name
- * - BACKPACK_SYMBOL: Override symbol (defaults to TRADE_SYMBOL)
- * - BACKPACK_SANDBOX: Set to "true" for sandbox mode
- * - BACKPACK_DEBUG: Set to "true" for debug logging
- * 
- * Environment Variables for Paradex Exchange:
- * - PARADEX_PRIVATE_KEY: Required EVM private key for REST/WS authentication
- * - PARADEX_WALLET_ADDRESS: Required wallet address matching the private key
- * - PARADEX_SYMBOL: Override symbol (defaults to TRADE_SYMBOL)
- * - PARADEX_SANDBOX: Set to "true" to use testnet endpoints
- * - PARADEX_USE_PRO: Set to "false" to disable ccxt.pro websocket feeds
- * - PARADEX_RECONNECT_DELAY_MS: Optional websocket reconnect delay in ms (default 2000)
- * - PARADEX_DEBUG: Set to "true" for verbose Paradex adapter logging
- *
- * Usage: Set EXCHANGE=backpack to use Backpack exchange
- *        Set EXCHANGE=paradex to use Paradex exchange
  */
 
 import { resolveExchangeId, type SupportedExchangeId } from "./exchanges/create-adapter";
@@ -117,3 +97,42 @@ export const makerConfig: MakerConfig = {
   ),
   priceTick: parseNumber(process.env.MAKER_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
 };
+
+export interface BasisArbConfig {
+  futuresSymbol: string;
+  spotSymbol: string;
+  refreshIntervalMs: number;
+  maxLogEntries: number;
+  takerFeeRate: number;
+}
+
+const resolveBasisSymbol = (envKeys: string[], fallback: string): string => {
+  for (const key of envKeys) {
+    const value = process.env[key];
+    if (value && value.trim()) {
+      return value.trim().toUpperCase();
+    }
+  }
+  return fallback.toUpperCase();
+};
+
+export const basisConfig: BasisArbConfig = {
+  futuresSymbol: resolveBasisSymbol(
+    ["BASIS_FUTURES_SYMBOL", "ASTER_FUTURES_SYMBOL", "ASTER_SYMBOL", "TRADE_SYMBOL"],
+    "ASTERUSDT"
+  ),
+  spotSymbol: resolveBasisSymbol(
+    ["BASIS_SPOT_SYMBOL", "ASTER_SPOT_SYMBOL", "ASTER_SYMBOL", "TRADE_SYMBOL"],
+    "ASTERUSDT"
+  ),
+  refreshIntervalMs: parseNumber(process.env.BASIS_REFRESH_INTERVAL_MS, 1000),
+  maxLogEntries: parseNumber(process.env.BASIS_MAX_LOG_ENTRIES, 200),
+  takerFeeRate: parseNumber(process.env.BASIS_TAKER_FEE_RATE, 0.0004),
+};
+
+export function isBasisStrategyEnabled(): boolean {
+  const raw = process.env.ENABLE_BASIS_STRATEGY;
+  if (!raw) return false;
+  const normalized = raw.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}

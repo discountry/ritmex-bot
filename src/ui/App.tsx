@@ -3,17 +3,19 @@ import { Box, Text, useInput } from "ink";
 import { TrendApp } from "./TrendApp";
 import { MakerApp } from "./MakerApp";
 import { OffsetMakerApp } from "./OffsetMakerApp";
+import { BasisApp } from "./BasisApp";
+import { isBasisStrategyEnabled } from "../config";
 import { loadCopyrightFragments, verifyCopyrightIntegrity } from "../utils/copyright";
 import { resolveExchangeId } from "../exchanges/create-adapter";
 
 interface StrategyOption {
-  id: "trend" | "maker" | "offset-maker";
+  id: "trend" | "maker" | "offset-maker" | "basis";
   label: string;
   description: string;
   component: React.ComponentType<{ onExit: () => void }>;
 }
 
-const STRATEGIES: StrategyOption[] = [
+const BASE_STRATEGIES: StrategyOption[] = [
   {
     id: "trend",
     label: "趋势跟随策略 (SMA30)",
@@ -42,7 +44,20 @@ export function App() {
   const copyright = useMemo(() => loadCopyrightFragments(), []);
   const integrityOk = useMemo(() => verifyCopyrightIntegrity(), []);
   const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const strategies = useMemo(() => STRATEGIES, []);
+  const strategies = useMemo(() => {
+    if (!isBasisStrategyEnabled()) {
+      return BASE_STRATEGIES;
+    }
+    return [
+      ...BASE_STRATEGIES,
+      {
+        id: "basis" as const,
+        label: "期现套利策略",
+        description: "监控期货与现货盘口差价，辅助发现套利机会",
+        component: BasisApp,
+      },
+    ];
+  }, []);
 
   useInput(
     (input, key) => {

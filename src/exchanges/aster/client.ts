@@ -6,14 +6,33 @@ import type {
   AsterDepth,
   AsterKline,
   AsterOrder,
+  AsterSpotAccount,
+  AsterSpotAggTrade,
+  AsterSpotBookTicker,
+  AsterSpotCommissionRate,
+  AsterSpotDepth,
+  AsterSpotExchangeInfo,
+  AsterSpotHistoricalTrade,
+  AsterSpotKline,
+  AsterSpotPriceTicker,
+  AsterSpotTicker24h,
+  AsterSpotTrade,
+  AsterSpotUserTrade,
   AsterTicker,
+  CancelSpotOrderParams,
   CreateOrderParams,
+  CreateSpotOrderParams,
   PositionSide,
+  QuerySpotOrderParams,
+  SpotAllOrdersParams,
+  SpotOpenOrdersParams,
+  SpotUserTradesParams,
 } from "../types";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const REST_BASE = "https://fapi.asterdex.com";
+const FUTURES_REST_BASE = "https://fapi.asterdex.com";
+const SPOT_REST_BASE = "https://sapi.asterdex.com";
 const WS_PUBLIC_URL = "wss://fstream.asterdex.com/ws";
 const WS_LISTEN_KEY_URL = "wss://fstream.asterdex.com/ws/";
 
@@ -31,6 +50,499 @@ function requireEnv(value: string | undefined, key: string): string {
     throw new Error(`Missing required environment variable ${key}`);
   }
   return value;
+}
+
+function serialize(params: Record<string, unknown>): string {
+  return Object.keys(params)
+    .filter((key) => params[key] !== undefined && params[key] !== null)
+    .sort()
+    .map((key) => `${key}=${encodeURIComponent(String(params[key]))}`)
+    .join("&");
+}
+
+export class AsterSpotRestClient {
+  private readonly apiKey?: string;
+  private readonly apiSecret?: string;
+
+  constructor(options: { apiKey?: string; apiSecret?: string } = {}) {
+    this.apiKey = options.apiKey ?? process.env.ASTER_API_KEY;
+    this.apiSecret = options.apiSecret ?? process.env.ASTER_API_SECRET;
+  }
+
+  async ping(): Promise<void> {
+    await this.request<void>({ path: "/api/v1/ping", method: "GET" });
+  }
+
+  async getServerTime(): Promise<{ serverTime: number }> {
+    return this.request<{ serverTime: number }>({ path: "/api/v1/time", method: "GET" });
+  }
+
+  async getExchangeInfo(): Promise<AsterSpotExchangeInfo> {
+    return this.request<AsterSpotExchangeInfo>({ path: "/api/v1/exchangeInfo", method: "GET" });
+  }
+
+  async getDepth(symbol: string, limit?: number): Promise<AsterSpotDepth> {
+    const payload = await this.request<AsterSpotDepth>({
+      path: "/api/v1/depth",
+      method: "GET",
+      params: { symbol: symbol.toUpperCase(), limit },
+    });
+    return {
+      lastUpdateId: Number(payload.lastUpdateId),
+      E: payload.E,
+      T: payload.T,
+      bids: (payload.bids ?? []).map(([price, qty]) => [String(price), String(qty)]) as AsterSpotDepth["bids"],
+      asks: (payload.asks ?? []).map(([price, qty]) => [String(price), String(qty)]) as AsterSpotDepth["asks"],
+    };
+  }
+
+  async getTrades(symbol: string, limit?: number): Promise<AsterSpotTrade[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/trades",
+      method: "GET",
+      params: { symbol: symbol.toUpperCase(), limit },
+    });
+    return payload.map((item) => ({
+      id: Number(item.id),
+      price: String(item.price),
+      qty: String(item.qty),
+      baseQty: item.baseQty !== undefined ? String(item.baseQty) : undefined,
+      quoteQty: item.quoteQty !== undefined ? String(item.quoteQty) : undefined,
+      time: Number(item.time ?? Date.now()),
+      isBuyerMaker: Boolean(item.isBuyerMaker),
+    }));
+  }
+
+  async getHistoricalTrades(params: { symbol: string; limit?: number; fromId?: number }): Promise<AsterSpotHistoricalTrade[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/historicalTrades",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        limit: params.limit,
+        fromId: params.fromId,
+      },
+      requiresApiKey: true,
+    });
+    return payload.map((item) => ({
+      id: Number(item.id),
+      price: String(item.price),
+      qty: String(item.qty),
+      baseQty: item.baseQty !== undefined ? String(item.baseQty) : undefined,
+      quoteQty: item.quoteQty !== undefined ? String(item.quoteQty) : undefined,
+      time: Number(item.time ?? Date.now()),
+      isBuyerMaker: Boolean(item.isBuyerMaker),
+      isBestMatch: item.isBestMatch !== undefined ? Boolean(item.isBestMatch) : undefined,
+    }));
+  }
+
+  async getAggTrades(params: {
+    symbol: string;
+    fromId?: number;
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+  }): Promise<AsterSpotAggTrade[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/aggTrades",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        fromId: params.fromId,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        limit: params.limit,
+      },
+    });
+    return payload.map((item) => ({
+      a: Number(item.a),
+      p: String(item.p),
+      q: String(item.q),
+      f: Number(item.f),
+      l: Number(item.l),
+      T: Number(item.T),
+      m: Boolean(item.m),
+      M: item.M !== undefined ? Boolean(item.M) : undefined,
+    }));
+  }
+
+  async getKlines(params: {
+    symbol: string;
+    interval: string;
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+  }): Promise<AsterSpotKline[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/klines",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        interval: params.interval,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        limit: params.limit,
+      },
+    });
+    return payload.map((entry) => ({
+      openTime: Number(entry[0]),
+      open: String(entry[1]),
+      high: String(entry[2]),
+      low: String(entry[3]),
+      close: String(entry[4]),
+      volume: String(entry[5]),
+      closeTime: Number(entry[6]),
+      quoteAssetVolume: String(entry[7]),
+      numberOfTrades: Number(entry[8] ?? 0),
+      takerBuyBaseAssetVolume: String(entry[9] ?? "0"),
+      takerBuyQuoteAssetVolume: String(entry[10] ?? "0"),
+    }));
+  }
+
+  async getTicker24h(symbol?: string): Promise<AsterSpotTicker24h | AsterSpotTicker24h[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/ticker/24hr",
+      method: "GET",
+      params: symbol ? { symbol: symbol.toUpperCase() } : undefined,
+    });
+    return this.normalizeTicker24h(payload);
+  }
+
+  async getTickerPrice(symbol?: string): Promise<AsterSpotPriceTicker | AsterSpotPriceTicker[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/ticker/price",
+      method: "GET",
+      params: symbol ? { symbol: symbol.toUpperCase() } : undefined,
+    });
+    return Array.isArray(payload) ? payload.map((item) => this.normalizePriceTicker(item)) : this.normalizePriceTicker(payload);
+  }
+
+  async getBookTicker(symbol?: string): Promise<AsterSpotBookTicker | AsterSpotBookTicker[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/ticker/bookTicker",
+      method: "GET",
+      params: symbol ? { symbol: symbol.toUpperCase() } : undefined,
+    });
+    return Array.isArray(payload) ? payload.map((item) => this.normalizeBookTicker(item)) : this.normalizeBookTicker(payload);
+  }
+
+  async getCommissionRate(symbol: string, params: { recvWindow?: number } = {}): Promise<AsterSpotCommissionRate> {
+    const payload = await this.request<AsterSpotCommissionRate>({
+      path: "/api/v1/commissionRate",
+      method: "GET",
+      params: { symbol: symbol.toUpperCase(), recvWindow: params.recvWindow },
+      signed: true,
+    });
+    return {
+      symbol: payload.symbol,
+      makerCommissionRate: String(payload.makerCommissionRate),
+      takerCommissionRate: String(payload.takerCommissionRate),
+    };
+  }
+
+  async createOrder(params: CreateSpotOrderParams): Promise<AsterOrder> {
+    const response = await this.request<any>({
+      path: "/api/v1/order",
+      method: "POST",
+      params: this.normalizeSpotOrderParams(params),
+      signed: true,
+      sendInBody: true,
+    });
+    return toOrderFromRest(response);
+  }
+
+  async cancelOrder(params: CancelSpotOrderParams): Promise<AsterOrder> {
+    const response = await this.request<any>({
+      path: "/api/v1/order",
+      method: "DELETE",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        orderId: params.orderId,
+        origClientOrderId: params.origClientOrderId,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return toOrderFromRest(response);
+  }
+
+  async getOrder(params: QuerySpotOrderParams): Promise<AsterOrder> {
+    const response = await this.request<any>({
+      path: "/api/v1/order",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        orderId: params.orderId,
+        origClientOrderId: params.origClientOrderId,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return toOrderFromRest(response);
+  }
+
+  async getOpenOrders(params: SpotOpenOrdersParams = {}): Promise<AsterOrder[]> {
+    const response = await this.request<any[]>({
+      path: "/api/v1/openOrders",
+      method: "GET",
+      params: {
+        symbol: params.symbol ? params.symbol.toUpperCase() : undefined,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return response.map(toOrderFromRest);
+  }
+
+  async cancelAllOpenOrders(params: SpotOpenOrdersParams & { symbol: string }): Promise<{ code: number; msg: string }> {
+    const payload: Record<string, unknown> = {
+      symbol: params.symbol.toUpperCase(),
+      recvWindow: params.recvWindow,
+    };
+    if (params.orderIdList && params.orderIdList.length) {
+      payload.orderIdList = `[${params.orderIdList
+        .map((id) => (typeof id === "string" ? id.trim() : String(id)))
+        .join(",")}]`;
+    }
+    if (params.origClientOrderIdList && params.origClientOrderIdList.length) {
+      payload.origClientOrderIdList = JSON.stringify(params.origClientOrderIdList);
+    }
+    return this.request<{ code: number; msg: string }>({
+      path: "/api/v1/allOpenOrders",
+      method: "DELETE",
+      params: payload,
+      signed: true,
+    });
+  }
+
+  async getAllOrders(params: SpotAllOrdersParams): Promise<AsterOrder[]> {
+    const response = await this.request<any[]>({
+      path: "/api/v1/allOrders",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        orderId: params.orderId,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        limit: params.limit,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return response.map(toOrderFromRest);
+  }
+
+  async getAccount(params: { recvWindow?: number } = {}): Promise<AsterSpotAccount> {
+    const payload = await this.request<AsterSpotAccount>({
+      path: "/api/v1/account",
+      method: "GET",
+      params: { recvWindow: params.recvWindow },
+      signed: true,
+    });
+    return {
+      ...payload,
+      balances: (payload.balances ?? []).map((balance) => ({
+        asset: balance.asset,
+        free: String(balance.free ?? "0"),
+        locked: String(balance.locked ?? "0"),
+      })),
+    };
+  }
+
+  async getUserTrades(params: SpotUserTradesParams = {}): Promise<AsterSpotUserTrade[]> {
+    const response = await this.request<any[]>({
+      path: "/api/v1/userTrades",
+      method: "GET",
+      params: {
+        symbol: params.symbol ? params.symbol.toUpperCase() : undefined,
+        orderId: params.orderId,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        fromId: params.fromId,
+        limit: params.limit,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return response.map((item) => ({
+      symbol: item.symbol,
+      id: Number(item.id),
+      orderId: Number(item.orderId),
+      side: item.side,
+      price: String(item.price),
+      qty: String(item.qty),
+      quoteQty: item.quoteQty !== undefined ? String(item.quoteQty) : undefined,
+      commission: String(item.commission ?? "0"),
+      commissionAsset: String(item.commissionAsset ?? ""),
+      time: Number(item.time ?? Date.now()),
+      counterpartyId: item.counterpartyId !== undefined ? Number(item.counterpartyId) : undefined,
+      maker: Boolean(item.maker),
+      buyer: Boolean(item.buyer),
+    }));
+  }
+
+  private normalizeTicker24h(payload: any): AsterSpotTicker24h | AsterSpotTicker24h[] {
+    const mapOne = (entry: any): AsterSpotTicker24h => ({
+      symbol: entry.symbol,
+      priceChange: String(entry.priceChange),
+      priceChangePercent: String(entry.priceChangePercent),
+      weightedAvgPrice: String(entry.weightedAvgPrice),
+      prevClosePrice: String(entry.prevClosePrice),
+      lastPrice: String(entry.lastPrice),
+      lastQty: String(entry.lastQty),
+      bidPrice: String(entry.bidPrice),
+      bidQty: String(entry.bidQty),
+      askPrice: String(entry.askPrice),
+      askQty: String(entry.askQty),
+      openPrice: String(entry.openPrice),
+      highPrice: String(entry.highPrice),
+      lowPrice: String(entry.lowPrice),
+      volume: String(entry.volume),
+      quoteVolume: String(entry.quoteVolume),
+      openTime: Number(entry.openTime ?? 0),
+      closeTime: Number(entry.closeTime ?? 0),
+      firstId: Number(entry.firstId ?? 0),
+      lastId: Number(entry.lastId ?? 0),
+      count: Number(entry.count ?? 0),
+      baseAsset: entry.baseAsset,
+      quoteAsset: entry.quoteAsset,
+    });
+    return Array.isArray(payload) ? payload.map((entry) => mapOne(entry)) : mapOne(payload);
+  }
+
+  private normalizePriceTicker(entry: any): AsterSpotPriceTicker {
+    return {
+      symbol: entry.symbol,
+      price: String(entry.price),
+      time: entry.time !== undefined ? Number(entry.time) : undefined,
+    };
+  }
+
+  private normalizeBookTicker(entry: any): AsterSpotBookTicker {
+    return {
+      symbol: entry.symbol,
+      bidPrice: String(entry.bidPrice),
+      bidQty: String(entry.bidQty),
+      askPrice: String(entry.askPrice),
+      askQty: String(entry.askQty),
+      time: entry.time !== undefined ? Number(entry.time) : undefined,
+    };
+  }
+
+  private normalizeSpotOrderParams(params: CreateSpotOrderParams): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      symbol: params.symbol.toUpperCase(),
+      side: params.side,
+      type: params.type,
+      timeInForce: params.timeInForce,
+      quantity: params.quantity !== undefined ? params.quantity : undefined,
+      quoteOrderQty: params.quoteOrderQty !== undefined ? params.quoteOrderQty : undefined,
+      price: params.price !== undefined ? params.price : undefined,
+      newClientOrderId: params.newClientOrderId,
+      stopPrice: params.stopPrice !== undefined ? params.stopPrice : undefined,
+      recvWindow: params.recvWindow,
+    };
+    return payload;
+  }
+
+  private ensureApiKey(): string {
+    if (!this.apiKey) {
+      throw new Error("[AsterSpotRestClient] Missing API key");
+    }
+    return this.apiKey;
+  }
+
+  private ensureCredentials(): { apiKey: string; apiSecret: string } {
+    const apiKey = this.ensureApiKey();
+    const apiSecret = this.apiSecret;
+    if (!apiSecret) {
+      throw new Error("[AsterSpotRestClient] Missing API secret");
+    }
+    return { apiKey, apiSecret };
+  }
+
+  private cleanParams(params: Record<string, unknown> | undefined): Record<string, unknown> {
+    const source = params ?? {};
+    const cleaned: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) {
+      const value = (source as Record<string, unknown>)[key];
+      if (value === undefined || value === null) continue;
+      cleaned[key] = value;
+    }
+    return cleaned;
+  }
+
+  private async request<T>({
+    path,
+    method,
+    params,
+    signed = false,
+    sendInBody,
+    requiresApiKey = false,
+  }: {
+    path: string;
+    method: "GET" | "POST" | "DELETE" | "PUT";
+    params?: Record<string, unknown>;
+    signed?: boolean;
+    sendInBody?: boolean;
+    requiresApiKey?: boolean;
+  }): Promise<T> {
+    const cleaned = this.cleanParams(params);
+    const headers: Record<string, string> = {};
+    let url = `${SPOT_REST_BASE}${path}`;
+    const useBody = sendInBody ?? (method !== "GET" && method !== "DELETE");
+    let body: string | undefined;
+    if (requiresApiKey || signed) {
+      headers["X-MBX-APIKEY"] = this.ensureApiKey();
+    }
+    if (signed) {
+      if (cleaned.timestamp === undefined) cleaned.timestamp = Date.now();
+      if (cleaned.recvWindow === undefined) cleaned.recvWindow = 5000;
+      const { apiSecret } = this.ensureCredentials();
+      const serialized = serialize(cleaned);
+      const signature = crypto.createHmac("sha256", apiSecret).update(serialized).digest("hex");
+      if (useBody) {
+        body = serialized ? `${serialized}&signature=${signature}` : `signature=${signature}`;
+      } else {
+        const query = serialized ? `${serialized}&signature=${signature}` : `signature=${signature}`;
+        url += url.includes("?") ? `&${query}` : `?${query}`;
+      }
+    } else {
+      const query = serialize(cleaned);
+      if (query) {
+        if (useBody) {
+          body = query;
+        } else {
+          url += url.includes("?") ? `&${query}` : `?${query}`;
+        }
+      }
+    }
+
+    const init: RequestInit = { method, headers };
+    if (useBody) {
+      init.body = body ?? "";
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(url, init);
+    } catch (error) {
+      throw new Error(`[AsterSpotRestClient] 请求失败 ${String(error)}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${text}`);
+    }
+    if (!text) {
+      return undefined as T;
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      throw new Error(`[AsterSpotRestClient] 无法解析响应: ${text.slice(0, 200)}`);
+    }
+  }
 }
 
 function toDepth(streamSymbol: string, data: any): AsterDepth {
@@ -296,7 +808,7 @@ export class AsterRestClient {
 
   async getKlines(symbol: string, interval: string, limit = DEFAULT_KLINE_LIMIT): Promise<AsterKline[]> {
     const upper = symbol.toUpperCase();
-    const url = `${REST_BASE}/fapi/v1/continuousKlines?pair=${upper}&contractType=PERPETUAL&interval=${encodeURIComponent(interval)}&limit=${limit}`;
+    const url = `${FUTURES_REST_BASE}/fapi/v1/continuousKlines?pair=${upper}&contractType=PERPETUAL&interval=${encodeURIComponent(interval)}&limit=${limit}`;
     let response: Response;
     try {
       response = await fetch(url);
@@ -331,9 +843,9 @@ export class AsterRestClient {
   private async signedRequest<T>({ path, method, params }: { path: string; method: string; params: Record<string, unknown> }): Promise<T> {
     const timestamp = Date.now();
     const payload = { ...params, timestamp, recvWindow: 5000 };
-    const query = this.serialize(payload);
+    const query = serialize(payload);
     const signature = crypto.createHmac("sha256", this.apiSecret).update(query).digest("hex");
-    const url = `${REST_BASE}${path}?${query}&signature=${signature}`;
+    const url = `${FUTURES_REST_BASE}${path}?${query}&signature=${signature}`;
     const init: RequestInit = {
       method,
       headers: {
@@ -358,13 +870,6 @@ export class AsterRestClient {
     }
   }
 
-  private serialize(params: Record<string, unknown>): string {
-    return Object.keys(params)
-      .filter((key) => params[key] !== undefined && params[key] !== null)
-      .sort()
-      .map((key) => `${key}=${encodeURIComponent(String(params[key]))}`)
-      .join("&");
-  }
 }
 
 type DepthHandler = (depth: AsterDepth) => void;
