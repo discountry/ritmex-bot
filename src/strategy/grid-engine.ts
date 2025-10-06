@@ -724,7 +724,19 @@ export class GridEngine {
     const totalLongClose = toCloseLongLevels.reduce((acc, item) => acc + item.quantity, 0);
     const totalShortClose = toCloseShortLevels.reduce((acc, item) => acc + item.quantity, 0);
 
-    if (totalLongClose > EPSILON) {
+    const actualLong = Math.max(this.position.positionAmt, 0);
+    const actualShort = Math.max(-this.position.positionAmt, 0);
+
+    if (actualLong <= EPSILON && totalLongClose > EPSILON) {
+      this.resyncLongExposure(actualLong);
+    }
+
+    if (actualShort <= EPSILON && totalShortClose > EPSILON) {
+      this.resyncShortExposure(actualShort);
+    }
+
+    const safeLongClose = Math.min(totalLongClose, Math.max(actualLong - EPSILON, 0));
+    if (safeLongClose > EPSILON) {
       try {
         await placeMarketOrder(
           this.exchange,
@@ -734,7 +746,7 @@ export class GridEngine {
           this.timers,
           this.pendings,
           "SELL",
-          totalLongClose,
+          safeLongClose,
           this.log,
           true,
           { expectedPrice: referencePrice },
@@ -743,13 +755,15 @@ export class GridEngine {
         for (const { level } of toCloseLongLevels) {
           this.longExposure.delete(level);
         }
+        this.deferPositionAlignment();
         this.schedulePersist();
       } catch (error) {
         this.log("error", `市价平仓多单失败: ${extractMessage(error)}`);
       }
     }
 
-    if (totalShortClose > EPSILON) {
+    const safeShortClose = Math.min(totalShortClose, Math.max(actualShort - EPSILON, 0));
+    if (safeShortClose > EPSILON) {
       try {
         await placeMarketOrder(
           this.exchange,
@@ -759,7 +773,7 @@ export class GridEngine {
           this.timers,
           this.pendings,
           "BUY",
-          totalShortClose,
+          safeShortClose,
           this.log,
           true,
           { expectedPrice: referencePrice },
@@ -768,6 +782,7 @@ export class GridEngine {
         for (const { level } of toCloseShortLevels) {
           this.shortExposure.delete(level);
         }
+        this.deferPositionAlignment();
         this.schedulePersist();
       } catch (error) {
         this.log("error", `市价平仓空单失败: ${extractMessage(error)}`);
