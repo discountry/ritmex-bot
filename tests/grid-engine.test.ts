@@ -206,7 +206,7 @@ describe("GridEngine", () => {
     expect(nearestBuy).toBeTruthy();
     const targetLevel = nearestBuy!.level;
 
-    (engine as any).levelExposure.set(targetLevel, baseConfig.orderSize);
+    (engine as any).longExposure.set(targetLevel, baseConfig.orderSize);
     adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
 
     const desiredAfterFill = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
@@ -237,6 +237,53 @@ describe("GridEngine", () => {
       const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
       return isBuyLevel ? order.side === "BUY" : order.side === "SELL";
     })).toBe(true);
+
+    engine.stop();
+  });
+
+  it("limits active sell orders by remaining short headroom", () => {
+    const adapter = new StubAdapter();
+    const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+    adapter.emitOrders([]);
+
+    const desiredFull = (engine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
+    const sellCountFull = desiredFull.filter((order) => order.side === "SELL").length;
+    expect(sellCountFull).toBeGreaterThan(0);
+
+    const limitedHeadroomConfig = { ...baseConfig, maxPositionSize: baseConfig.orderSize * 2 };
+    const limitedEngine = new GridEngine(limitedHeadroomConfig, adapter as any, { now: () => 0 });
+    (limitedEngine as any).shortExposure.set(12, baseConfig.orderSize * 2);
+
+    const desiredLimited = (limitedEngine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
+    const sellCountLimited = desiredLimited.filter((order) => order.side === "SELL").length;
+    expect(sellCountLimited).toBeLessThanOrEqual(1);
+
+    engine.stop();
+    limitedEngine.stop();
+  });
+
+  it("places reduce-only orders to close existing exposures", () => {
+    const adapter = new StubAdapter();
+    const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
+    adapter.emitOrders([]);
+
+    const buyLevel = (engine as any).buyLevelIndices.slice(-1)[0];
+    (engine as any).longExposure.set(buyLevel, baseConfig.orderSize);
+
+    const desired = (engine as any).computeDesiredOrders(2.05) as Array<{
+      level: number;
+      side: string;
+      reduceOnly: boolean;
+      amount: number;
+    }>;
+
+    const closeOrder = desired.find((order) => order.reduceOnly && order.side === "SELL");
+    expect(closeOrder).toBeTruthy();
+    expect(closeOrder!.amount).toBeCloseTo(baseConfig.orderSize);
 
     engine.stop();
   });
