@@ -6,6 +6,7 @@ import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from '../core/order
 import type { ExchangeAdapter } from '../exchanges/adapter';
 import type { AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker } from '../exchanges/types';
 import { createTradeLog, type TradeLogEntry } from '../logging/trade-log';
+import type { EngineListener, EngineUpdateEvent, IEngineSnapshot, IStrategyEngine } from '../types';
 import { decryptCopyright } from '../utils/copyright';
 import { extractMessage, isUnknownOrderError } from '../utils/errors';
 import { isRateLimitError } from '../utils/errors';
@@ -17,24 +18,17 @@ import { StrategyEventEmitter } from './common/event-emitter';
 import { SessionVolumeTracker } from './common/session-volume';
 import { type LogHandler, safeSubscribe } from './common/subscriptions';
 
-export interface TrendEngineSnapshot {
-   ready: boolean;
-   symbol: string;
+export interface TrendEngineSnapshot extends IEngineSnapshot {
    lastPrice: number | null;
    sma30: number | null;
    bollingerBandwidth: number | null;
    trend: '做多' | '做空' | '无信号';
-   position: PositionSnapshot;
-   pnl: number;
-   unrealized: number;
    totalProfit: number;
    totalTrades: number;
-   sessionVolume: number;
    tradeLog: TradeLogEntry[];
    openOrders: AsterOrder[];
    depth: AsterDepth | null;
    ticker: AsterTicker | null;
-   lastUpdated: number | null;
    lastOpenSignal: OpenOrderPlan;
 }
 
@@ -43,11 +37,7 @@ export interface OpenOrderPlan {
    price: number | null;
 }
 
-type TrendEngineEvent = 'update';
-
-type TrendEngineListener = (snapshot: TrendEngineSnapshot) => void;
-
-export class TrendEngine {
+export class TrendEngine implements IStrategyEngine<TrendEngineSnapshot> {
    private accountSnapshot: AsterAccountSnapshot | null = null;
    private openOrders: AsterOrder[] = [];
    private depthSnapshot: AsterDepth | null = null;
@@ -59,7 +49,7 @@ export class TrendEngine {
    private readonly pending: OrderPendingMap = {};
 
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
-   private readonly events = new StrategyEventEmitter<TrendEngineEvent, TrendEngineSnapshot>();
+   private readonly events = new StrategyEventEmitter<EngineUpdateEvent, TrendEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
 
    private timer: ReturnType<typeof setInterval> | null = null;
@@ -91,7 +81,7 @@ export class TrendEngine {
    private lastStopAttempt: { side: 'BUY' | 'SELL' | null; price: number | null; at: number } = { side: null, price: null, at: 0 };
    private readonly copyrightFingerprint = crypto.createHash('sha256').update(decryptCopyright()).digest('hex');
 
-   private readonly listeners = new Map<TrendEngineEvent, Set<TrendEngineListener>>();
+   private readonly listeners = new Map<EngineUpdateEvent, Set<EngineListener<TrendEngineSnapshot>>>();
 
    constructor(private readonly config: TradingConfig, private readonly exchange: ExchangeAdapter) {
       this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -113,11 +103,11 @@ export class TrendEngine {
       }
    }
 
-   on(event: TrendEngineEvent, handler: TrendEngineListener): void {
+   on(event: EngineUpdateEvent, handler: EngineListener<TrendEngineSnapshot>): void {
       this.events.on(event, handler);
    }
 
-   off(event: TrendEngineEvent, handler: TrendEngineListener): void {
+   off(event: EngineUpdateEvent, handler: EngineListener<TrendEngineSnapshot>): void {
       this.events.off(event, handler);
    }
 
@@ -125,7 +115,7 @@ export class TrendEngine {
       return this.buildSnapshot();
    }
 
-   private bootstrap(): void {
+   bootstrap(): void {
       const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
 
       safeSubscribe<AsterAccountSnapshot>(
@@ -192,6 +182,8 @@ export class TrendEngine {
          this.exchange.watchKlines.bind(this.exchange, this.config.symbol, this.config.klineInterval),
          (klines) => {
             this.klineSnapshot = Array.isArray(klines) ? klines : [];
+            const latestSma = getSMA(this.klineSnapshot, 30);
+            this.lastSma30 = latestSma;
             this.logKlineSnapshot();
             this.emitUpdate();
          },
@@ -416,7 +408,12 @@ export class TrendEngine {
       }
       this.entryPricePendingLogged = false;
       const direction = position.positionAmt > 0 ? 'long' : 'short';
-      const pnl = (direction === 'long' ? price - position.entryPrice : position.entryPrice - price) * Math.abs(position.positionAmt);
+      const qtyAbs = Math.abs(position.positionAmt);
+      const depthBid = Number(this.depthSnapshot?.bids?.[0]?.[0]);
+      const depthAsk = Number(this.depthSnapshot?.asks?.[0]?.[0]);
+      const closeSidePriceRaw = direction === 'long' ? depthBid : depthAsk;
+      const effectiveClosePrice = Number.isFinite(closeSidePriceRaw) ? closeSidePriceRaw : Number.isFinite(price) ? price : position.entryPrice;
+      const pnl = qtyAbs > 0 ? (direction === 'long' ? effectiveClosePrice - position.entryPrice : position.entryPrice - effectiveClosePrice) * qtyAbs : 0;
       const unrealized = Number.isFinite(position.unrealizedProfit) ? position.unrealizedProfit : null;
       const stopSide = direction === 'long' ? 'SELL' : 'BUY';
       const stopPrice = calcStopLossPrice(position.entryPrice, Math.abs(position.positionAmt), direction, this.config.lossLimit);
@@ -527,7 +524,7 @@ export class TrendEngine {
       }
 
       const derivedLoss = pnl < -this.config.lossLimit;
-      const snapshotLoss = Boolean(unrealized !== null && unrealized < -this.config.lossLimit && pnl <= 0);
+      const snapshotLoss = derivedLoss;
 
       if (derivedLoss || snapshotLoss) {
          const result = { closed: false, pnl };
@@ -703,7 +700,7 @@ export class TrendEngine {
          trend,
          position,
          pnl,
-         unrealized: position.unrealizedProfit,
+         accountUnrealized: position.unrealizedProfit,
          totalProfit: this.totalProfit,
          totalTrades: this.totalTrades,
          sessionVolume: this.sessionVolume.value,

@@ -1,7 +1,8 @@
 import { Box, Text, useInput } from 'ink';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { makerConfig } from '../config';
-import { createExchangeAdapter, getExchangeDisplayName, resolveExchangeId } from '../exchanges/create-adapter';
+import { getExchangeDisplayName, resolveExchangeId } from '../exchanges/create-adapter';
+import { buildAdapterFromEnv } from '../exchanges/resolve-from-env';
 import { MakerEngine, type MakerEngineSnapshot } from '../strategy/maker-engine';
 import { formatNumber } from '../utils/format';
 import { DataTable, type TableColumn } from './components/DataTable';
@@ -28,42 +29,7 @@ export function MakerApp({ onExit }: MakerAppProps) {
 
    useEffect(() => {
       try {
-         let adapter;
-         if (exchangeId === 'aster') {
-            const apiKey = process.env.ASTER_API_KEY;
-            const apiSecret = process.env.ASTER_API_SECRET;
-            if (!apiKey || !apiSecret) {
-               setError(new Error('缺少 ASTER_API_KEY 或 ASTER_API_SECRET 环境变量'));
-               return;
-            }
-            adapter = createExchangeAdapter({ exchange: exchangeId, symbol: makerConfig.symbol, aster: { apiKey, apiSecret } });
-         } else if (exchangeId === 'lighter') {
-            const accountIndexRaw = process.env.LIGHTER_ACCOUNT_INDEX;
-            const apiPrivateKey = process.env.LIGHTER_API_PRIVATE_KEY;
-            if (!accountIndexRaw || !apiPrivateKey) {
-               setError(new Error('缺少 LIGHTER_ACCOUNT_INDEX 或 LIGHTER_API_PRIVATE_KEY 环境变量'));
-               return;
-            }
-            adapter = createExchangeAdapter({
-               exchange: exchangeId,
-               symbol: makerConfig.symbol,
-               lighter: {
-                  displaySymbol: makerConfig.symbol,
-                  accountIndex: Number.parseInt(accountIndexRaw, 10),
-                  apiPrivateKey,
-                  apiKeyIndex: process.env.LIGHTER_API_KEY_INDEX ? Number(process.env.LIGHTER_API_KEY_INDEX) : 0,
-                  environment: process.env.LIGHTER_ENV,
-                  baseUrl: process.env.LIGHTER_BASE_URL,
-                  marketId: process.env.LIGHTER_MARKET_ID ? Number(process.env.LIGHTER_MARKET_ID) : undefined,
-                  marketSymbol: process.env.LIGHTER_SYMBOL,
-                  priceDecimals: process.env.LIGHTER_PRICE_DECIMALS ? Number(process.env.LIGHTER_PRICE_DECIMALS) : undefined,
-                  sizeDecimals: process.env.LIGHTER_SIZE_DECIMALS ? Number(process.env.LIGHTER_SIZE_DECIMALS) : undefined,
-                  l1Address: process.env.LIGHTER_L1_ADDRESS,
-               },
-            });
-         } else {
-            adapter = createExchangeAdapter({ exchange: exchangeId, symbol: makerConfig.symbol, grvt: { symbol: makerConfig.symbol } });
-         }
+         const adapter = buildAdapterFromEnv({ exchangeId, symbol: makerConfig.symbol });
          const engine = new MakerEngine(makerConfig, adapter);
          engineRef.current = engine;
          setSnapshot(engine.getSnapshot());
@@ -124,6 +90,8 @@ export function MakerApp({ onExit }: MakerAppProps) {
    }, { key: 'reduceOnly', header: 'RO', minWidth: 4 }];
 
    const lastLogs = snapshot.tradeLog.slice(-5);
+   const feedStatus = snapshot.feedStatus;
+   const feedEntries: Array<{ key: keyof typeof feedStatus; label: string }> = [{ key: 'account', label: '账户' }, { key: 'orders', label: '订单' }, { key: 'depth', label: '深度' }, { key: 'ticker', label: 'Ticker' }];
 
    return (
       <Box flexDirection='column' paddingX={1}>
@@ -131,6 +99,7 @@ export function MakerApp({ onExit }: MakerAppProps) {
             <Text color='cyanBright'>Maker Strategy Dashboard</Text>
             <Text>交易所: {exchangeName} ｜ 交易对: {snapshot.symbol} ｜ 买一价: {formatNumber(topBid, 2)} ｜ 卖一价: {formatNumber(topAsk, 2)} ｜ 点差: {spreadDisplay}</Text>
             <Text color='gray'>状态: {snapshot.ready ? '实时运行' : '等待市场数据'} ｜ 按 Esc 返回策略选择</Text>
+            <Text>数据状态: {feedEntries.map((entry, index) => <Text key={entry.key} color={feedStatus[entry.key] ? 'green' : 'red'}>{index === 0 ? ' ' : ' '} {entry.label}</Text>)}</Text>
          </Box>
 
          <Box flexDirection='row' marginBottom={1}>

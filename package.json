@@ -19,7 +19,7 @@
       "@types/bun": "latest",
       "@types/node": "latest",
       "@types/ws": "^8.18.1",
-      "oxlint": "^1.19.0",
+      "oxlint": "^1.20.0",
       "protobufjs": "^7.5.4",
       "vitest": "^3.2.4"
    },

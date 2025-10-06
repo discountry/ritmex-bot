@@ -1,3 +1,6 @@
+import type { AsterOrder } from './exchanges/types';
+import type { PositionSnapshot } from './utils/strategy';
+
 export type Timeframe = '15m' | '30m' | '1h' | '4h';
 
 export interface OHLCV {
@@ -15,11 +18,6 @@ export interface LoadOptions {
    tz?: string; // reserved
    expectHeader?: boolean;
    columns?: { time: string; open: string; high: string; low: string; close: string; volume: string };
-}
-
-export interface ResampleOptions {
-   targetTf: Timeframe;
-   alignMode?: 'close' | 'open'; // bucket close/open timestamp
 }
 
 export function parseTimeToMs(value: string): number {
@@ -53,7 +51,7 @@ export interface StrategyContext {
    requireAllAgree?: boolean; // if true, all aux must agree with main trend
 }
 
-export interface StrategyConfig {
+export interface TrendStrategyConfig {
    smaPeriod: number; // e.g., 30
    bollingerLength: number;
    bollingerStdMultiplier: number;
@@ -67,7 +65,30 @@ export interface StrategyConfig {
    emaSlowPeriod?: number;
 }
 
-export interface IStrategy {
-   init(config: StrategyConfig): void;
+export interface IStrategy<C> {
+   init(config: C): void;
    next(bar: OHLCV, series: OHLCV[], ctx?: StrategyContext): Signal;
+}
+
+export type EngineUpdateEvent = 'update';
+
+export type EngineListener<S> = (snapshot: S) => void;
+
+export interface IStrategyEngine<S> {
+   start(): void;
+   stop(): void;
+   on(event: EngineUpdateEvent, handler: EngineListener<S>): void;
+   off(event: EngineUpdateEvent, handler: EngineListener<S>): void;
+   getSnapshot(): S;
+   bootstrap(): void;
+}
+
+export interface IEngineSnapshot {
+   ready: boolean;
+   symbol: string;
+   position: PositionSnapshot;
+   pnl: number;
+   accountUnrealized: number;
+   sessionVolume: number;
+   lastUpdated: number | null;
 }

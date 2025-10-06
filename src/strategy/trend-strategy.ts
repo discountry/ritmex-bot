@@ -1,13 +1,13 @@
 import { lastBandwidth } from '../indicators/bbands';
 import { lastEMA } from '../indicators/ema';
 import { lastSma } from '../indicators/sma';
-import type { IStrategy, OHLCV, Signal, StrategyConfig } from '../types';
+import type { IStrategy, OHLCV, Signal, TrendStrategyConfig } from '../types';
 
-export class TrendStrategy implements IStrategy {
-   private cfg!: StrategyConfig;
+export class TrendStrategy implements IStrategy<TrendStrategyConfig> {
+   private cfg!: TrendStrategyConfig;
    private lastPrice: number | null = null;
 
-   init(config: StrategyConfig): void {
+   init(config: TrendStrategyConfig): void {
       this.cfg = config;
       this.lastPrice = null;
    }

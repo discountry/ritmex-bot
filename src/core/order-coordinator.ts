@@ -74,6 +74,8 @@ export async function deduplicateOrders(adapter: ExchangeAdapter, symbol: string
    }
 }
 
+type PlaceOrderOptions = { priceTick: number; qtyStep: number; skipDedupe?: boolean };
+
 export async function placeOrder(
    adapter: ExchangeAdapter,
    symbol: string,
@@ -87,7 +89,7 @@ export async function placeOrder(
    log: LogHandler,
    reduceOnly = false,
    guard?: OrderGuardOptions,
-   opts?: { priceTick: number; qtyStep: number },
+   opts?: PlaceOrderOptions,
 ): Promise<AsterOrder | undefined> {
    const type = 'LIMIT';
    if (isOperating(locks, type)) { return; }
@@ -104,7 +106,9 @@ export async function placeOrder(
       timeInForce: 'GTX',
    };
    if (reduceOnly) { params.reduceOnly = 'true'; }
-   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
+   if (!opts?.skipDedupe) {
+      await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
+   }
    lockOperating(locks, timers, pendings, type, log);
    try {
       const order = await adapter.createOrder(params);
@@ -188,7 +192,9 @@ export async function placeStopLossOrder(
    }
    const priceTick = opts?.priceTick ?? 0.1;
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = { symbol, side, type, stopPrice: roundDownToTick(stopPrice, priceTick), closePosition: 'true', timeInForce: 'GTC', quantity: roundQtyDownToStep(quantity, qtyStep) };
+   const params: CreateOrderParams = { symbol, side, type, stopPrice: roundDownToTick(stopPrice, priceTick), reduceOnly: 'true', closePosition: 'true', timeInForce: 'GTC', quantity: roundQtyDownToStep(quantity, qtyStep), triggerType: 'STOP_LOSS' };
+   // 部分交易所（例如 Paradex）要求 STOP_MARKET 同时提供 price 字段
+   params.price = params.stopPrice;
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {

@@ -1,7 +1,8 @@
 export function isUnknownOrderError(error: unknown): boolean {
    const message = extractMessage(error);
    if (!message) { return false; }
-   return message.includes('Unknown order') || message.includes('code":-2011');
+   const upper = message.toUpperCase();
+   return (upper.includes('UNKNOWN ORDER') || upper.includes('CODE":-2011') || upper.includes('ORDER_ID_NOT_FOUND') || upper.includes('ORDER_IS_CLOSED') || upper.includes('COULD NOT FIND ORDER'));
 }
 
 export function extractMessage(error: unknown): string {
@@ -30,4 +31,9 @@ export function isRateLimitError(error: unknown): boolean {
    }
    const message = extractMessage(error).toLowerCase();
    return (message.includes('429') || message.includes('too many requests') || message.includes('rate limit') || message.includes('request rate'));
+}
+
+export function isInsufficientBalanceError(error: unknown): boolean {
+   const message = extractMessage(error).toUpperCase();
+   return (message.includes('INSUFFICIENT') || message.includes('NOT_ENOUGH_BALANCE') || message.includes('INSUFFICIENT_BALANCE') || message.includes('NOT ENOUGH'));
 }

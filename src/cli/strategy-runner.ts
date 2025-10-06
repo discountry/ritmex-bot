@@ -1,6 +1,9 @@
-import { makerConfig, tradingConfig } from '../config';
+import { basisConfig, gridConfig, isBasisStrategyEnabled, makerConfig, tradingConfig } from '../config';
 import type { ExchangeAdapter } from '../exchanges/adapter';
-import { createExchangeAdapter, getExchangeDisplayName, resolveExchangeId } from '../exchanges/create-adapter';
+import { getExchangeDisplayName, resolveExchangeId } from '../exchanges/create-adapter';
+import { buildAdapterFromEnv } from '../exchanges/resolve-from-env';
+import { BasisArbEngine, type BasisArbSnapshot } from '../strategy/basis-arb-engine';
+import { GridEngine, type GridEngineSnapshot } from '../strategy/grid-engine';
 import { MakerEngine, type MakerEngineSnapshot } from '../strategy/maker-engine';
 import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from '../strategy/offset-maker-engine';
 import { TrendEngine, type TrendEngineSnapshot } from '../strategy/trend-engine';
@@ -13,7 +16,7 @@ interface RunnerOptions {
 
 type StrategyRunner = (options: RunnerOptions) => Promise<void>;
 
-export const STRATEGY_LABELS: Record<StrategyId, string> = { trend: 'Trend Following', maker: 'Maker', 'offset-maker': 'Offset Maker' };
+export const STRATEGY_LABELS: Record<StrategyId, string> = { trend: 'Trend Following', maker: 'Maker', 'offset-maker': 'Offset Maker', basis: 'Basis Arbitrage', grid: 'Grid' };
 
 export async function startStrategy(strategyId: StrategyId, options: RunnerOptions = {}): Promise<void> {
    const runner = STRATEGY_FACTORIES[strategyId];
@@ -42,6 +45,24 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       const engine = new OffsetMakerEngine(config, adapter);
       await runEngine({ engine, strategy: 'offset-maker', silent: opts.silent, getSnapshot: () => engine.getSnapshot(), onUpdate: (emitter) => engine.on('update', emitter), offUpdate: (emitter) => engine.off('update', emitter) });
    },
+   basis: async (opts) => {
+      if (!isBasisStrategyEnabled()) {
+         throw new Error('Basis arbitrage strategy is disabled. Set ENABLE_BASIS_STRATEGY=true to enable it.');
+      }
+      const exchangeId = resolveExchangeId();
+      if (exchangeId !== 'aster') {
+         throw new Error('Basis arbitrage strategy currently only supports the Aster exchange');
+      }
+      const adapter = createAdapterOrThrow(basisConfig.futuresSymbol);
+      const engine = new BasisArbEngine(basisConfig, adapter);
+      await runEngine({ engine, strategy: 'basis', silent: opts.silent, getSnapshot: () => engine.getSnapshot(), onUpdate: (emitter) => engine.on('update', emitter), offUpdate: (emitter) => engine.off('update', emitter) });
+   },
+   grid: async (opts) => {
+      const config = gridConfig;
+      const adapter = createAdapterOrThrow(config.symbol);
+      const engine = new GridEngine(config, adapter);
+      await runEngine({ engine, strategy: 'grid', silent: opts.silent, getSnapshot: () => engine.getSnapshot(), onUpdate: (emitter) => engine.on('update', emitter), offUpdate: (emitter) => engine.off('update', emitter) });
+   },
 };
 
 interface EngineHarness<TSnapshot> {
@@ -53,7 +74,7 @@ interface EngineHarness<TSnapshot> {
    offUpdate: (handler: (snapshot: TSnapshot) => void) => void;
 }
 
-async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnapshot | OffsetMakerEngineSnapshot>(harness: EngineHarness<TSnapshot>): Promise<void> {
+async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnapshot | OffsetMakerEngineSnapshot | BasisArbSnapshot | GridEngineSnapshot>(harness: EngineHarness<TSnapshot>): Promise<void> {
    const { engine, strategy, silent, getSnapshot, onUpdate, offUpdate } = harness;
    const exchangeId = resolveExchangeId();
    const exchangeName = getExchangeDisplayName(exchangeId);
@@ -113,34 +134,7 @@ async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnap
 }
 
 function createAdapterOrThrow(symbol: string): ExchangeAdapter {
-   const exchangeId = resolveExchangeId();
-   if (exchangeId === 'aster') {
-      const apiKey = process.env.ASTER_API_KEY;
-      const apiSecret = process.env.ASTER_API_SECRET;
-      if (!apiKey || !apiSecret) {
-         throw new Error('Missing ASTER_API_KEY or ASTER_API_SECRET environment variables');
-      }
-      return createExchangeAdapter({ exchange: exchangeId, symbol, aster: { apiKey, apiSecret } });
-   }
-   if (exchangeId === 'lighter') {
-      const accountIndex = Number.parseInt(process.env.LIGHTER_ACCOUNT_INDEX ?? '', 10);
-      const privateKey = process.env.LIGHTER_API_PRIVATE_KEY;
-      if (!Number.isFinite(accountIndex) || !privateKey) {
-         throw new Error('LIGHTER_ACCOUNT_INDEX and LIGHTER_API_PRIVATE_KEY environment variables are required for Lighter exchange');
-      }
-      const apiKeyIndex = process.env.LIGHTER_API_KEY_INDEX ? Number(process.env.LIGHTER_API_KEY_INDEX) : 0;
-      const lighterSymbol = process.env.LIGHTER_SYMBOL ?? symbol;
-      const marketId = process.env.LIGHTER_MARKET_ID ? Number(process.env.LIGHTER_MARKET_ID) : undefined;
-      const priceDecimals = process.env.LIGHTER_PRICE_DECIMALS ? Number(process.env.LIGHTER_PRICE_DECIMALS) : undefined;
-      const sizeDecimals = process.env.LIGHTER_SIZE_DECIMALS ? Number(process.env.LIGHTER_SIZE_DECIMALS) : undefined;
-      return createExchangeAdapter({
-         exchange: exchangeId,
-         symbol,
-         lighter: { marketSymbol: lighterSymbol, accountIndex, apiPrivateKey: privateKey, apiKeyIndex, baseUrl: process.env.LIGHTER_BASE_URL, environment: process.env.LIGHTER_ENV, marketId, priceDecimals, sizeDecimals },
-      });
-   }
-
-   return createExchangeAdapter({ exchange: exchangeId, symbol, grvt: { symbol } });
+   return buildAdapterFromEnv({ exchangeId: resolveExchangeId(), symbol });
 }
 
 type TradeLogEntry = { time: string; type: string; detail: string };

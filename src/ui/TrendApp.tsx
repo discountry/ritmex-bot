@@ -1,7 +1,8 @@
 import { Box, Text, useInput } from 'ink';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { tradingConfig } from '../config';
-import { createExchangeAdapter, getExchangeDisplayName, resolveExchangeId } from '../exchanges/create-adapter';
+import { getExchangeDisplayName, resolveExchangeId } from '../exchanges/create-adapter';
+import { buildAdapterFromEnv } from '../exchanges/resolve-from-env';
 import { TrendEngine, type TrendEngineSnapshot } from '../strategy/trend-engine';
 import { formatNumber } from '../utils/format';
 import { DataTable, type TableColumn } from './components/DataTable';
@@ -30,18 +31,7 @@ export function TrendApp({ onExit }: TrendAppProps) {
 
    useEffect(() => {
       try {
-         let adapter;
-         if (exchangeId === 'aster') {
-            const apiKey = process.env.ASTER_API_KEY;
-            const apiSecret = process.env.ASTER_API_SECRET;
-            if (!apiKey || !apiSecret) {
-               setError(new Error('缺少 ASTER_API_KEY 或 ASTER_API_SECRET 环境变量'));
-               return;
-            }
-            adapter = createExchangeAdapter({ exchange: exchangeId, symbol: tradingConfig.symbol, aster: { apiKey, apiSecret } });
-         } else {
-            adapter = createExchangeAdapter({ exchange: exchangeId, symbol: tradingConfig.symbol, grvt: { symbol: tradingConfig.symbol } });
-         }
+         const adapter = buildAdapterFromEnv({ exchangeId, symbol: tradingConfig.symbol });
          const engine = new TrendEngine(tradingConfig, adapter);
          engineRef.current = engine;
          setSnapshot(engine.getSnapshot());
@@ -107,7 +97,7 @@ export function TrendApp({ onExit }: TrendAppProps) {
                   ? (
                      <>
                         <Text>方向: {position.positionAmt > 0 ? '多' : '空'} ｜ 数量: {formatNumber(Math.abs(position.positionAmt), 4)} ｜ 开仓价: {formatNumber(position.entryPrice, 2)}</Text>
-                        <Text>浮动盈亏: {formatNumber(snapshot.pnl, 4)} USDT ｜ 账户未实现盈亏: {formatNumber(snapshot.unrealized, 4)} USDT</Text>
+                        <Text>浮动盈亏: {formatNumber(snapshot.pnl, 4)} USDT ｜ 账户未实现盈亏: {formatNumber(snapshot.accountUnrealized, 4)} USDT</Text>
                      </>
                   )
                   : <Text color='gray'>当前无持仓</Text>}

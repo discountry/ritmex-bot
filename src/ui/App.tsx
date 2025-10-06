@@ -1,24 +1,27 @@
 import { Box, Text, useInput } from 'ink';
 import React, { useMemo, useState } from 'react';
+import { isBasisStrategyEnabled } from '../config';
 import { resolveExchangeId } from '../exchanges/create-adapter';
 import { loadCopyrightFragments, verifyCopyrightIntegrity } from '../utils/copyright';
+import { BasisApp } from './BasisApp';
+import { GridApp } from './GridApp';
 import { MakerApp } from './MakerApp';
 import { OffsetMakerApp } from './OffsetMakerApp';
 import { TrendApp } from './TrendApp';
 
 interface StrategyOption {
-   id: 'trend' | 'maker' | 'offset-maker';
+   id: 'trend' | 'maker' | 'offset-maker' | 'basis' | 'grid';
    label: string;
    description: string;
    component: React.ComponentType<{ onExit: () => void }>;
 }
 
-const STRATEGIES: StrategyOption[] = [{ id: 'trend', label: '趋势跟随策略 (SMA30)', description: '监控均线信号，自动进出场并维护止损/止盈', component: TrendApp }, {
-   id: 'maker',
-   label: '做市刷单策略',
-   description: '双边挂单提供流动性，自动追价与风控止损',
-   component: MakerApp,
-}, { id: 'offset-maker', label: '偏移做市策略', description: '根据盘口深度自动偏移挂单并在极端不平衡时撤退', component: OffsetMakerApp }];
+const BASE_STRATEGIES: StrategyOption[] = [
+   { id: 'trend', label: '趋势跟随策略 (SMA30)', description: '监控均线信号，自动进出场并维护止损/止盈', component: TrendApp },
+   { id: 'maker', label: '做市刷单策略', description: '双边挂单提供流动性，自动追价与风控止损', component: MakerApp },
+   { id: 'grid', label: '基础网格策略', description: '在上下边界之间布设等比网格，自动加仓与减仓', component: GridApp },
+   { id: 'offset-maker', label: '偏移做市策略', description: '根据盘口深度自动偏移挂单并在极端不平衡时撤退', component: OffsetMakerApp },
+];
 
 const inputSupported = Boolean(process.stdin && (process.stdin as any).isTTY);
 
@@ -28,7 +31,12 @@ export function App() {
    const copyright = useMemo(() => loadCopyrightFragments(), []);
    const integrityOk = useMemo(() => verifyCopyrightIntegrity(), []);
    const exchangeId = useMemo(() => resolveExchangeId(), []);
-   const strategies = useMemo(() => STRATEGIES, []);
+   const strategies = useMemo(() => {
+      if (!isBasisStrategyEnabled()) {
+         return BASE_STRATEGIES;
+      }
+      return [...BASE_STRATEGIES, { id: 'basis' as const, label: '期现套利策略', description: '监控期货与现货盘口差价，辅助发现套利机会', component: BasisApp }];
+   }, []);
 
    useInput((input, key) => {
       if (selected) { return; }

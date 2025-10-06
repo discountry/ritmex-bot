@@ -1,8 +1,6 @@
 import { TrendStrategy } from '../strategy/trend-strategy';
-import type { OHLCV, StrategyConfig, Timeframe } from '../types';
+import type { OHLCV, Timeframe, TrendStrategyConfig } from '../types';
 import { type BacktestParams, type BacktestResult, Simulator } from './simulator';
-
-import { computeATR } from '../indicators/atr';
 
 export function tfToMs(tf: Timeframe): number {
    switch (tf) {
@@ -19,7 +17,7 @@ export function tfToMs(tf: Timeframe): number {
    }
 }
 
-export function runBacktest(tf: string, auxSeries: Record<string, OHLCV[]>, stratCfg: StrategyConfig, bt: BacktestParams, atrArr: (number | null)[]): BacktestResult {
+export function runBacktest(tf: string, auxSeries: Record<string, OHLCV[]>, stratCfg: TrendStrategyConfig, bt: BacktestParams, atrArr: (number | null)[]): BacktestResult {
    const strat = new TrendStrategy();
    strat.init(stratCfg);
    const sim = new Simulator(bt);

@@ -7,7 +7,8 @@ import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from '../core/order
 import type { ExchangeAdapter } from '../exchanges/adapter';
 import type { AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker } from '../exchanges/types';
 import { createTradeLog, type TradeLogEntry } from '../logging/trade-log';
-import { isRateLimitError, isUnknownOrderError } from '../utils/errors';
+import type { EngineListener, EngineUpdateEvent, IEngineSnapshot, IStrategyEngine } from '../types';
+import { extractMessage, isInsufficientBalanceError, isRateLimitError, isUnknownOrderError } from '../utils/errors';
 import { formatPriceToString } from '../utils/math';
 import { computePositionPnl } from '../utils/pnl';
 import { getMidOrLast, getTopPrices } from '../utils/price';
@@ -25,28 +26,20 @@ interface DesiredOrder {
    reduceOnly: boolean;
 }
 
-export interface MakerEngineSnapshot {
-   ready: boolean;
-   symbol: string;
+export interface MakerEngineSnapshot extends IEngineSnapshot {
    topBid: number | null;
    topAsk: number | null;
    spread: number | null;
-   position: PositionSnapshot;
-   pnl: number;
-   accountUnrealized: number;
-   sessionVolume: number;
    openOrders: AsterOrder[];
    desiredOrders: DesiredOrder[];
    tradeLog: TradeLogEntry[];
-   lastUpdated: number | null;
+   feedStatus: { account: boolean; orders: boolean; depth: boolean; ticker: boolean };
 }
 
-type MakerEvent = 'update';
-type MakerListener = (snapshot: MakerEngineSnapshot) => void;
-
 const EPS = 1e-5;
+const INSUFFICIENT_BALANCE_COOLDOWN_MS = 15_000;
 
-export class MakerEngine {
+export class MakerEngine implements IStrategyEngine<MakerEngineSnapshot> {
    private accountSnapshot: AsterAccountSnapshot | null = null;
    private depthSnapshot: AsterDepth | null = null;
    private tickerSnapshot: AsterTicker | null = null;
@@ -58,7 +51,7 @@ export class MakerEngine {
    private readonly pendingCancelOrders = new Set<string>();
 
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
-   private readonly events = new StrategyEventEmitter<MakerEvent, MakerEngineSnapshot>();
+   private readonly events = new StrategyEventEmitter<EngineUpdateEvent, MakerEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
 
    private timer: ReturnType<typeof setInterval> | null = null;
@@ -68,6 +61,13 @@ export class MakerEngine {
    private initialOrderSnapshotReady = false;
    private initialOrderResetDone = false;
    private entryPricePendingLogged = false;
+   private readinessLogged = { account: false, depth: false, ticker: false, orders: false };
+   private feedArrived = { account: false, depth: false, ticker: false, orders: false };
+   private feedStatus = { account: false, depth: false, ticker: false, orders: false };
+   private insufficientBalanceCooldownUntil = 0;
+   private insufficientBalanceNotified = false;
+   private lastInsufficientMessage: string | null = null;
+   private lastDesiredSummary: string | null = null;
    private readonly rateLimit: RateLimitController;
 
    constructor(private readonly config: MakerConfig, private readonly exchange: ExchangeAdapter) {
@@ -90,11 +90,11 @@ export class MakerEngine {
       }
    }
 
-   on(event: MakerEvent, handler: MakerListener): void {
+   on(event: EngineUpdateEvent, handler: EngineListener<MakerEngineSnapshot>): void {
       this.events.on(event, handler);
    }
 
-   off(event: MakerEvent, handler: MakerListener): void {
+   off(event: EngineUpdateEvent, handler: EngineListener<MakerEngineSnapshot>): void {
       this.events.off(event, handler);
    }
 
@@ -102,7 +102,7 @@ export class MakerEngine {
       return this.buildSnapshot();
    }
 
-   private bootstrap(): void {
+   bootstrap(): void {
       const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
 
       safeSubscribe<AsterAccountSnapshot>(
@@ -115,6 +115,11 @@ export class MakerEngine {
             }
             const position = getPosition(snapshot, this.config.symbol);
             this.sessionVolume.update(position, this.getReferencePrice());
+            if (!this.feedArrived.account) {
+               this.tradeLog.push('info', '账户快照已同步');
+               this.feedArrived.account = true;
+            }
+            this.feedStatus.account = true;
             this.emitUpdate();
          },
          log,
@@ -133,6 +138,11 @@ export class MakerEngine {
                }
             }
             this.initialOrderSnapshotReady = true;
+            if (!this.feedArrived.orders) {
+               this.tradeLog.push('info', '订单快照已返回');
+               this.feedArrived.orders = true;
+            }
+            this.feedStatus.orders = true;
             this.emitUpdate();
          },
          log,
@@ -143,6 +153,11 @@ export class MakerEngine {
          this.exchange.watchDepth.bind(this.exchange, this.config.symbol),
          (depth) => {
             this.depthSnapshot = depth;
+            if (!this.feedArrived.depth) {
+               this.tradeLog.push('info', '获得最新深度行情');
+               this.feedArrived.depth = true;
+            }
+            this.feedStatus.depth = true;
             this.emitUpdate();
          },
          log,
@@ -153,21 +168,18 @@ export class MakerEngine {
          this.exchange.watchTicker.bind(this.exchange, this.config.symbol),
          (ticker) => {
             this.tickerSnapshot = ticker;
+            if (!this.feedArrived.ticker) {
+               this.tradeLog.push('info', 'Ticker 已就绪');
+               this.feedArrived.ticker = true;
+            }
+            this.feedStatus.ticker = true;
             this.emitUpdate();
          },
          log,
          { subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`, processFail: (error) => `价格推送处理异常: ${String(error)}` },
       );
 
-      // Maker strategy does not consume klines, but subscribe to keep parity with other modules
-      safeSubscribe<AsterKline[]>(
-         this.exchange.watchKlines.bind(this.exchange, this.config.symbol, '1m'),
-         (_klines) => {
-            /* no-op */
-         },
-         log,
-         { subscribeFail: (error) => `订阅K线失败: ${String(error)}`, processFail: (error) => `K线推送处理异常: ${String(error)}` },
-      );
+      // Maker strategy does not require realtime klines.
    }
 
    private syncLocksWithOrders(orders: AsterOrder[] | null | undefined): void {
@@ -183,7 +195,7 @@ export class MakerEngine {
    }
 
    private isReady(): boolean {
-      return Boolean(this.accountSnapshot && this.depthSnapshot);
+      return Boolean(this.feedStatus.account && this.feedStatus.depth && this.feedStatus.ticker && this.feedStatus.orders);
    }
 
    private async tick(): Promise<void> {
@@ -200,9 +212,11 @@ export class MakerEngine {
             return;
          }
          if (!this.isReady()) {
+            this.logReadinessBlockers();
             this.emitUpdate();
             return;
          }
+         this.resetReadinessFlags();
          if (!(await this.ensureStartupOrderReset())) {
             this.emitUpdate();
             return;
@@ -224,7 +238,8 @@ export class MakerEngine {
          const position = getPosition(this.accountSnapshot, this.config.symbol);
          const absPosition = Math.abs(position.positionAmt);
          const desired: DesiredOrder[] = [];
-         const canEnter = !this.rateLimit.shouldBlockEntries();
+         const insufficientActive = this.applyInsufficientBalanceState(Date.now());
+         const canEnter = !this.rateLimit.shouldBlockEntries() && !insufficientActive;
 
          if (absPosition < EPS) {
             this.entryPricePendingLogged = false;
@@ -239,6 +254,7 @@ export class MakerEngine {
          }
 
          this.desiredOrders = desired;
+         this.logDesiredOrders(desired);
          this.sessionVolume.update(position, this.getReferencePrice());
          await this.syncOrders(desired);
          await this.checkRisk(position, Number(closeBidPrice), Number(closeAskPrice));
@@ -302,7 +318,11 @@ export class MakerEngine {
 
    private async syncOrders(targets: DesiredOrder[]): Promise<void> {
       const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
-      const { toCancel, toPlace } = makeOrderPlan(availableOrders, targets);
+      const openOrders = availableOrders.filter((order) => {
+         const status = (order.status ?? '').toUpperCase();
+         return !status.includes('CLOSED') && !status.includes('FILLED') && !status.includes('CANCELED');
+      });
+      const { toCancel, toPlace } = makeOrderPlan(openOrders, targets);
 
       for (const order of toCancel) {
          if (this.pendingCancelOrders.has(String(order.orderId))) { continue; }
@@ -343,7 +363,11 @@ export class MakerEngine {
                },
             );
          } catch (error) {
-            this.tradeLog.push('error', `挂单失败(${target.side} ${target.price}): ${String(error)}`);
+            if (isInsufficientBalanceError(error)) {
+               this.registerInsufficientBalance(error);
+               break;
+            }
+            this.tradeLog.push('error', `挂单失败(${target.side} ${target.price}): ${extractMessage(error)}`);
          }
       }
    }
@@ -437,10 +461,74 @@ export class MakerEngine {
          desiredOrders: this.desiredOrders,
          tradeLog: this.tradeLog.all(),
          lastUpdated: Date.now(),
+         feedStatus: { ...this.feedStatus },
       };
    }
 
    private getReferencePrice(): number | null {
       return getMidOrLast(this.depthSnapshot, this.tickerSnapshot);
+   }
+
+   private logReadinessBlockers(): void {
+      if (!this.feedStatus.account && !this.readinessLogged.account) {
+         this.tradeLog.push('info', '等待账户快照同步，尚未开始做市');
+         this.readinessLogged.account = true;
+      }
+      if (!this.feedStatus.depth && !this.readinessLogged.depth) {
+         this.tradeLog.push('info', '等待深度行情推送，尚未开始做市');
+         this.readinessLogged.depth = true;
+      }
+      if (!this.feedStatus.ticker && !this.readinessLogged.ticker) {
+         this.tradeLog.push('info', '等待Ticker推送，尚未开始做市');
+         this.readinessLogged.ticker = true;
+      }
+      if (!this.feedStatus.orders && !this.readinessLogged.orders) {
+         this.tradeLog.push('info', '等待订单快照返回，尚未执行初始化撤单');
+         this.readinessLogged.orders = true;
+      }
+   }
+
+   private resetReadinessFlags(): void {
+      this.readinessLogged = { account: false, depth: false, ticker: false, orders: false };
+   }
+
+   private logDesiredOrders(desired: DesiredOrder[]): void {
+      if (!desired.length) {
+         if (this.lastDesiredSummary !== 'none') {
+            this.tradeLog.push('info', '当前无目标挂单，等待下一次刷新');
+            this.lastDesiredSummary = 'none';
+         }
+         return;
+      }
+      const summary = desired.map((order) => `${order.side}@${order.price}${order.reduceOnly ? '(RO)' : ''}`).join(' | ');
+      if (summary !== this.lastDesiredSummary) {
+         this.tradeLog.push('info', `目标挂单: ${summary}`);
+         this.lastDesiredSummary = summary;
+      }
+   }
+
+   private registerInsufficientBalance(error: unknown): void {
+      const now = Date.now();
+      const detail = extractMessage(error);
+      const alreadyActive = now < this.insufficientBalanceCooldownUntil;
+      if (alreadyActive && detail === this.lastInsufficientMessage) {
+         this.insufficientBalanceCooldownUntil = now + INSUFFICIENT_BALANCE_COOLDOWN_MS;
+         return;
+      }
+      this.insufficientBalanceCooldownUntil = now + INSUFFICIENT_BALANCE_COOLDOWN_MS;
+      this.lastInsufficientMessage = detail;
+      const seconds = Math.ceil(INSUFFICIENT_BALANCE_COOLDOWN_MS / 1000);
+      this.tradeLog.push('warn', `余额不足，暂停新挂单 ${seconds}s: ${detail}`);
+      this.insufficientBalanceNotified = true;
+   }
+
+   private applyInsufficientBalanceState(now: number): boolean {
+      const active = now < this.insufficientBalanceCooldownUntil;
+      if (!active && this.insufficientBalanceNotified) {
+         this.tradeLog.push('info', '余额检测恢复，重新尝试挂单');
+         this.insufficientBalanceNotified = false;
+         this.lastInsufficientMessage = null;
+      }
+      return active;
    }
 }

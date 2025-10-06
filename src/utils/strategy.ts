@@ -24,10 +24,18 @@ export function getPosition(snapshot: AsterAccountSnapshot | null, symbol: strin
 }
 
 export function getSMA(values: AsterKline[], length: number): number | null {
-   if (!values || values.length < length) { return null; }
-   const closes = values.slice(-length).map((k) => Number(k.close));
+   if (!Array.isArray(values) || values.length < length) { return null; }
+   const window = values.slice(-length);
+   const closes = window.map((kline) => Number(kline.close));
+   if (closes.some((price) => !Number.isFinite(price))) {
+      return null;
+   }
    const sum = closes.reduce((acc, current) => acc + current, 0);
-   return sum / closes.length;
+   if (!Number.isFinite(sum)) {
+      return null;
+   }
+   const average = sum / closes.length;
+   return Number.isFinite(average) ? average : null;
 }
 
 export function calcStopLossPrice(entryPrice: number, qty: number, side: 'long' | 'short', loss: number): number {

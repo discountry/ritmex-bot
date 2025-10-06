@@ -6,7 +6,8 @@ import { marketClose, placeOrder, unlockOperating } from '../core/order-coordina
 import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from '../core/order-coordinator';
 import type { ExchangeAdapter } from '../exchanges/adapter';
 import type { AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker } from '../exchanges/types';
-import { createTradeLog } from '../logging/trade-log';
+import { createTradeLog, type TradeLogEntry } from '../logging/trade-log';
+import type { EngineListener, EngineUpdateEvent, IEngineSnapshot, IStrategyEngine } from '../types';
 import { computeDepthStats } from '../utils/depth';
 import { isRateLimitError, isUnknownOrderError } from '../utils/errors';
 import { formatPriceToString } from '../utils/math';
@@ -27,7 +28,13 @@ interface DesiredOrder {
    reduceOnly: boolean;
 }
 
-export interface OffsetMakerEngineSnapshot extends MakerEngineSnapshot {
+export interface OffsetMakerEngineSnapshot extends IEngineSnapshot {
+   topBid: number | null;
+   topAsk: number | null;
+   spread: number | null;
+   openOrders: AsterOrder[];
+   desiredOrders: DesiredOrder[];
+   tradeLog: TradeLogEntry[];
    buyDepthSum10: number;
    sellDepthSum10: number;
    depthImbalance: 'balanced' | 'buy_dominant' | 'sell_dominant';
@@ -35,12 +42,9 @@ export interface OffsetMakerEngineSnapshot extends MakerEngineSnapshot {
    skipSellSide: boolean;
 }
 
-type MakerEvent = 'update';
-type MakerListener = (snapshot: OffsetMakerEngineSnapshot) => void;
-
 const EPS = 1e-5;
 
-export class OffsetMakerEngine {
+export class OffsetMakerEngine implements IStrategyEngine<OffsetMakerEngineSnapshot> {
    private accountSnapshot: AsterAccountSnapshot | null = null;
    private depthSnapshot: AsterDepth | null = null;
    private tickerSnapshot: AsterTicker | null = null;
@@ -52,7 +56,7 @@ export class OffsetMakerEngine {
    private readonly pendingCancelOrders = new Set<string>();
 
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
-   private readonly events = new StrategyEventEmitter<MakerEvent, OffsetMakerEngineSnapshot>();
+   private readonly events = new StrategyEventEmitter<EngineUpdateEvent, OffsetMakerEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
 
    private timer: ReturnType<typeof setInterval> | null = null;
@@ -97,11 +101,11 @@ export class OffsetMakerEngine {
       }
    }
 
-   on(event: MakerEvent, handler: MakerListener): void {
+   on(event: EngineUpdateEvent, handler: EngineListener<OffsetMakerEngineSnapshot>): void {
       this.events.on(event, handler);
    }
 
-   off(event: MakerEvent, handler: MakerListener): void {
+   off(event: EngineUpdateEvent, handler: EngineListener<OffsetMakerEngineSnapshot>): void {
       this.events.off(event, handler);
    }
 
@@ -109,7 +113,7 @@ export class OffsetMakerEngine {
       return this.buildSnapshot();
    }
 
-   private bootstrap(): void {
+   bootstrap(): void {
       const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
 
       safeSubscribe<AsterAccountSnapshot>(
@@ -379,6 +383,10 @@ export class OffsetMakerEngine {
 
    private async syncOrders(targets: DesiredOrder[]): Promise<void> {
       const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
+      const openOrders = availableOrders.filter((order) => {
+         const status = (order.status ?? '').toUpperCase();
+         return !status.includes('CLOSED') && !status.includes('FILLED') && !status.includes('CANCELED');
+      });
 
       // Coalesce reprices for entry orders: if within tick threshold or within dwell window, keep existing order
       const adjustedTargets: DesiredOrder[] = targets.map((t) => ({ ...t }));
@@ -401,7 +409,7 @@ export class OffsetMakerEngine {
          }
       }
 
-      const { toCancel, toPlace } = makeOrderPlan(availableOrders, adjustedTargets);
+      const { toCancel, toPlace } = makeOrderPlan(openOrders, adjustedTargets);
 
       for (const order of toCancel) {
          if (this.pendingCancelOrders.has(String(order.orderId))) { continue; }

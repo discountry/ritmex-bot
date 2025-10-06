@@ -1,6 +1,6 @@
 import ccxt, { type Balances, type Order as CcxtOrder, type OrderBook as CcxtOrderBook, type Ticker as CcxtTicker } from 'ccxt';
 import type { AccountListener, DepthListener, KlineListener, OrderListener, TickerListener } from '../adapter';
-import type { AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker, CreateOrderParams, OrderType } from '../types';
+import type { AsterAccountPosition, AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker, CreateOrderParams, OrderType } from '../types';
 
 export interface BackpackGatewayOptions {
    apiKey?: string;
@@ -16,6 +16,8 @@ export class BackpackGateway {
    private readonly exchange: any;
    private readonly symbol: string;
    private marketSymbol: string;
+   private market: any | null = null;
+   private isContractMarket = false;
    private readonly logger: (context: string, error: unknown) => void;
    private initialized = false;
    private initPromise: Promise<void> | null = null;
@@ -70,6 +72,8 @@ export class BackpackGateway {
             throw new Error(`Symbol ${requested} not found in Backpack markets`);
          }
          this.marketSymbol = resolved;
+         this.market = this.exchange.market(this.marketSymbol);
+         this.isContractMarket = Boolean(this.market?.contract);
 
          this.initialized = true;
          this.logger('initialize', `Backpack gateway initialized for ${this.marketSymbol}`);
@@ -158,8 +162,7 @@ export class BackpackGateway {
 
       const poll = async () => {
          try {
-            const balance = await this.exchange.fetchBalance();
-            const accountSnapshot = this.mapBalanceToAccountSnapshot(balance);
+            const accountSnapshot = await this.fetchAccountSnapshot();
 
             for (const listener of this.accountListeners) {
                listener(accountSnapshot);
@@ -285,6 +288,9 @@ export class BackpackGateway {
       if (params.reduceOnly !== undefined) {
          extraParams.reduceOnly = params.reduceOnly === 'true';
       }
+      if (params.closePosition !== undefined) {
+         extraParams.closePosition = params.closePosition === 'true';
+      }
 
       const order = await this.exchange.createOrder(symbol, type, side, amount, price, extraParams);
 
@@ -316,16 +322,158 @@ export class BackpackGateway {
 
    // Mapping functions
    private mapBalanceToAccountSnapshot(balance: Balances): AsterAccountSnapshot {
-      const positions: any[] = []; // Backpack is spot-only, no positions
-      const assets: any[] = [];
+      return this.mapBalanceToAccountSnapshotWithPositions(balance, []);
+   }
 
-      for (const [currency, amount] of Object.entries(balance)) {
-         if (typeof amount === 'object' && amount !== null) {
-            assets.push({ asset: currency, walletBalance: amount.total?.toString() || '0', availableBalance: amount.free?.toString() || '0', updateTime: Date.now() });
-         }
+   private async fetchAccountSnapshot(): Promise<AsterAccountSnapshot> {
+      await this.ensureInitialized();
+      const balancePromise = this.exchange.fetchBalance();
+      const positionsPromise = this.isContractMarket
+         ? this.exchange.fetchPositions([this.marketSymbol]).catch((error: unknown) => {
+            this.logger('fetchPositions', error);
+            return [];
+         })
+         : Promise.resolve([]);
+
+      const [balance, positions] = await Promise.all([balancePromise, positionsPromise]);
+      return this.mapBalanceToAccountSnapshotWithPositions(balance, positions ?? []);
+   }
+
+   private mapBalanceToAccountSnapshotWithPositions(balance: Balances, rawPositions: any[]): AsterAccountSnapshot {
+      const now = Date.now();
+      const assets = this.normalizeAssets(balance, now);
+      const positions = this.normalizePositions(rawPositions, now);
+
+      const totalWalletBalance = this.sumStrings(assets.map((asset) => asset.walletBalance));
+      const totalUnrealizedProfit = this.sumStrings(positions.map((position) => position.unrealizedProfit ?? '0'));
+      const availableBalance = this.sumStrings(assets.map((asset) => asset.availableBalance));
+
+      const snapshot: AsterAccountSnapshot = { canTrade: true, canDeposit: true, canWithdraw: true, updateTime: now, totalWalletBalance, totalUnrealizedProfit, positions, assets };
+
+      snapshot.availableBalance = availableBalance;
+      snapshot.maxWithdrawAmount = availableBalance;
+
+      if (this.isContractMarket) {
+         const totalMarginBalance = this.addStrings(totalWalletBalance, totalUnrealizedProfit);
+         snapshot.totalMarginBalance = totalMarginBalance;
+         snapshot.totalCrossWalletBalance = totalWalletBalance;
+         snapshot.totalCrossUnPnl = totalUnrealizedProfit;
       }
 
-      return { canTrade: true, canDeposit: true, canWithdraw: true, updateTime: Date.now(), totalWalletBalance: balance.total?.toString() || '0', totalUnrealizedProfit: '0', positions, assets };
+      return snapshot;
+   }
+
+   private normalizeAssets(balance: Balances, now: number): AsterAccountSnapshot['assets'] {
+      const metaKeys = new Set(['free', 'used', 'total', 'info', 'timestamp', 'datetime', 'debt']);
+      const assets: AsterAccountSnapshot['assets'] = [];
+
+      for (const [currency, value] of Object.entries(balance)) {
+         if (metaKeys.has(currency)) { continue; }
+         if (!value || typeof value !== 'object') { continue; }
+
+         const walletBalance = this.toStringAmount((value as any).total ?? (value as any).free ?? '0');
+         const availableBalance = this.toStringAmount((value as any).free ?? '0');
+
+         assets.push({ asset: currency, walletBalance, availableBalance, updateTime: now });
+      }
+
+      return assets;
+   }
+
+   private normalizePositions(rawPositions: any[], now: number): AsterAccountSnapshot['positions'] {
+      if (!Array.isArray(rawPositions)) { return []; }
+
+      const positions: AsterAccountSnapshot['positions'] = [];
+
+      for (const position of rawPositions) {
+         const info = position?.info ?? position ?? {};
+         const rawSymbol = position?.symbol ?? info.symbol ?? this.marketSymbol;
+         const rawContracts = position?.contracts ?? info.netExposureQuantity;
+         const derivedSide = (position?.side ?? info.side ?? this.deriveSideFromExposure(info)) ?? 'long';
+         const rawSide = derivedSide.toString().toLowerCase();
+         const quantity = this.toNumber(rawContracts);
+         if (!quantity) { continue; }
+
+         const side = rawSide === 'short' ? 'short' : 'long';
+         const signedQuantity = side === 'short' ? -Math.abs(quantity) : Math.abs(quantity);
+
+         const normalized: AsterAccountPosition = {
+            symbol: rawSymbol,
+            positionAmt: signedQuantity.toString(),
+            entryPrice: this.toStringAmount(position?.entryPrice ?? info.entryPrice ?? '0'),
+            unrealizedProfit: this.toStringAmount(position?.unrealizedPnl ?? info.pnlUnrealized ?? '0'),
+            positionSide: side === 'short' ? 'SHORT' : 'LONG',
+            updateTime: now,
+         };
+
+         const markPrice = this.toOptionalString(position?.markPrice ?? info.markPrice);
+         if (markPrice !== undefined) { normalized.markPrice = markPrice; }
+
+         const liquidationPrice = this.toOptionalString(position?.liquidationPrice ?? info.estLiquidationPrice);
+         if (liquidationPrice !== undefined) { normalized.liquidationPrice = liquidationPrice; }
+
+         const initialMargin = this.toOptionalString(position?.initialMargin ?? info.initialMargin);
+         if (initialMargin !== undefined) { normalized.initialMargin = initialMargin; }
+
+         const maintMargin = this.toOptionalString(position?.maintenanceMargin ?? info.maintenanceMargin);
+         if (maintMargin !== undefined) { normalized.maintMargin = maintMargin; }
+
+         const leverage = this.toOptionalString(position?.leverage ?? info.leverage);
+         if (leverage !== undefined) { normalized.leverage = leverage; }
+
+         normalized.marginType = 'CROSSED';
+
+         positions.push(normalized);
+      }
+
+      return positions;
+   }
+
+   private deriveSideFromExposure(info: Record<string, unknown>): 'long' | 'short' | 'flat' {
+      const exposure = this.toNumber(info?.netExposureNotional ?? info?.netCost ?? info?.netQuantity);
+      if (!exposure) { return 'flat'; }
+      return exposure < 0 ? 'short' : 'long';
+   }
+
+   private toStringAmount(value: unknown): string {
+      if (value === undefined || value === null) { return '0'; }
+      if (typeof value === 'string') {
+         if (value.trim() === '') { return '0'; }
+         return value;
+      }
+      if (typeof value === 'number') {
+         if (!Number.isFinite(value)) { return '0'; }
+         return value.toString();
+      }
+      return '0';
+   }
+
+   private toOptionalString(value: unknown): string | undefined {
+      const normalized = this.toStringAmount(value);
+      return normalized === '0' ? undefined : normalized;
+   }
+
+   private toNumber(value: unknown): number {
+      const asString = this.toStringAmount(value);
+      const parsed = Number(asString);
+      if (!Number.isFinite(parsed)) { return 0; }
+      return parsed;
+   }
+
+   private sumStrings(values: string[]): string {
+      let total = 0;
+      for (const value of values) {
+         const parsed = Number(value);
+         if (!Number.isFinite(parsed)) { continue; }
+         total += parsed;
+      }
+      return total.toString();
+   }
+
+   private addStrings(a: string, b: string): string {
+      const sum = Number(a) + Number(b);
+      if (!Number.isFinite(sum)) { return '0'; }
+      return sum.toString();
    }
 
    private mapOrderToAsterOrder(order: CcxtOrder): AsterOrder {

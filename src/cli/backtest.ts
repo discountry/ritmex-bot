@@ -64,7 +64,18 @@ function main() {
       const tf = tfStr as Timeframe;
       const tfCsv = `tests/data/${symbol}-${tf}.csv`;
       const tfPath = path.resolve(tfCsv);
-      const targetSeries = loadCsvOHLCV(tfPath, { symbol: symbol, expectHeader: true, columns: { time: 'time', open: 'open', high: 'high', low: 'low', close: 'close', volume: 'volume' } });
+      const targetSeries = loadCsvOHLCV(tfPath, {
+         symbol: symbol,
+         expectHeader: true,
+         columns: {
+            time: 'time', //
+            open: 'open',
+            high: 'high',
+            low: 'low',
+            close: 'close',
+            volume: 'volume',
+         },
+      });
       auxSeries[tf] = targetSeries;
    }
 
