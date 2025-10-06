@@ -98,6 +98,7 @@ export class GridEngine {
   >();
   private readonly pendingCancelKeys = new Set<string>();
   private statePersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private protectExistingOrdersUntil = 0;
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -229,6 +230,10 @@ export class GridEngine {
           ? orders.filter((order) => order.symbol === this.config.symbol)
           : [];
         this.synchronizeLocks(orders);
+        if (!this.feedArrived.orders) {
+          const bufferMs = Math.max(this.config.refreshIntervalMs * 2, 2000);
+          this.protectExistingOrdersUntil = Math.max(this.protectExistingOrdersUntil, this.now() + bufferMs);
+        }
         if (!this.feedArrived.orders) {
           this.feedArrived.orders = true;
           log("info", "订单快照已同步");
@@ -500,11 +505,17 @@ export class GridEngine {
   }
 
   private async syncGrid(price: number): Promise<void> {
+    const activeOrders = this.openOrders.filter((order) => order.symbol === this.config.symbol && order.type === "LIMIT");
+
+    // Keep level side assignment consistent with currently open orders to avoid churn on restart
+    this.buildLevelMeta(price);
+
+    this.backfillExposureFromOpenOrders(activeOrders);
+
     const desired = this.computeDesiredOrders(price);
     this.desiredOrders = desired;
 
     const desiredKeys = new Set(desired.map((order) => this.getOrderKey(order.side, order.price, order.reduceOnly)));
-    const activeOrders = this.openOrders.filter((order) => order.symbol === this.config.symbol && order.type === "LIMIT");
     const orderMap = new Map<string, AsterOrder>();
     const orderBookEntries = new Map<
       string,
@@ -526,6 +537,13 @@ export class GridEngine {
     }
 
     this.updateLevelExposure(orderBookEntries);
+
+    // During protection window, treat existing orders as desired to ensure no cancellations
+    if (this.now() < this.protectExistingOrdersUntil) {
+      for (const key of orderBookEntries.keys()) {
+        desiredKeys.add(key);
+      }
+    }
 
     for (const order of activeOrders) {
       const key = this.getOrderKey(order.side, this.normalizePrice(order.price), order.reduceOnly === true);
@@ -838,6 +856,8 @@ export class GridEngine {
         if (!this.sellLevelIndices.includes(level)) continue;
         if (value > EPSILON) this.shortExposure.set(level, value);
       }
+      const bufferMs = Math.max(this.config.refreshIntervalMs * 2, 2000);
+      this.protectExistingOrdersUntil = Math.max(this.protectExistingOrdersUntil, this.now() + bufferMs);
     } catch (error) {
       this.log("error", `读取网格状态失败: ${extractMessage(error)}`);
     }
@@ -954,11 +974,25 @@ export class GridEngine {
     this.sellLevelIndices.length = 0;
     if (!this.gridLevels.length) return;
     const pivotIndex = Math.floor(Math.max(this.gridLevels.length - 1, 0) / 2);
+    const anchorByLevel = new Map<number, { side: "BUY" | "SELL" }>();
+    if (Array.isArray(this.openOrders) && this.openOrders.length) {
+      for (const order of this.openOrders) {
+        if (order.symbol !== this.config.symbol || order.type !== "LIMIT") continue;
+        const level = this.resolveLevelIndex(Number(order.price));
+        if (level == null) continue;
+        if (!anchorByLevel.has(level)) {
+          anchorByLevel.set(level, { side: order.side });
+        }
+      }
+    }
     const hasReference = Number.isFinite(referencePrice ?? NaN);
     const pivotPrice = hasReference ? this.clampReferencePrice(Number(referencePrice)) : null;
     for (let i = 0; i < this.gridLevels.length; i += 1) {
       let side: "BUY" | "SELL";
-      if (pivotPrice != null) {
+      const anchor = anchorByLevel.get(i);
+      if (anchor) {
+        side = anchor.side;
+      } else if (pivotPrice != null) {
         side = this.gridLevels[i]! <= pivotPrice + EPSILON ? "BUY" : "SELL";
       } else {
         side = i <= pivotIndex ? "BUY" : "SELL";
@@ -1013,6 +1047,161 @@ export class GridEngine {
     for (const [key, entry] of currentOrders) {
       this.lastOrderBook.set(key, entry);
     }
+  }
+
+  private backfillExposureFromOpenOrders(activeOrders: AsterOrder[]): void {
+    if (!activeOrders.length) return;
+    const reduceSellByLevel = new Map<number, number>();
+    const reduceBuyByLevel = new Map<number, number>();
+
+    for (const order of activeOrders) {
+      if (order.reduceOnly !== true) continue;
+      const level = this.resolveLevelIndex(Number(order.price));
+      if (level == null) continue;
+      const remaining = Math.max(
+        0,
+        Number(order.origQty ?? 0) - Number(order.executedQty ?? 0)
+      );
+      if (remaining <= EPSILON) continue;
+      if (order.side === "SELL") {
+        reduceSellByLevel.set(level, (reduceSellByLevel.get(level) ?? 0) + remaining);
+      } else if (order.side === "BUY") {
+        reduceBuyByLevel.set(level, (reduceBuyByLevel.get(level) ?? 0) + remaining);
+      }
+    }
+
+    const longChanged = this.rebuildLongExposureFromReduceOrders(reduceSellByLevel);
+    const shortChanged = this.rebuildShortExposureFromReduceOrders(reduceBuyByLevel);
+
+    if (longChanged || shortChanged) {
+      this.schedulePersist();
+    }
+  }
+
+  private rebuildLongExposureFromReduceOrders(reduceOrders: Map<number, number>): boolean {
+    const actualLong = Math.max(this.position.positionAmt, 0);
+    if (actualLong <= EPSILON && !reduceOrders.size) {
+      if (this.longExposure.size) {
+        this.longExposure.clear();
+        return true;
+      }
+      return false;
+    }
+
+    const computed = new Map<number, number>();
+    let remaining = actualLong;
+
+    if (reduceOrders.size) {
+      const ordered = [...reduceOrders.entries()].sort((a, b) => a[0] - b[0]);
+      for (const [closeLevel, quantity] of ordered) {
+        if (remaining <= EPSILON) break;
+        const meta = this.levelMeta[closeLevel];
+        if (!meta || meta.side !== "SELL" || !meta.closeSources.length) continue;
+        const sources = [...meta.closeSources]
+          .filter((source) => this.buyLevelIndices.includes(source))
+          .sort((a, b) => b - a);
+        if (!sources.length) continue;
+        const toAllocate = Math.min(quantity, remaining);
+        if (toAllocate <= EPSILON) continue;
+        const allocated = this.distributeExposure(computed, sources, toAllocate);
+        remaining -= allocated;
+      }
+    }
+
+    if (remaining > EPSILON) {
+      const fallbackSources = [...this.buyLevelIndices].sort((a, b) => b - a);
+      const assigned = this.distributeExposure(computed, fallbackSources, remaining);
+      remaining -= assigned;
+    }
+
+    for (const [level, amount] of computed) {
+      if (amount <= EPSILON) {
+        computed.delete(level);
+      }
+    }
+
+    return this.replaceExposureMap(this.longExposure, computed);
+  }
+
+  private rebuildShortExposureFromReduceOrders(reduceOrders: Map<number, number>): boolean {
+    const actualShort = Math.max(-this.position.positionAmt, 0);
+    if (actualShort <= EPSILON && !reduceOrders.size) {
+      if (this.shortExposure.size) {
+        this.shortExposure.clear();
+        return true;
+      }
+      return false;
+    }
+
+    const computed = new Map<number, number>();
+    let remaining = actualShort;
+
+    if (reduceOrders.size) {
+      const ordered = [...reduceOrders.entries()].sort((a, b) => a[0] - b[0]);
+      for (const [closeLevel, quantity] of ordered) {
+        if (remaining <= EPSILON) break;
+        const meta = this.levelMeta[closeLevel];
+        if (!meta || meta.side !== "BUY" || !meta.closeSources.length) continue;
+        const sources = [...meta.closeSources]
+          .filter((source) => this.sellLevelIndices.includes(source))
+          .sort((a, b) => a - b);
+        if (!sources.length) continue;
+        const toAllocate = Math.min(quantity, remaining);
+        if (toAllocate <= EPSILON) continue;
+        const allocated = this.distributeExposure(computed, sources, toAllocate);
+        remaining -= allocated;
+      }
+    }
+
+    if (remaining > EPSILON) {
+      const fallbackSources = [...this.sellLevelIndices].sort((a, b) => a - b);
+      const assigned = this.distributeExposure(computed, fallbackSources, remaining);
+      remaining -= assigned;
+    }
+
+    for (const [level, amount] of computed) {
+      if (amount <= EPSILON) {
+        computed.delete(level);
+      }
+    }
+
+    return this.replaceExposureMap(this.shortExposure, computed);
+  }
+
+  private distributeExposure(target: Map<number, number>, sources: number[], amount: number): number {
+    if (amount <= EPSILON) return 0;
+    let remaining = amount;
+    let assigned = 0;
+    for (const level of sources) {
+      if (remaining <= EPSILON) break;
+      const current = target.get(level) ?? 0;
+      const capacity = Math.max(this.config.orderSize - current, 0);
+      if (capacity <= EPSILON) continue;
+      const toAssign = Math.min(capacity, remaining);
+      if (toAssign <= EPSILON) continue;
+      target.set(level, current + toAssign);
+      remaining -= toAssign;
+      assigned += toAssign;
+    }
+    return assigned;
+  }
+
+  private replaceExposureMap(target: Map<number, number>, source: Map<number, number>): boolean {
+    let changed = false;
+    for (const key of [...target.keys()]) {
+      if (!source.has(key)) {
+        target.delete(key);
+        changed = true;
+      }
+    }
+    for (const [key, value] of source) {
+      const current = target.get(key) ?? 0;
+      if (Math.abs(current - value) > EPSILON) {
+        target.set(key, value);
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   private applyFillDelta(

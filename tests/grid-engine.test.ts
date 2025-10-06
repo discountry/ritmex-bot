@@ -22,6 +22,7 @@ class StubAdapter implements ExchangeAdapter {
   public createdOrders: CreateOrderParams[] = [];
   public marketOrders: CreateOrderParams[] = [];
   public cancelAllCount = 0;
+  public cancelledOrders: Array<number | string> = [];
 
   supportsTrailingStops(): boolean {
     return false;
@@ -91,12 +92,12 @@ class StubAdapter implements ExchangeAdapter {
     return order;
   }
 
-  async cancelOrder(): Promise<void> {
-    // no-op
+  async cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void> {
+    this.cancelledOrders.push(params.orderId);
   }
 
-  async cancelOrders(): Promise<void> {
-    // no-op
+  async cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void> {
+    this.cancelledOrders.push(...params.orderIdList);
   }
 
   async cancelAllOrders(): Promise<void> {
@@ -285,6 +286,62 @@ describe("GridEngine", () => {
     const closeOrder = desired.find((order) => order.reduceOnly && order.side === "SELL");
     expect(closeOrder).toBeTruthy();
     expect(closeOrder!.amount).toBeCloseTo(baseConfig.orderSize);
+
+    engine.stop();
+  });
+
+  it("restores exposures from existing reduce-only orders on restart", async () => {
+    const adapter = new StubAdapter();
+    const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize * 2));
+
+    const reduceOrder: AsterOrder = {
+      orderId: "existing-reduce",
+      clientOrderId: "existing-reduce",
+      symbol: baseConfig.symbol,
+      side: "SELL",
+      type: "LIMIT",
+      status: "NEW",
+      price: baseConfig.upperPrice.toFixed(1),
+      origQty: (baseConfig.orderSize * 2).toString(),
+      executedQty: "0",
+      stopPrice: "0",
+      time: Date.now(),
+      updateTime: Date.now(),
+      reduceOnly: true,
+      closePosition: false,
+    };
+
+    adapter.emitOrders([reduceOrder]);
+    adapter.emitTicker({
+      symbol: baseConfig.symbol,
+      lastPrice: "150",
+      openPrice: "150",
+      highPrice: "150",
+      lowPrice: "150",
+      volume: "0",
+      quoteVolume: "0",
+    });
+
+    await (engine as any).syncGrid(150);
+
+    const longExposure: Map<number, number> = (engine as any).longExposure;
+    const buyIndices: number[] = (engine as any).buyLevelIndices;
+
+    const totalExposure = [...longExposure.values()].reduce((acc, qty) => acc + qty, 0);
+    expect(totalExposure).toBeCloseTo(baseConfig.orderSize * 2, 6);
+    expect(longExposure.get(buyIndices.slice(-1)[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
+    expect(longExposure.get(buyIndices[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
+
+    const snapshot = engine.getSnapshot();
+    const reduceDesired = snapshot.desiredOrders.find(
+      (order) => order.reduceOnly && order.side === "SELL"
+    );
+    expect(reduceDesired).toBeTruthy();
+    expect(reduceDesired!.amount).toBeCloseTo(baseConfig.orderSize * 2, 6);
+    expect(Number(reduceDesired!.price)).toBeCloseTo(baseConfig.upperPrice, 6);
+    expect(adapter.cancelledOrders).toHaveLength(0);
 
     engine.stop();
   });
