@@ -46,7 +46,7 @@ function createEvent<T>(): SimpleEvent<T> {
 
 function isLighterEnvironment(value: string | undefined | null): value is LighterEnvironment {
    if (!value) { return false; }
-   return  Object.hasOwn(LIGHTER_HOSTS, value);
+   return Object.hasOwn(LIGHTER_HOSTS, value);
 }
 
 function detectEnvironmentFromUrl(baseUrl: string | undefined | null): LighterEnvironment | null {

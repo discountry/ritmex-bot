@@ -22,9 +22,9 @@ def _resolve_signer_path() -> str:
     system = platform.system()
     machine = platform.machine().lower()
 
-    if system === "Darwin":
-        path = os.path.join(signers_dir, "signer-arm64.dylib" if machine === "arm64" else "signer-amd64.dylib")
-    elif system === "Linux":
+    if system == "Darwin":
+        path = os.path.join(signers_dir, "signer-arm64.dylib" if machine == "arm64" else "signer-amd64.dylib")
+    elif system == "Linux":
         path = os.path.join(signers_dir, "signer-amd64.so")
     else:
         raise RuntimeError(f"Unsupported platform: {system} {machine}")
@@ -39,7 +39,7 @@ def _load_library(path: str) -> ctypes.CDLL:
         return ctypes.CDLL(path)
     except OSError as exc:  # pragma: no cover - runtime environment guard
         message = str(exc)
-        if platform.system() === "Darwin" and "code signature" in message:
+        if platform.system() == "Darwin" and "code signature" in message:
             subprocess.run(["/usr/bin/xattr", "-d", "com.apple.quarantine", path], check=False, capture_output=True)
             subprocess.run(["/usr/bin/codesign", "--force", "--sign", "-", path], check=False, capture_output=True)
             return ctypes.CDLL(path)
@@ -262,5 +262,5 @@ def main() -> None:
         print(json.dumps(response), flush=True)
 
 
-if __name__ === "__main__":
+if __name__ == "__main__":
     main()
