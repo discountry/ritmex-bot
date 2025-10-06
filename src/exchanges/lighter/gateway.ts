@@ -660,7 +660,13 @@ export class LighterGateway {
 
   private emitAccount(): void {
     if (!this.accountDetails) return;
-    const snapshot = toAccountSnapshot(this.displaySymbol, this.accountDetails, this.positions);
+    const snapshot = toAccountSnapshot(
+      this.displaySymbol,
+      this.accountDetails,
+      this.positions,
+      [],
+      { marketSymbol: this.marketSymbol, marketId: this.marketId }
+    );
     this.accountEvent.emit(snapshot);
   }
 
