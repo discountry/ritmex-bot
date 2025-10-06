@@ -56,3 +56,24 @@ export async function saveGridState(snapshot: StoredGridState): Promise<void> {
   map[snapshot.symbol] = snapshot;
   await fs.writeFile(GRID_FILE, JSON.stringify(map, null, 2), "utf8");
 }
+
+export async function clearGridState(symbol: string): Promise<void> {
+  const map = await readStateFile();
+  if (!Object.prototype.hasOwnProperty.call(map, symbol)) {
+    return;
+  }
+  delete map[symbol];
+  const entries = Object.keys(map);
+  if (!entries.length) {
+    try {
+      await fs.unlink(GRID_FILE);
+    } catch (error: any) {
+      if (!error || (error.code !== "ENOENT" && error.code !== "ENOTDIR")) {
+        throw error;
+      }
+    }
+    return;
+  }
+  await ensureDataDir();
+  await fs.writeFile(GRID_FILE, JSON.stringify(map, null, 2), "utf8");
+}

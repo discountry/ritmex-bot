@@ -17,7 +17,7 @@ import {
 import { safeCancelOrder } from "../core/lib/orders";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
-import { loadGridState, saveGridState, type StoredGridState } from "./common/grid-storage";
+import { clearGridState, loadGridState, saveGridState, type StoredGridState } from "./common/grid-storage";
 
 interface DesiredGridOrder {
   level: number;
@@ -128,6 +128,9 @@ export class GridEngine {
   private running: boolean;
   private stopReason: string | null = null;
   private lastUpdated: number | null = null;
+  private freshStartActive = false;
+  private pendingInitialSideAssignment = false;
+  private positionAlignHoldUntil = 0;
 
   constructor(private readonly config: GridConfig, private readonly exchange: ExchangeAdapter, options: EngineOptions = {}) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -209,6 +212,7 @@ export class GridEngine {
           log("info", "账户快照已同步");
         }
         this.feedStatus.account = true;
+        this.evaluateFreshStart();
         this.emitUpdate();
       },
       log,
@@ -230,6 +234,7 @@ export class GridEngine {
           log("info", "订单快照已同步");
         }
         this.feedStatus.orders = true;
+        this.evaluateFreshStart();
         this.emitUpdate();
       },
       log,
@@ -248,6 +253,7 @@ export class GridEngine {
           log("info", "盘口深度已同步");
         }
         this.feedStatus.depth = true;
+        this.tryAssignInitialSidesFromPrice();
       },
       log,
       {
@@ -265,6 +271,7 @@ export class GridEngine {
           log("info", "行情推送已同步");
         }
         this.feedStatus.ticker = true;
+        this.tryAssignInitialSidesFromPrice();
         this.emitUpdate();
       },
       log,
@@ -291,6 +298,7 @@ export class GridEngine {
     if (this.processing) return;
     this.processing = true;
     try {
+      this.tryAssignInitialSidesFromPrice();
       if (!this.running) {
         await this.tryRestart();
         return;
@@ -322,6 +330,92 @@ export class GridEngine {
 
   private getReferencePrice(): number | null {
     return getMidOrLast(this.depthSnapshot, this.tickerSnapshot);
+  }
+
+  private evaluateFreshStart(): void {
+    if (!this.feedStatus.account || !this.feedStatus.orders) return;
+    const hasPosition = Math.abs(this.position.positionAmt) > EPSILON;
+    const hasOrders = this.hasActiveOrders();
+    if (!hasPosition && !hasOrders) {
+      if (!this.freshStartActive) {
+        this.freshStartActive = true;
+        this.handleFreshStart();
+      }
+      return;
+    }
+    this.freshStartActive = false;
+    this.pendingInitialSideAssignment = false;
+  }
+
+  private handleFreshStart(): void {
+    this.log("info", "检测到无持仓且无挂单，重置本地网格状态");
+    this.longExposure.clear();
+    this.shortExposure.clear();
+    this.lastOrderBook.clear();
+    this.pendingCancelKeys.clear();
+    this.desiredOrders = [];
+    this.positionAlignHoldUntil = 0;
+    if (this.statePersistTimer) {
+      clearTimeout(this.statePersistTimer);
+      this.statePersistTimer = null;
+    }
+    void this.clearPersistedGridState();
+    const assigned = this.assignInitialSidesFromPrice();
+    this.pendingInitialSideAssignment = !assigned;
+    if (!assigned) {
+      this.log("info", "等待行情价格以完成网格方向初始化");
+    }
+    this.emitUpdate();
+  }
+
+  private assignInitialSidesFromPrice(): boolean {
+    const reference = this.getReferencePrice();
+    if (!Number.isFinite(reference) || reference == null) {
+      return false;
+    }
+    const price = this.clampReferencePrice(Number(reference));
+    this.buildLevelMeta(price);
+    return true;
+  }
+
+  private tryAssignInitialSidesFromPrice(): void {
+    if (!this.pendingInitialSideAssignment) return;
+    if (!this.freshStartActive) return;
+    if (this.assignInitialSidesFromPrice()) {
+      this.pendingInitialSideAssignment = false;
+      this.emitUpdate();
+    }
+  }
+
+  private clampReferencePrice(price: number): number {
+    if (!this.gridLevels.length) return price;
+    const minLevel = this.gridLevels[0]!;
+    const maxLevel = this.gridLevels[this.gridLevels.length - 1]!;
+    return Math.min(Math.max(price, minLevel), maxLevel);
+  }
+
+  private async clearPersistedGridState(): Promise<void> {
+    try {
+      await clearGridState(this.config.symbol);
+    } catch (error) {
+      this.log("error", `清理本地网格状态失败: ${extractMessage(error)}`);
+    }
+  }
+
+  private hasActiveOrders(): boolean {
+    return this.openOrders.some((order) => {
+      if (order.symbol !== this.config.symbol) return false;
+      if (order.type && order.type !== "LIMIT") return false;
+      const status = typeof order.status === "string" ? order.status.toUpperCase() : null;
+      if (!status) return true;
+      return !["FILLED", "CANCELED", "CANCELLED", "REJECTED", "EXPIRED"].includes(status);
+    });
+  }
+
+  private deferPositionAlignment(): void {
+    const buffer = Math.max(this.config.refreshIntervalMs * 2, 1000);
+    const deadline = this.now() + buffer;
+    this.positionAlignHoldUntil = Math.max(this.positionAlignHoldUntil, deadline);
   }
 
   private shouldStop(price: number): boolean {
@@ -839,14 +933,21 @@ export class GridEngine {
     return null;
   }
 
-  private buildLevelMeta(): void {
+  private buildLevelMeta(referencePrice?: number | null): void {
     this.levelMeta.length = 0;
     this.buyLevelIndices.length = 0;
     this.sellLevelIndices.length = 0;
     if (!this.gridLevels.length) return;
     const pivotIndex = Math.floor(Math.max(this.gridLevels.length - 1, 0) / 2);
+    const hasReference = Number.isFinite(referencePrice ?? NaN);
+    const pivotPrice = hasReference ? this.clampReferencePrice(Number(referencePrice)) : null;
     for (let i = 0; i < this.gridLevels.length; i += 1) {
-      const side: "BUY" | "SELL" = i <= pivotIndex ? "BUY" : "SELL";
+      let side: "BUY" | "SELL";
+      if (pivotPrice != null) {
+        side = this.gridLevels[i]! <= pivotPrice + EPSILON ? "BUY" : "SELL";
+      } else {
+        side = i <= pivotIndex ? "BUY" : "SELL";
+      }
       const meta: LevelMeta = {
         index: i,
         price: this.gridLevels[i]!,
@@ -922,35 +1023,48 @@ export class GridEngine {
   private alignExposureWithPosition(): void {
     const actualLong = Math.max(this.position.positionAmt, 0);
     const trackedLong = this.sumExposure(this.longExposure);
-    if (Math.abs(trackedLong - actualLong) > EPSILON) {
-      this.longExposure.clear();
-      let remaining = actualLong;
-      for (const level of [...this.buyLevelIndices].sort((a, b) => b - a)) {
-        if (remaining <= EPSILON) break;
-        const qty = Math.min(this.config.orderSize, remaining);
-        if (qty > EPSILON) {
-          this.longExposure.set(level, qty);
-          remaining -= qty;
-        }
-      }
-      this.schedulePersist();
-    }
-
     const actualShort = Math.max(-this.position.positionAmt, 0);
     const trackedShort = this.sumExposure(this.shortExposure);
-    if (Math.abs(trackedShort - actualShort) > EPSILON) {
-      this.shortExposure.clear();
-      let remaining = actualShort;
-      for (const level of [...this.sellLevelIndices].sort((a, b) => a - b)) {
-        if (remaining <= EPSILON) break;
-        const qty = Math.min(this.config.orderSize, remaining);
-        if (qty > EPSILON) {
-          this.shortExposure.set(level, qty);
-          remaining -= qty;
-        }
-      }
-      this.schedulePersist();
+    const tolerance = Math.max(this.config.qtyStep * 0.25, EPSILON);
+    const now = this.now();
+
+    const longDiff = actualLong - trackedLong;
+    if (longDiff > tolerance || (longDiff < -tolerance && now >= this.positionAlignHoldUntil)) {
+      this.resyncLongExposure(actualLong);
     }
+
+    const shortDiff = actualShort - trackedShort;
+    if (shortDiff > tolerance || (shortDiff < -tolerance && now >= this.positionAlignHoldUntil)) {
+      this.resyncShortExposure(actualShort);
+    }
+  }
+
+  private resyncLongExposure(total: number): void {
+    this.longExposure.clear();
+    let remaining = total;
+    for (const level of [...this.buyLevelIndices].sort((a, b) => b - a)) {
+      if (remaining <= EPSILON) break;
+      const qty = Math.min(this.config.orderSize, remaining);
+      if (qty > EPSILON) {
+        this.longExposure.set(level, qty);
+        remaining -= qty;
+      }
+    }
+    this.schedulePersist();
+  }
+
+  private resyncShortExposure(total: number): void {
+    this.shortExposure.clear();
+    let remaining = total;
+    for (const level of [...this.sellLevelIndices].sort((a, b) => a - b)) {
+      if (remaining <= EPSILON) break;
+      const qty = Math.min(this.config.orderSize, remaining);
+      if (qty > EPSILON) {
+        this.shortExposure.set(level, qty);
+        remaining -= qty;
+      }
+    }
+    this.schedulePersist();
   }
 
   private incrementLongExposure(level: number, quantity: number): void {
@@ -960,12 +1074,14 @@ export class GridEngine {
     if (next <= EPSILON) {
       if (this.longExposure.has(level)) {
         this.longExposure.delete(level);
+        this.deferPositionAlignment();
         this.schedulePersist();
       }
       return;
     }
     if (Math.abs(next - current) <= EPSILON) return;
     this.longExposure.set(level, next);
+    this.deferPositionAlignment();
     this.schedulePersist();
   }
 
@@ -976,12 +1092,14 @@ export class GridEngine {
     if (next <= EPSILON) {
       if (this.shortExposure.has(level)) {
         this.shortExposure.delete(level);
+        this.deferPositionAlignment();
         this.schedulePersist();
       }
       return;
     }
     if (Math.abs(next - current) <= EPSILON) return;
     this.shortExposure.set(level, next);
+    this.deferPositionAlignment();
     this.schedulePersist();
   }
 
@@ -989,6 +1107,7 @@ export class GridEngine {
     if (quantity <= EPSILON) return;
     const sources = this.levelMeta[closeLevel]?.closeSources ?? [];
     let remaining = quantity;
+    let consumedAny = false;
     for (const source of [...sources].sort((a, b) => b - a)) {
       if (remaining <= EPSILON) break;
       const current = this.longExposure.get(source) ?? 0;
@@ -998,7 +1117,11 @@ export class GridEngine {
       if (next <= EPSILON) this.longExposure.delete(source);
       else this.longExposure.set(source, next);
       remaining -= consumed;
+      if (consumed > EPSILON) consumedAny = true;
       this.schedulePersist();
+    }
+    if (consumedAny) {
+      this.deferPositionAlignment();
     }
   }
 
@@ -1006,6 +1129,7 @@ export class GridEngine {
     if (quantity <= EPSILON) return;
     const sources = this.levelMeta[closeLevel]?.closeSources ?? [];
     let remaining = quantity;
+    let consumedAny = false;
     for (const source of [...sources].sort((a, b) => a - b)) {
       if (remaining <= EPSILON) break;
       const current = this.shortExposure.get(source) ?? 0;
@@ -1015,7 +1139,11 @@ export class GridEngine {
       if (next <= EPSILON) this.shortExposure.delete(source);
       else this.shortExposure.set(source, next);
       remaining -= consumed;
+      if (consumed > EPSILON) consumedAny = true;
       this.schedulePersist();
+    }
+    if (consumedAny) {
+      this.deferPositionAlignment();
     }
   }
 
