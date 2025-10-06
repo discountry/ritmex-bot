@@ -14,6 +14,7 @@
 ## 文档索引
 - [English README](README_en.md)
 - [简明上手指南（零基础）](simple-readme.md)
+- [基础网格策略使用教程](grid-trading.md)
 
 ## 核心特性
 - **实时行情与风控**：Websocket + REST 自动同步账户、挂单与仓位，断线后自动恢复。

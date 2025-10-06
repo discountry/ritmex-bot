@@ -114,6 +114,12 @@ export async function deduplicateOrders(
   }
 }
 
+type PlaceOrderOptions = {
+  priceTick: number;
+  qtyStep: number;
+  skipDedupe?: boolean;
+};
+
 export async function placeOrder(
   adapter: ExchangeAdapter,
   symbol: string,
@@ -127,7 +133,7 @@ export async function placeOrder(
   log: LogHandler,
   reduceOnly = false,
   guard?: OrderGuardOptions,
-  opts?: { priceTick: number; qtyStep: number }
+  opts?: PlaceOrderOptions
 ): Promise<AsterOrder | undefined> {
   const type = "LIMIT";
   if (isOperating(locks, type)) return;
@@ -144,7 +150,9 @@ export async function placeOrder(
     timeInForce: "GTX",
   };
   if (reduceOnly) params.reduceOnly = "true";
-  await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
+  if (!opts?.skipDedupe) {
+    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
+  }
   lockOperating(locks, timers, pendings, type, log);
   try {
     const order = await adapter.createOrder(params);

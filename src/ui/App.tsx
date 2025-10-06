@@ -3,13 +3,14 @@ import { Box, Text, useInput } from "ink";
 import { TrendApp } from "./TrendApp";
 import { MakerApp } from "./MakerApp";
 import { OffsetMakerApp } from "./OffsetMakerApp";
+import { GridApp } from "./GridApp";
 import { BasisApp } from "./BasisApp";
 import { isBasisStrategyEnabled } from "../config";
 import { loadCopyrightFragments, verifyCopyrightIntegrity } from "../utils/copyright";
 import { resolveExchangeId } from "../exchanges/create-adapter";
 
 interface StrategyOption {
-  id: "trend" | "maker" | "offset-maker" | "basis";
+  id: "trend" | "maker" | "offset-maker" | "basis" | "grid";
   label: string;
   description: string;
   component: React.ComponentType<{ onExit: () => void }>;
@@ -27,6 +28,12 @@ const BASE_STRATEGIES: StrategyOption[] = [
     label: "做市刷单策略",
     description: "双边挂单提供流动性，自动追价与风控止损",
     component: MakerApp,
+  },
+  {
+    id: "grid",
+    label: "基础网格策略",
+    description: "在上下边界之间布设等比网格，自动加仓与减仓",
+    component: GridApp,
   },
   {
     id: "offset-maker",
