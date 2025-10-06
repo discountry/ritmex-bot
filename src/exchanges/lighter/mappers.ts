@@ -140,9 +140,21 @@ export function toAccountSnapshot(
   symbol: string,
   details: LighterAccountDetails,
   positions: LighterPosition[] = [],
-  assets: AsterAccountAsset[] = []
+  assets: AsterAccountAsset[] = [],
+  options?: { marketSymbol?: string | null; marketId?: number | null }
 ): AsterAccountSnapshot {
-  const transformedPositions = positions.map((position) => lighterPositionToAster(symbol, position));
+  const targetSymbol = options?.marketSymbol?.toUpperCase();
+  const targetMarketId = options?.marketId;
+  const filteredPositions = positions.filter((position) => {
+    const marketMatches =
+      targetMarketId == null ||
+      (Number.isFinite(Number(position.market_id)) && Number(position.market_id) === Number(targetMarketId));
+    const symbolMatches =
+      !targetSymbol ||
+      (typeof position.symbol === "string" && position.symbol.toUpperCase() === targetSymbol);
+    return marketMatches && symbolMatches;
+  });
+  const transformedPositions = filteredPositions.map((position) => lighterPositionToAster(symbol, position));
   const aggregateUnrealized = transformedPositions.reduce((acc, pos) => acc + Number(pos.unrealizedProfit ?? 0), 0);
   const assetList = assets.length ? assets : defaultAsset(details);
   return {

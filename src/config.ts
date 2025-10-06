@@ -10,8 +10,20 @@
  * - BACKPACK_SANDBOX: Set to "true" for sandbox mode
  * - BACKPACK_DEBUG: Set to "true" for debug logging
  * 
+ * Environment Variables for Paradex Exchange:
+ * - PARADEX_PRIVATE_KEY: Required EVM private key for REST/WS authentication
+ * - PARADEX_WALLET_ADDRESS: Required wallet address matching the private key
+ * - PARADEX_SYMBOL: Override symbol (defaults to TRADE_SYMBOL)
+ * - PARADEX_SANDBOX: Set to "true" to use testnet endpoints
+ * - PARADEX_USE_PRO: Set to "false" to disable ccxt.pro websocket feeds
+ * - PARADEX_RECONNECT_DELAY_MS: Optional websocket reconnect delay in ms (default 2000)
+ * - PARADEX_DEBUG: Set to "true" for verbose Paradex adapter logging
+ *
  * Usage: Set EXCHANGE=backpack to use Backpack exchange
+ *        Set EXCHANGE=paradex to use Paradex exchange
  */
+
+import { resolveExchangeId, type SupportedExchangeId } from "./exchanges/create-adapter";
 
 export interface TradingConfig {
   symbol: string;
@@ -32,6 +44,28 @@ export interface TradingConfig {
   minBollingerBandwidth: number;
 }
 
+const SYMBOL_PRIORITY_BY_EXCHANGE: Record<SupportedExchangeId, { envKeys: string[]; fallback: string }> = {
+  aster: { envKeys: ["ASTER_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDT" },
+  grvt: { envKeys: ["GRVT_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDT" },
+  lighter: { envKeys: ["LIGHTER_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDT" },
+  backpack: { envKeys: ["BACKPACK_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDC" },
+  paradex: { envKeys: ["PARADEX_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC/USDC" },
+};
+
+export function resolveSymbolFromEnv(explicitExchangeId?: SupportedExchangeId | string | null): string {
+  const exchangeId = explicitExchangeId
+    ? resolveExchangeId(explicitExchangeId)
+    : resolveExchangeId();
+  const { envKeys, fallback } = SYMBOL_PRIORITY_BY_EXCHANGE[exchangeId];
+  for (const key of envKeys) {
+    const value = process.env[key];
+    if (value && value.trim()) {
+      return value.trim();
+    }
+  }
+  return fallback;
+}
+
 function parseNumber(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const next = Number(value);
@@ -39,7 +73,7 @@ function parseNumber(value: string | undefined, fallback: number): number {
 }
 
 export const tradingConfig: TradingConfig = {
-  symbol: process.env.TRADE_SYMBOL ?? "BTCUSDT",
+  symbol: resolveSymbolFromEnv(),
   tradeAmount: parseNumber(process.env.TRADE_AMOUNT, 0.001),
   lossLimit: parseNumber(process.env.LOSS_LIMIT, 0.03),
   trailingProfit: parseNumber(process.env.TRAILING_PROFIT, 0.2),
@@ -70,7 +104,7 @@ export interface MakerConfig {
 }
 
 export const makerConfig: MakerConfig = {
-  symbol: process.env.TRADE_SYMBOL ?? "BTCUSDT",
+  symbol: resolveSymbolFromEnv(),
   tradeAmount: parseNumber(process.env.TRADE_AMOUNT, 0.001),
   lossLimit: parseNumber(process.env.MAKER_LOSS_LIMIT, parseNumber(process.env.LOSS_LIMIT, 0.03)),
   bidOffset: parseNumber(process.env.MAKER_BID_OFFSET, 0),

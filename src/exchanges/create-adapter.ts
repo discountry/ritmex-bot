@@ -4,6 +4,7 @@ import { GrvtExchangeAdapter, type GrvtCredentials } from "./grvt/adapter";
 import { LighterExchangeAdapter, type LighterCredentials } from "./lighter/adapter";
 import { BackpackExchangeAdapter, type BackpackCredentials } from "./backpack/adapter";
 import { EdgeXExchangeAdapter, type EdgeXCredentials } from "./edgex/adapter";
+import { ParadexExchangeAdapter, type ParadexCredentials } from "./paradex/adapter";
 
 export interface ExchangeFactoryOptions {
   symbol: string;
@@ -13,9 +14,10 @@ export interface ExchangeFactoryOptions {
   lighter?: LighterCredentials;
   backpack?: BackpackCredentials;
   edgex?: EdgeXCredentials;
+  paradex?: ParadexCredentials;
 }
 
-export type SupportedExchangeId = "aster" | "grvt" | "lighter" | "backpack" | "edgex";
+export type SupportedExchangeId = "aster" | "grvt" | "lighter" | "backpack" | "edgex" | "paradex";
 
 export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   const fallback = (value ?? process.env.EXCHANGE ?? process.env.TRADE_EXCHANGE ?? "aster")
@@ -26,6 +28,7 @@ export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   if (fallback === "lighter") return "lighter";
   if (fallback === "backpack") return "backpack";
   if (fallback === "edgex") return "edgex";
+  if (fallback === "paradex") return "paradex";
   return "aster";
 }
 
@@ -34,6 +37,7 @@ export function getExchangeDisplayName(id: SupportedExchangeId): string {
   if (id === "lighter") return "Lighter";
   if (id === "backpack") return "Backpack";
   if (id === "edgex") return "EdgeX";
+  if (id === "paradex") return "Paradex";
   return "AsterDex";
 }
 
@@ -50,6 +54,9 @@ export function createExchangeAdapter(options: ExchangeFactoryOptions): Exchange
   }
   if (id === "edgex") {
     return new EdgeXExchangeAdapter(options.symbol, options.edgex);
+  }
+  if (id === "paradex") {
+    return new ParadexExchangeAdapter({ ...options.paradex, symbol: options.symbol });
   }
   return new AsterExchangeAdapter({ ...options.aster, symbol: options.symbol });
 }

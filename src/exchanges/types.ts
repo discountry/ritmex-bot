@@ -21,6 +21,7 @@ export interface CreateOrderParams {
   timeInForce?: TimeInForce;
   reduceOnly?: StringBoolean;
   closePosition?: StringBoolean;
+  triggerType?: "UNSPECIFIED" | "TAKE_PROFIT" | "STOP_LOSS";
 }
 
 export interface AsterAccountPosition {
