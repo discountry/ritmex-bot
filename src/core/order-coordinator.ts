@@ -242,6 +242,8 @@ export async function placeStopLossOrder(
     timeInForce: "GTC",
     quantity: roundQtyDownToStep(quantity, qtyStep),
   };
+  // 部分交易所（例如 Paradex）要求 STOP_MARKET 同时提供 price 字段
+  params.price = params.stopPrice;
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
   lockOperating(locks, timers, pendings, type, log);
   try {

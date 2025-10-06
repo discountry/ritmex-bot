@@ -1,11 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { makerConfig } from "../config";
-import {
-  createExchangeAdapter,
-  getExchangeDisplayName,
-  resolveExchangeId,
-} from "../exchanges/create-adapter";
+import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
+import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
 import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
@@ -35,26 +32,7 @@ export function OffsetMakerApp({ onExit }: OffsetMakerAppProps) {
 
   useEffect(() => {
     try {
-      let adapter;
-      if (exchangeId === "aster") {
-        const apiKey = process.env.ASTER_API_KEY;
-        const apiSecret = process.env.ASTER_API_SECRET;
-        if (!apiKey || !apiSecret) {
-          setError(new Error("缺少 ASTER_API_KEY 或 ASTER_API_SECRET 环境变量"));
-          return;
-        }
-        adapter = createExchangeAdapter({
-          exchange: exchangeId,
-          symbol: makerConfig.symbol,
-          aster: { apiKey, apiSecret },
-        });
-      } else {
-        adapter = createExchangeAdapter({
-          exchange: exchangeId,
-          symbol: makerConfig.symbol,
-          grvt: { symbol: makerConfig.symbol },
-        });
-      }
+      const adapter = buildAdapterFromEnv({ exchangeId, symbol: makerConfig.symbol });
       const engine = new OffsetMakerEngine(makerConfig, adapter);
       engineRef.current = engine;
       setSnapshot(engine.getSnapshot());

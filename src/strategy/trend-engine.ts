@@ -242,6 +242,8 @@ export class TrendEngine {
       this.exchange.watchKlines.bind(this.exchange, this.config.symbol, this.config.klineInterval),
       (klines) => {
         this.klineSnapshot = Array.isArray(klines) ? klines : [];
+        const latestSma = getSMA(this.klineSnapshot, 30);
+        this.lastSma30 = latestSma;
         this.logKlineSnapshot();
         this.emitUpdate();
       },

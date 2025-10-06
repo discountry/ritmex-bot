@@ -449,6 +449,10 @@ export class OffsetMakerEngine {
 
   private async syncOrders(targets: DesiredOrder[]): Promise<void> {
     const availableOrders = this.openOrders.filter((o) => !this.pendingCancelOrders.has(String(o.orderId)));
+    const openOrders = availableOrders.filter((order) => {
+      const status = (order.status ?? "").toUpperCase();
+      return !status.includes("CLOSED") && !status.includes("FILLED") && !status.includes("CANCELED");
+    });
 
     // Coalesce reprices for entry orders: if within tick threshold or within dwell window, keep existing order
     const adjustedTargets: DesiredOrder[] = targets.map((t) => ({ ...t }));
@@ -474,7 +478,7 @@ export class OffsetMakerEngine {
       }
     }
 
-    const { toCancel, toPlace } = makeOrderPlan(availableOrders, adjustedTargets);
+    const { toCancel, toPlace } = makeOrderPlan(openOrders, adjustedTargets);
 
     for (const order of toCancel) {
       if (this.pendingCancelOrders.has(String(order.orderId))) continue;
