@@ -133,6 +133,7 @@ export interface GridConfig {
   restartTriggerPct: number;
   autoRestart: boolean;
   gridMode: "geometric";
+  maxCloseSlippagePct: number;
 }
 
 const resolveBasisSymbol = (envKeys: string[], fallback: string): string => {
@@ -191,6 +192,13 @@ export const gridConfig: GridConfig = {
   restartTriggerPct: Math.max(0, parseNumber(process.env.GRID_RESTART_TRIGGER_PCT, 0.01)),
   autoRestart: parseBoolean(process.env.GRID_AUTO_RESTART_ENABLED ?? process.env.GRID_ENABLE_AUTO_RESTART, true),
   gridMode: "geometric",
+  maxCloseSlippagePct: Math.max(
+    0,
+    parseNumber(
+      process.env.GRID_MAX_CLOSE_SLIPPAGE_PCT ?? process.env.MAX_CLOSE_SLIPPAGE_PCT,
+      0.05
+    )
+  ),
 };
 
 gridConfig.maxPositionSize = resolveGridMaxPosition(gridConfig.orderSize, gridConfig.gridLevels);

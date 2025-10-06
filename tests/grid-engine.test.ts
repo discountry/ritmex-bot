@@ -145,6 +145,7 @@ describe("GridEngine", () => {
     restartTriggerPct: 0.01,
     autoRestart: true,
     gridMode: "geometric",
+    maxCloseSlippagePct: 0.05,
   };
 
   it("creates geometric desired orders when running in both directions", async () => {

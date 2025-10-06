@@ -17,6 +17,7 @@ import {
 import { safeCancelOrder } from "../core/lib/orders";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
+import { loadGridState, saveGridState, type StoredGridState } from "./common/grid-storage";
 
 interface DesiredGridOrder {
   level: number;
@@ -96,6 +97,7 @@ export class GridEngine {
     { side: "BUY" | "SELL"; level: number; quantity: number; reduceOnly: boolean }
   >();
   private readonly pendingCancelKeys = new Set<string>();
+  private statePersistTimer: ReturnType<typeof setTimeout> | null = null;
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -135,6 +137,7 @@ export class GridEngine {
     this.configValid = this.validateConfig();
     this.gridLevels = this.computeGridLevels();
     this.buildLevelMeta();
+    void this.restoreState();
     this.running = this.configValid;
     if (!this.configValid) {
       this.stopReason = "配置无效，已暂停网格";
@@ -299,6 +302,7 @@ export class GridEngine {
       if (!Number.isFinite(price) || price === null) {
         return;
       }
+      await this.enforceExposureSafety(price);
       if (this.shouldStop(price)) {
         await this.haltGrid(price);
         return;
@@ -353,6 +357,7 @@ export class GridEngine {
     this.shortExposure.clear();
     this.lastOrderBook.clear();
     this.pendingCancelKeys.clear();
+    this.schedulePersist();
   }
 
   private async closePosition(): Promise<void> {
@@ -553,26 +558,190 @@ export class GridEngine {
     }
 
     for (const [level, quantity] of longCloseRequirements) {
+      const rawPrice = this.gridLevels[level]!;
+      const clamped = this.clampClosePrice({ side: "SELL", rawPrice });
       desired.push({
         level,
         side: "SELL",
-        price: this.formatPrice(this.gridLevels[level]!),
+        price: this.formatPrice(clamped),
         amount: quantity,
         reduceOnly: true,
       });
     }
 
     for (const [level, quantity] of shortCloseRequirements) {
+      const rawPrice = this.gridLevels[level]!;
+      const clamped = this.clampClosePrice({ side: "BUY", rawPrice });
       desired.push({
         level,
         side: "BUY",
-        price: this.formatPrice(this.gridLevels[level]!),
+        price: this.formatPrice(clamped),
         amount: quantity,
         reduceOnly: true,
       });
     }
 
     return desired;
+  }
+
+  private clampClosePrice(params: { side: "BUY" | "SELL"; rawPrice: number }): number {
+    const slippage = Math.max(0, this.config.maxCloseSlippagePct);
+    if (slippage <= 0) return params.rawPrice;
+    const referenceCandidates = [
+      Number.isFinite(this.position.markPrice) ? this.position.markPrice : null,
+      this.getReferencePrice(),
+    ];
+    const mark = referenceCandidates.find((value) => Number.isFinite(value) && Number(value) > 0);
+    if (!Number.isFinite(mark) || Number(mark) <= 0) {
+      return params.rawPrice;
+    }
+    const markNumber = Number(mark);
+    if (params.side === "SELL") {
+      const floor = markNumber * (1 - slippage);
+      return Math.max(params.rawPrice, floor);
+    }
+    const ceiling = markNumber * (1 + slippage);
+    return Math.min(params.rawPrice, ceiling);
+  }
+
+  private async enforceExposureSafety(referencePrice: number): Promise<void> {
+    const toCloseLongLevels: Array<{ level: number; quantity: number }> = [];
+    for (const [level, quantity] of this.longExposure) {
+      if (quantity <= EPSILON) continue;
+      const target = this.levelMeta[level]?.closeTarget;
+      if (target == null) continue;
+      const closePrice = this.gridLevels[target]!;
+      if (referencePrice >= closePrice - this.config.priceTick / 2) {
+        toCloseLongLevels.push({ level, quantity });
+      }
+    }
+
+    const toCloseShortLevels: Array<{ level: number; quantity: number }> = [];
+    for (const [level, quantity] of this.shortExposure) {
+      if (quantity <= EPSILON) continue;
+      const target = this.levelMeta[level]?.closeTarget;
+      if (target == null) continue;
+      const closePrice = this.gridLevels[target]!;
+      if (referencePrice <= closePrice + this.config.priceTick / 2) {
+        toCloseShortLevels.push({ level, quantity });
+      }
+    }
+
+    const totalLongClose = toCloseLongLevels.reduce((acc, item) => acc + item.quantity, 0);
+    const totalShortClose = toCloseShortLevels.reduce((acc, item) => acc + item.quantity, 0);
+
+    if (totalLongClose > EPSILON) {
+      try {
+        await placeMarketOrder(
+          this.exchange,
+          this.config.symbol,
+          this.openOrders,
+          this.locks,
+          this.timers,
+          this.pendings,
+          "SELL",
+          totalLongClose,
+          this.log,
+          true,
+          { expectedPrice: referencePrice },
+          { qtyStep: this.config.qtyStep }
+        );
+        for (const { level } of toCloseLongLevels) {
+          this.longExposure.delete(level);
+        }
+        this.schedulePersist();
+      } catch (error) {
+        this.log("error", `市价平仓多单失败: ${extractMessage(error)}`);
+      }
+    }
+
+    if (totalShortClose > EPSILON) {
+      try {
+        await placeMarketOrder(
+          this.exchange,
+          this.config.symbol,
+          this.openOrders,
+          this.locks,
+          this.timers,
+          this.pendings,
+          "BUY",
+          totalShortClose,
+          this.log,
+          true,
+          { expectedPrice: referencePrice },
+          { qtyStep: this.config.qtyStep }
+        );
+        for (const { level } of toCloseShortLevels) {
+          this.shortExposure.delete(level);
+        }
+        this.schedulePersist();
+      } catch (error) {
+        this.log("error", `市价平仓空单失败: ${extractMessage(error)}`);
+      }
+    }
+  }
+
+  private schedulePersist(): void {
+    if (this.statePersistTimer) return;
+    this.statePersistTimer = setTimeout(() => {
+      this.statePersistTimer = null;
+      void this.persistState();
+    }, 200);
+  }
+
+  private async persistState(): Promise<void> {
+    if (!this.configValid) return;
+    const snapshot: StoredGridState = {
+      symbol: this.config.symbol,
+      lowerPrice: this.config.lowerPrice,
+      upperPrice: this.config.upperPrice,
+      gridLevels: this.config.gridLevels,
+      orderSize: this.config.orderSize,
+      maxPositionSize: this.config.maxPositionSize,
+      direction: this.config.direction,
+      longExposure: Object.fromEntries([...this.longExposure.entries()].map(([level, qty]) => [String(level), qty])),
+      shortExposure: Object.fromEntries([...this.shortExposure.entries()].map(([level, qty]) => [String(level), qty])),
+      updatedAt: Date.now(),
+    };
+    try {
+      await saveGridState(snapshot);
+    } catch (error) {
+      this.log("error", `保存网格状态失败: ${extractMessage(error)}`);
+    }
+  }
+
+  private async restoreState(): Promise<void> {
+    try {
+      const snapshot = await loadGridState(this.config.symbol);
+      if (!snapshot) return;
+      if (!this.isSnapshotCompatible(snapshot)) return;
+      this.longExposure.clear();
+      this.shortExposure.clear();
+      for (const [key, value] of Object.entries(snapshot.longExposure ?? {})) {
+        const level = Number(key);
+        if (!Number.isInteger(level)) continue;
+        if (!this.buyLevelIndices.includes(level)) continue;
+        if (value > EPSILON) this.longExposure.set(level, value);
+      }
+      for (const [key, value] of Object.entries(snapshot.shortExposure ?? {})) {
+        const level = Number(key);
+        if (!Number.isInteger(level)) continue;
+        if (!this.sellLevelIndices.includes(level)) continue;
+        if (value > EPSILON) this.shortExposure.set(level, value);
+      }
+    } catch (error) {
+      this.log("error", `读取网格状态失败: ${extractMessage(error)}`);
+    }
+  }
+
+  private isSnapshotCompatible(snapshot: StoredGridState): boolean {
+    const sameSymbol = snapshot.symbol === this.config.symbol;
+    const sameLevels = snapshot.gridLevels === this.config.gridLevels;
+    const sameRange =
+      Math.abs(snapshot.lowerPrice - this.config.lowerPrice) <= this.config.priceTick &&
+      Math.abs(snapshot.upperPrice - this.config.upperPrice) <= this.config.priceTick;
+    const sameOrder = Math.abs(snapshot.orderSize - this.config.orderSize) <= this.config.qtyStep;
+    return sameSymbol && sameLevels && sameRange && sameOrder;
   }
 
   private computeGridLevels(): number[] {
@@ -764,6 +933,7 @@ export class GridEngine {
           remaining -= qty;
         }
       }
+      this.schedulePersist();
     }
 
     const actualShort = Math.max(-this.position.positionAmt, 0);
@@ -779,6 +949,7 @@ export class GridEngine {
           remaining -= qty;
         }
       }
+      this.schedulePersist();
     }
   }
 
@@ -786,16 +957,32 @@ export class GridEngine {
     if (quantity <= EPSILON) return;
     const current = this.longExposure.get(level) ?? 0;
     const next = Math.min(this.config.orderSize, current + quantity);
-    if (next <= EPSILON) this.longExposure.delete(level);
-    else this.longExposure.set(level, next);
+    if (next <= EPSILON) {
+      if (this.longExposure.has(level)) {
+        this.longExposure.delete(level);
+        this.schedulePersist();
+      }
+      return;
+    }
+    if (Math.abs(next - current) <= EPSILON) return;
+    this.longExposure.set(level, next);
+    this.schedulePersist();
   }
 
   private incrementShortExposure(level: number, quantity: number): void {
     if (quantity <= EPSILON) return;
     const current = this.shortExposure.get(level) ?? 0;
     const next = Math.min(this.config.orderSize, current + quantity);
-    if (next <= EPSILON) this.shortExposure.delete(level);
-    else this.shortExposure.set(level, next);
+    if (next <= EPSILON) {
+      if (this.shortExposure.has(level)) {
+        this.shortExposure.delete(level);
+        this.schedulePersist();
+      }
+      return;
+    }
+    if (Math.abs(next - current) <= EPSILON) return;
+    this.shortExposure.set(level, next);
+    this.schedulePersist();
   }
 
   private consumeLongExposure(closeLevel: number, quantity: number): void {
@@ -811,6 +998,7 @@ export class GridEngine {
       if (next <= EPSILON) this.longExposure.delete(source);
       else this.longExposure.set(source, next);
       remaining -= consumed;
+      this.schedulePersist();
     }
   }
 
@@ -827,6 +1015,7 @@ export class GridEngine {
       if (next <= EPSILON) this.shortExposure.delete(source);
       else this.shortExposure.set(source, next);
       remaining -= consumed;
+      this.schedulePersist();
     }
   }
 

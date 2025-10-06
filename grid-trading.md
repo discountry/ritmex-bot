@@ -30,8 +30,9 @@
    GRID_DIRECTION=both
    GRID_STOP_LOSS_PCT=0.02
    GRID_RESTART_TRIGGER_PCT=0.02
-   GRID_AUTO_RESTART_ENABLED=true
-   ```
+GRID_AUTO_RESTART_ENABLED=true
+GRID_MAX_CLOSE_SLIPPAGE_PCT=0.05
+```
 
 - `GRID_ORDER_SIZE` 与 `GRID_MAX_POSITION_SIZE` 需遵循「最大仓位 ÷ 单笔数量 ≥ 网格数」的原则，这样策略才能补齐全部挂单。本例 50 ÷ 5 = 10，但网格数为 20，意味着策略只会在离现价最近的上下各 10 个位置挂单，与仓位上限保持一致。
 
@@ -69,7 +70,8 @@ bun start
 调参建议：
 1. **缩短区间**：想拉高单格盈利，可缩小上下边界并减少网格数。
 2. **更精细挂单**：适当提高 `GRID_LEVELS` 并降低 `GRID_ORDER_SIZE`，但同时记得调大 `GRID_MAX_POSITION_SIZE`。
-3. **只做单边**：若只想高抛低吸不反手，可设 `GRID_DIRECTION=long`，卖单会变成 `reduceOnly`。
+3. **调节平仓容忍度**：`GRID_MAX_CLOSE_SLIPPAGE_PCT` 控制平仓单相对标记价的最大偏移，确保 reduce-only 订单不会被交易所拒绝。
+4. **只做单边**：若只想高抛低吸不反手，可设 `GRID_DIRECTION=long`，卖单会变成 `reduceOnly`。
 
 ## 中断恢复行为
 
