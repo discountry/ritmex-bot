@@ -78,6 +78,9 @@ export class GridEngine {
   private readonly now: () => number;
   private readonly configValid: boolean;
   private readonly gridLevels: number[];
+  private readonly levelExposure = new Map<number, number>();
+  private readonly lastOrderBook = new Map<string, { side: "BUY" | "SELL"; level: number; quantity: number }>();
+  private readonly pendingCancelKeys = new Set<string>();
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -330,6 +333,9 @@ export class GridEngine {
     this.desiredOrders = [];
     this.lastUpdated = this.now();
     this.running = false;
+    this.levelExposure.clear();
+    this.lastOrderBook.clear();
+    this.pendingCancelKeys.clear();
   }
 
   private async closePosition(): Promise<void> {
@@ -383,13 +389,24 @@ export class GridEngine {
 
     const desiredKeys = new Set(desired.map((order) => this.getOrderKey(order.side, order.price)));
     const activeOrders = this.openOrders.filter((order) => order.symbol === this.config.symbol && order.type === "LIMIT");
-    const orderMap = new Map<string, AsterOrder>(
-      activeOrders.map((order) => [this.getOrderKey(order.side, this.normalizePrice(order.price)), order])
-    );
+    const orderMap = new Map<string, AsterOrder>();
+    const orderBookEntries = new Map<string, { side: "BUY" | "SELL"; level: number; quantity: number }>();
+    for (const order of activeOrders) {
+      const key = this.getOrderKey(order.side, this.normalizePrice(order.price));
+      orderMap.set(key, order);
+      const level = this.resolveLevelIndex(Number(order.price));
+      if (level != null) {
+        const quantity = Math.max(0, Number(order.origQty) - Number(order.executedQty ?? 0));
+        orderBookEntries.set(key, { side: order.side, level, quantity });
+      }
+    }
+
+    this.updateLevelExposure(orderBookEntries);
 
     for (const order of activeOrders) {
       const key = this.getOrderKey(order.side, this.normalizePrice(order.price));
       if (desiredKeys.has(key)) continue;
+      this.pendingCancelKeys.add(key);
       await safeCancelOrder(
         this.exchange,
         this.config.symbol,
@@ -397,13 +414,16 @@ export class GridEngine {
         (orderId) => {
           this.log("order", `撤销网格单 #${orderId}: ${order.side} @ ${order.price}`);
           orderMap.delete(key);
+          this.pendingCancelKeys.delete(key);
         },
         () => {
           this.log("order", `撤销时订单已完成: ${order.orderId}`);
           orderMap.delete(key);
+          this.pendingCancelKeys.delete(key);
         },
         (error) => {
           this.log("error", `撤销订单失败: ${extractMessage(error)}`);
+          this.pendingCancelKeys.delete(key);
         }
       );
     }
@@ -440,6 +460,7 @@ export class GridEngine {
 
   private computeDesiredOrders(price: number): DesiredGridOrder[] {
     if (!this.running || !this.gridLevels.length || !this.configValid) return [];
+    this.alignExposureWithPosition();
     const desired: DesiredGridOrder[] = [];
     const maxLongExposure = Math.max(this.config.maxPositionSize - Math.max(this.position.positionAmt, 0), 0);
     const maxShortExposure = Math.max(this.config.maxPositionSize - Math.max(-this.position.positionAmt, 0), 0);
@@ -461,6 +482,10 @@ export class GridEngine {
     for (const { level, levelPrice } of belowPrice) {
       const amount = this.config.orderSize;
       const reduceOnly = this.config.direction === "short";
+      const held = this.levelExposure.get(level) ?? 0;
+      if (held >= amount - EPSILON) {
+        continue;
+      }
       if (!reduceOnly) {
         if (remainingLongHeadroom < amount - EPSILON) break;
         remainingLongHeadroom -= amount;
@@ -580,5 +605,87 @@ export class GridEngine {
   private formatPrice(price: number): string {
     if (!Number.isFinite(price)) return "0";
     return Number(price).toFixed(this.priceDecimals);
+  }
+
+  private resolveLevelIndex(price: number): number | null {
+    for (let i = 0; i < this.gridLevels.length; i += 1) {
+      if (Math.abs(this.gridLevels[i]! - price) <= this.config.priceTick * 0.5 + EPSILON) {
+        return i;
+      }
+    }
+    return null;
+  }
+
+  private updateLevelExposure(currentOrders: Map<string, { side: "BUY" | "SELL"; level: number; quantity: number }>): void {
+    const previousEntries = new Map(this.lastOrderBook);
+    for (const [key, previous] of previousEntries) {
+      const current = currentOrders.get(key);
+      if (current) {
+        const delta = previous.quantity - current.quantity;
+        if (Math.abs(delta) > EPSILON) {
+          if (previous.side === "BUY") {
+            const held = this.levelExposure.get(previous.level) ?? 0;
+            this.levelExposure.set(previous.level, held + Math.max(0, delta));
+          } else {
+            const held = this.levelExposure.get(previous.level) ?? 0;
+            const next = held - Math.max(0, delta);
+            if (next <= EPSILON) this.levelExposure.delete(previous.level);
+            else this.levelExposure.set(previous.level, next);
+          }
+        }
+        continue;
+      }
+      if (this.pendingCancelKeys.has(key)) {
+        this.pendingCancelKeys.delete(key);
+        continue;
+      }
+      if (previous.quantity <= 0) {
+        continue;
+      }
+      if (previous.side === "BUY") {
+        const held = this.levelExposure.get(previous.level) ?? 0;
+        this.levelExposure.set(previous.level, held + previous.quantity);
+      } else {
+        const held = this.levelExposure.get(previous.level) ?? 0;
+        const next = held - previous.quantity;
+        if (next <= EPSILON) this.levelExposure.delete(previous.level);
+        else this.levelExposure.set(previous.level, next);
+      }
+    }
+    this.lastOrderBook.clear();
+    for (const [key, entry] of currentOrders) {
+      this.lastOrderBook.set(key, entry);
+    }
+  }
+
+  private alignExposureWithPosition(): void {
+    const totalHeld = Array.from(this.levelExposure.values()).reduce((acc, qty) => acc + qty, 0);
+    const actualLong = Math.max(this.position.positionAmt, 0);
+    if (Math.abs(totalHeld - actualLong) <= EPSILON) return;
+    if (actualLong <= EPSILON) {
+      this.levelExposure.clear();
+      return;
+    }
+    let remaining = actualLong;
+    const levels = Array.from(this.levelExposure.keys()).sort((a, b) => a - b);
+    for (const level of levels) {
+      if (remaining <= EPSILON) {
+        this.levelExposure.delete(level);
+        continue;
+      }
+      const current = this.levelExposure.get(level) ?? 0;
+      if (current <= remaining + EPSILON) {
+        this.levelExposure.set(level, current);
+        remaining -= current;
+      } else {
+        this.levelExposure.set(level, remaining);
+        remaining = 0;
+      }
+    }
+    for (const [level, qty] of this.levelExposure) {
+      if (qty <= EPSILON) {
+        this.levelExposure.delete(level);
+      }
+    }
   }
 }

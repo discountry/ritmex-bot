@@ -194,6 +194,31 @@ describe("GridEngine", () => {
     engine.stop();
   });
 
+  it("does not repopulate the same buy level until exposure is released", () => {
+    const adapter = new StubAdapter();
+    const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+    adapter.emitOrders([]);
+
+    const desiredInitial = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+    const nearestBuy = desiredInitial.find((order) => order.side === "BUY");
+    expect(nearestBuy).toBeTruthy();
+    const targetLevel = nearestBuy!.level;
+
+    (engine as any).levelExposure.set(targetLevel, baseConfig.orderSize);
+    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
+
+    const desiredAfterFill = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+    expect(desiredAfterFill.some((order) => order.level === targetLevel && order.side === "BUY")).toBe(false);
+
+    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+    const desiredAfterExit = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+    expect(desiredAfterExit.some((order) => order.level === targetLevel && order.side === "BUY")).toBe(true);
+
+    engine.stop();
+  });
+
   it("halts the grid and closes positions when stop loss triggers", async () => {
     const adapter = new StubAdapter();
     const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
