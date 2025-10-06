@@ -242,6 +242,7 @@ export async function placeStopLossOrder(
     closePosition: "true",
     timeInForce: "GTC",
     quantity: roundQtyDownToStep(quantity, qtyStep),
+    triggerType: "STOP_LOSS",
   };
   // 部分交易所（例如 Paradex）要求 STOP_MARKET 同时提供 price 字段
   params.price = params.stopPrice;

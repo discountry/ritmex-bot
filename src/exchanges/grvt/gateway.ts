@@ -1337,7 +1337,7 @@ function buildUnsignedOrder(params: {
 
 function buildTriggerMetadata(params: CreateOrderParams): GrvtUnsignedOrder["metadata"]["trigger"] | undefined {
   if (params.type === "STOP_MARKET") {
-    const triggerType = params.side === "BUY" ? "TAKE_PROFIT" : "STOP_LOSS";
+    const triggerType = params.triggerType ?? (params.side === "BUY" ? "TAKE_PROFIT" : "STOP_LOSS");
     const stopPrice = params.stopPrice ?? params.activationPrice;
     if (!stopPrice) {
       throw new Error("GRVT stop orders require a stopPrice or activationPrice");

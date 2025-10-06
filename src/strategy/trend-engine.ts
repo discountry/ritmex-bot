@@ -509,10 +509,21 @@ export class TrendEngine {
     }
     this.entryPricePendingLogged = false;
     const direction = position.positionAmt > 0 ? "long" : "short";
+    const qtyAbs = Math.abs(position.positionAmt);
+    const depthBid = Number(this.depthSnapshot?.bids?.[0]?.[0]);
+    const depthAsk = Number(this.depthSnapshot?.asks?.[0]?.[0]);
+    const closeSidePriceRaw = direction === "long" ? depthBid : depthAsk;
+    const effectiveClosePrice = Number.isFinite(closeSidePriceRaw)
+      ? closeSidePriceRaw
+      : Number.isFinite(price)
+        ? price
+        : position.entryPrice;
     const pnl =
-      (direction === "long"
-        ? price - position.entryPrice
-        : position.entryPrice - price) * Math.abs(position.positionAmt);
+      qtyAbs > 0
+        ? (direction === "long"
+            ? effectiveClosePrice - position.entryPrice
+            : position.entryPrice - effectiveClosePrice) * qtyAbs
+        : 0;
     const unrealized = Number.isFinite(position.unrealizedProfit)
       ? position.unrealizedProfit
       : null;
@@ -671,11 +682,7 @@ export class TrendEngine {
     }
 
     const derivedLoss = pnl < -this.config.lossLimit;
-    const snapshotLoss = Boolean(
-      unrealized != null &&
-        unrealized < -this.config.lossLimit &&
-        pnl <= 0
-    );
+    const snapshotLoss = derivedLoss;
 
     if (derivedLoss || snapshotLoss) {
       const result = { closed: false, pnl };
