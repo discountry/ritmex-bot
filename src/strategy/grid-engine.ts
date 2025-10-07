@@ -98,6 +98,9 @@ export class GridEngine {
   // temporarily block re-opening at that level to avoid immediate re-placement.
   private readonly levelReopenBlockUntil = new Map<number, number>();
   private static readonly DISAPPEAR_REOPEN_COOLDOWN_MS = 2000;
+  // Track levels awaiting classification after disappearance when neither fill nor cancel is confirmed
+  private readonly awaitingClassification = new Map<number, { until: number; absAtStart: number }>();
+  private static readonly AWAIT_CLASSIFICATION_TIMEOUT_MS = 2500;
   private sidesLocked = false;
   private startupCleaned = false;
   private initialCloseHandled = false;
@@ -502,29 +505,20 @@ export class GridEngine {
       if (meta) {
         const prevIds = this.lastOrderIdsByKey.get(prevKey);
         let classified: "filled" | "canceled" | "unknown" = "unknown";
-        if (prevIds && prevIds.size) {
+        // We generally cannot see final states for disappeared orders in openOrders; rely on position if available
+        const absNow = Math.abs(this.position.positionAmt);
+        if (absNow > this.lastAbsPositionAmt + EPSILON) {
+          classified = "filled";
+        } else if (prevIds && prevIds.size) {
+          // If any explicit canceled-like status is observable (rare in open snapshot), allow classification
           for (const id of prevIds) {
             const rec = allOrdersById.get(id);
             if (!rec) continue;
             const status = String(rec.status || "").toUpperCase();
             const executed = Number(rec.executedQty);
-            if (status === "FILLED" || (executed > EPSILON && ["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status) === false)) {
-              classified = "filled";
-              break;
-            }
             if (["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status) && executed <= EPSILON) {
               classified = "canceled";
-              // do not break; keep searching for any filled among duplicates; but canceled is acceptable if no filled found
             }
-          }
-        }
-        if (classified === "unknown") {
-          // fallback to position delta confirmation
-          const absNow = Math.abs(this.position.positionAmt);
-          if (absNow > this.lastAbsPositionAmt + EPSILON) {
-            classified = "filled";
-          } else {
-            classified = "canceled";
           }
         }
         if (classified === "filled") {
@@ -532,15 +526,40 @@ export class GridEngine {
           else this.pendingShortLevels.add(meta.level);
         } else if (classified === "canceled") {
           // no action; allow immediate re-open (do not block)
+          this.awaitingClassification.delete(meta.level);
+          this.levelReopenBlockUntil.delete(meta.level);
+        } else {
+          // unknown: defer decision until position/account updates or timeout
+          const until = this.now() + GridEngine.AWAIT_CLASSIFICATION_TIMEOUT_MS;
+          this.awaitingClassification.set(meta.level, { until, absAtStart: this.lastAbsPositionAmt });
+          this.blockLevelReopen(meta.level);
         }
-        // ensure any previous block is cleared if exists
-        this.levelReopenBlockUntil.delete(meta.level);
       }
     }
     this.lastOpenOrderKeys = currentKeys;
     // persist metadata for next tick to detect fills
     this.lastKeyMeta = keyToMeta;
     this.lastOrderIdsByKey = currentOrderIdsByKey;
+
+    // Resolve any awaiting classifications based on updated account snapshot or timeout
+    if (this.awaitingClassification.size) {
+      const nowTs = this.now();
+      for (const [level, info] of Array.from(this.awaitingClassification.entries())) {
+        const absNow = Math.abs(this.position.positionAmt);
+        if (absNow > info.absAtStart + EPSILON) {
+          // treat as filled
+          const side = this.levelMeta[level]?.side === "BUY" ? "BUY" : "SELL";
+          if (side === "BUY") this.pendingLongLevels.add(level);
+          else this.pendingShortLevels.add(level);
+          this.awaitingClassification.delete(level);
+          this.levelReopenBlockUntil.delete(level);
+        } else if (nowTs >= info.until) {
+          // timeout -> treat as canceled
+          this.awaitingClassification.delete(level);
+          this.levelReopenBlockUntil.delete(level);
+        }
+      }
+    }
 
     // Desired open orders according to locked sides
     const desired: DesiredGridOrder[] = [];
