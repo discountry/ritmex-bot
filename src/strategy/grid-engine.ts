@@ -490,10 +490,15 @@ export class GridEngine {
         }
       }
       if (handledByCloseTracking) continue;
-      // Otherwise, treat as an open order disappearance and mark pending
+      // Otherwise, treat disappearance as potential open fill: confirm by position delta increase
       if (meta) {
-        if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
-        else this.pendingShortLevels.add(meta.level);
+        const absNow = Math.abs(this.position.positionAmt);
+        if (absNow > this.lastAbsPositionAmt + EPSILON) {
+          if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
+          else this.pendingShortLevels.add(meta.level);
+        } else {
+          // Likely canceled or expired; do not mark pending
+        }
       }
     }
     this.lastOpenOrderKeys = currentKeys;
@@ -511,6 +516,8 @@ export class GridEngine {
     for (const level of this.buyLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
+      // do not open if this level is currently a close target for any pending source
+      if (this.isTargetOfPendingShort(level) || this.isTargetOfPendingLong(level)) continue;
       if (this.pendingLongLevels.has(level)) continue; // wait until close filled
       const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), false);
       if (activeKeySet.has(key)) continue; // already has open order
@@ -521,6 +528,7 @@ export class GridEngine {
     for (const level of this.sellLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
+      if (this.isTargetOfPendingShort(level) || this.isTargetOfPendingLong(level)) continue;
       if (this.pendingShortLevels.has(level)) continue;
       const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), false);
       if (activeKeySet.has(key)) continue;
@@ -532,24 +540,35 @@ export class GridEngine {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
-      // always desire a close order; allow placement even if an identical open exists
-      desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
+      const closeKey = this.getOrderKey("SELL", priceStr, false);
+      if (!activeKeySet.has(closeKey)) {
+        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
+      } else {
+        // Map existing identical open as the close so disappearance clears pending
+        if (!this.closeKeyBySourceLevel.has(source)) {
+          this.closeKeyBySourceLevel.set(source, closeKey);
+        }
+      }
     }
     for (const source of this.pendingShortLevels) {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
-      desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
+      const closeKey = this.getOrderKey("BUY", priceStr, false);
+      if (!activeKeySet.has(closeKey)) {
+        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
+      } else {
+        if (!this.closeKeyBySourceLevel.has(source)) {
+          this.closeKeyBySourceLevel.set(source, closeKey);
+        }
+      }
     }
 
     // Place desired orders
     this.desiredOrders = desired;
     for (const d of desired) {
       const key = this.getOrderKey(d.side, d.price, d.reduceOnly);
-      const isCloseDesired =
-        (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) ||
-        (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
-      if (activeKeySet.has(key) && !isCloseDesired) continue;
+      if (activeKeySet.has(key)) continue;
       try {
         const placed = await placeOrder(
           this.exchange,
@@ -566,7 +585,7 @@ export class GridEngine {
           undefined,
           { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
-        if (placed && isCloseDesired) {
+        if (placed && ((d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level)))) {
           this.closeKeyBySourceLevel.set(
             this.findSourceForCloseTarget(d.level, d.side),
             key
