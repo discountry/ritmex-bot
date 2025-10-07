@@ -22,7 +22,6 @@ interface DesiredGridOrder {
   side: "BUY" | "SELL";
   price: string;
   amount: number;
-  reduceOnly: boolean;
 }
 
 interface LevelMeta {
@@ -39,7 +38,6 @@ interface GridLineSnapshot {
   side: "BUY" | "SELL";
   active: boolean;
   hasOrder: boolean;
-  reduceOnly: boolean;
 }
 
 export interface GridEngineSnapshot {
@@ -92,7 +90,7 @@ export class GridEngine {
   private readonly pendingLongLevels = new Set<number>();
   private readonly pendingShortLevels = new Set<number>();
   private readonly closeKeyBySourceLevel = new Map<number, string>();
-  private lastKeyMeta = new Map<string, { side: "BUY" | "SELL"; level: number; reduceOnly: boolean }>();
+  private lastKeyMeta = new Map<string, { side: "BUY" | "SELL"; level: number }>();
   private lastOrderIdsByKey = new Map<string, Set<string>>();
   // When an order at a level disappears but account delta hasn't arrived yet,
   // temporarily block re-opening at that level to avoid immediate re-placement.
@@ -104,7 +102,7 @@ export class GridEngine {
   private startupCleaned = false;
   private initialCloseHandled = false;
   private lastAbsPositionAmt = 0;
-  private immediateCloseToPlace: Array<{ sourceLevel: number; targetLevel: number; side: "BUY" | "SELL"; price: string; reduceOnly: boolean }> = [];
+  private immediateCloseToPlace: Array<{ sourceLevel: number; targetLevel: number; side: "BUY" | "SELL"; price: string }> = [];
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -467,14 +465,14 @@ export class GridEngine {
     const prevMeta = this.lastKeyMeta;
 
     const currentKeys = new Set<string>();
-    const keyToMeta = new Map<string, { side: "BUY" | "SELL"; level: number; reduceOnly: boolean }>();
+    const keyToMeta = new Map<string, { side: "BUY" | "SELL"; level: number }>();
     const currentOrderIdsByKey = new Map<string, Set<string>>();
     for (const o of activeOrders) {
-      const key = this.getOrderKey(o.side, this.normalizePrice(o.price), o.reduceOnly === true);
+      const key = this.getOrderKey(o.side, this.normalizePrice(o.price));
       currentKeys.add(key);
       const level = this.resolveLevelIndex(Number(o.price));
       if (level != null) {
-        keyToMeta.set(key, { side: o.side, level, reduceOnly: o.reduceOnly === true });
+        keyToMeta.set(key, { side: o.side, level });
       }
       const id = String(o.orderId);
       const set = currentOrderIdsByKey.get(key) ?? new Set<string>();
@@ -485,13 +483,8 @@ export class GridEngine {
     // Build active order key counts (open and reduce-only) for placement and disappearance handling
     const activeKeyCounts = new Map<string, number>();
     for (const o of activeOrders) {
-      const k = this.getOrderKey(o.side, this.normalizePrice(o.price), false);
+      const k = this.getOrderKey(o.side, this.normalizePrice(o.price));
       activeKeyCounts.set(k, (activeKeyCounts.get(k) ?? 0) + 1);
-    }
-    const activeKeyCountsRO = new Map<string, number>();
-    for (const o of activeOrders) {
-      const k = this.getOrderKey(o.side, this.normalizePrice(o.price), true);
-      activeKeyCountsRO.set(k, (activeKeyCountsRO.get(k) ?? 0) + 1);
     }
 
     for (const prevKey of prevKeys) {
@@ -515,18 +508,18 @@ export class GridEngine {
         }
       }
       if (handledByCloseTracking) continue;
-      // Proactively queue a reduce-only close at target to safely capture profit if the disappearance was a fill
+      // Proactively queue a close at target to safely capture profit if the disappearance was a fill
       if (meta) {
         const target0 = this.levelMeta[meta.level]?.closeTarget;
         if (target0 != null) {
           const priceStr0 = this.formatPrice(this.gridLevels[target0]!);
           const side0: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
-          const roKey = this.getOrderKey(side0, priceStr0, true);
-          const roCount = activeKeyCountsRO.get(roKey) ?? 0;
-          if (roCount < 1) {
-            this.immediateCloseToPlace.push({ sourceLevel: meta.level, targetLevel: target0, side: side0, price: priceStr0, reduceOnly: true });
-            this.closeKeyBySourceLevel.set(meta.level, roKey);
+          const key = this.getOrderKey(side0, priceStr0);
+          const count = activeKeyCounts.get(key) ?? 0;
+          if (count < 1) {
+            this.immediateCloseToPlace.push({ sourceLevel: meta.level, targetLevel: target0, side: side0, price: priceStr0 });
           }
+          this.closeKeyBySourceLevel.set(meta.level, key);
         }
       }
       // Use order records to classify disappearance: filled vs canceled
@@ -557,13 +550,13 @@ export class GridEngine {
           // no action; allow immediate re-open (do not block)
           this.awaitingClassification.delete(meta.level);
           this.levelReopenBlockUntil.delete(meta.level);
-          // clear any reduce-only mapping queued earlier
+          // clear any close mapping queued earlier
           const target = this.levelMeta[meta.level]?.closeTarget;
           if (target != null) {
             const priceStr = this.formatPrice(this.gridLevels[target]!);
             const side: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
-            const roKey = this.getOrderKey(side, priceStr, true);
-            if (this.closeKeyBySourceLevel.get(meta.level) === roKey) {
+            const closeKey = this.getOrderKey(side, priceStr);
+            if (this.closeKeyBySourceLevel.get(meta.level) === closeKey) {
               this.closeKeyBySourceLevel.delete(meta.level);
             }
           }
@@ -602,17 +595,20 @@ export class GridEngine {
     const desired: DesiredGridOrder[] = [];
     const halfTick = this.config.priceTick / 2;
     const activeKeySet = new Set(
-      activeOrders.map((o) => this.getOrderKey(o.side, this.normalizePrice(o.price), o.reduceOnly === true))
+      activeOrders.map((o) => this.getOrderKey(o.side, this.normalizePrice(o.price)))
     );
     // activeKeyCounts and activeKeyCountsRO already computed above
 
     // First, place any immediate close orders queued by fresh fills
     if (this.immediateCloseToPlace.length) {
       for (const item of this.immediateCloseToPlace) {
-        const key = this.getOrderKey(item.side, item.price, item.reduceOnly);
-        const count = item.reduceOnly ? (activeKeyCountsRO.get(key) ?? 0) : (activeKeyCounts.get(key) ?? 0);
-        if (item.reduceOnly ? count < 1 : count < 2) {
-          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize, reduceOnly: item.reduceOnly });
+        const key = this.getOrderKey(item.side, item.price);
+        const count = activeKeyCounts.get(key) ?? 0;
+        if (count < 1) {
+          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize });
+        }
+        if (!this.closeKeyBySourceLevel.has(item.sourceLevel)) {
+          this.closeKeyBySourceLevel.set(item.sourceLevel, key);
         }
       }
       // clear queue regardless to avoid duplicates next tick
@@ -625,10 +621,10 @@ export class GridEngine {
       if (levelPrice >= price - halfTick) continue;
       if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingLongLevels.has(level)) continue; // wait until close filled
-      const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), false);
+      const key = this.getOrderKey("BUY", this.formatPrice(levelPrice));
       const targetMax = this.isCloseDesiredForSideAtLevel("BUY", level) ? 2 : 1;
       if ((activeKeyCounts.get(key) ?? 0) >= targetMax) continue;
-      desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize, reduceOnly: false });
+      desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
     }
 
     // opens above price (SELL)
@@ -637,10 +633,10 @@ export class GridEngine {
       if (levelPrice <= price + halfTick) continue;
       if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingShortLevels.has(level)) continue;
-      const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), false);
+      const key = this.getOrderKey("SELL", this.formatPrice(levelPrice));
       const targetMax = this.isCloseDesiredForSideAtLevel("SELL", level) ? 2 : 1;
       if ((activeKeyCounts.get(key) ?? 0) >= targetMax) continue;
-      desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize, reduceOnly: false });
+      desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
     }
 
     // close orders for pending levels (now non-reduce-only)
@@ -648,45 +644,33 @@ export class GridEngine {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
-      const closeKeyRO = this.getOrderKey("SELL", priceStr, true);
-      if ((activeKeyCountsRO.get(closeKeyRO) ?? 0) < 1) {
-        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, reduceOnly: true });
-      }
-      const closeKey = this.getOrderKey("SELL", priceStr, false);
+      const closeKey = this.getOrderKey("SELL", priceStr);
       if ((activeKeyCounts.get(closeKey) ?? 0) < 1) {
-        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
-      } else {
-        // Map existing identical open as the close so disappearance clears pending
-        if (!this.closeKeyBySourceLevel.has(source)) {
-          this.closeKeyBySourceLevel.set(source, closeKey);
-        }
+        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize });
+      }
+      if (!this.closeKeyBySourceLevel.has(source)) {
+        this.closeKeyBySourceLevel.set(source, closeKey);
       }
     }
     for (const source of this.pendingShortLevels) {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
-      const closeKeyRO = this.getOrderKey("BUY", priceStr, true);
-      if ((activeKeyCountsRO.get(closeKeyRO) ?? 0) < 1) {
-        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, reduceOnly: true });
-      }
-      const closeKey = this.getOrderKey("BUY", priceStr, false);
+      const closeKey = this.getOrderKey("BUY", priceStr);
       if ((activeKeyCounts.get(closeKey) ?? 0) < 1) {
-        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
-      } else {
-        if (!this.closeKeyBySourceLevel.has(source)) {
-          this.closeKeyBySourceLevel.set(source, closeKey);
-        }
+        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize });
+      }
+      if (!this.closeKeyBySourceLevel.has(source)) {
+        this.closeKeyBySourceLevel.set(source, closeKey);
       }
     }
 
     // Place desired orders
     this.desiredOrders = desired;
     for (const d of desired) {
-      const key = this.getOrderKey(d.side, d.price, d.reduceOnly);
+      const key = this.getOrderKey(d.side, d.price);
       const isClose = (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
-      const maxAllowed = isClose ? 2 : 1;
-      if ((activeKeyCounts.get(key) ?? 0) >= maxAllowed) continue;
+      if ((activeKeyCounts.get(key) ?? 0) >= 1) continue;
       try {
         const placed = await placeOrder(
           this.exchange,
@@ -701,7 +685,7 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
         );
         if (placed) {
           activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
@@ -762,6 +746,10 @@ export class GridEngine {
     return this.isTargetOfPendingShort(level);
   }
 
+  private isTargetOfPendingShortOrLong(targetLevel: number): boolean {
+    return this.isTargetOfPendingLong(targetLevel) || this.isTargetOfPendingShort(targetLevel);
+  }
+
   private computeGridLevels(): number[] {
     if (!this.configValid) return [];
     const { lowerPrice, upperPrice, gridLevels } = this.config;
@@ -784,19 +772,19 @@ export class GridEngine {
     const lastPrice = Number.isFinite(tickerLast) ? tickerLast : reference;
     const midPrice = reference;
     const desiredKeys = new Set(
-      this.desiredOrders.map((order) => this.getOrderKey(order.side, order.price, order.reduceOnly))
+      this.desiredOrders.map((order) => this.getOrderKey(order.side, order.price))
     );
     const openOrderKeys = new Set(
       this.openOrders
         .filter((order) => order.symbol === this.config.symbol && order.type === "LIMIT")
-        .map((order) => this.getOrderKey(order.side, this.normalizePrice(order.price), order.reduceOnly === true))
+        .map((order) => this.getOrderKey(order.side, this.normalizePrice(order.price)))
     );
 
     const gridLines: GridLineSnapshot[] = this.gridLevels.map((price, level) => {
       const desired = this.desiredOrders.find((order) => order.level === level);
       const defaultSide = this.buyLevelIndices.includes(level) ? "BUY" : "SELL";
       const side = desired?.side ?? defaultSide;
-      const key = desired ? this.getOrderKey(desired.side, desired.price, desired.reduceOnly) : null;
+      const key = desired ? this.getOrderKey(desired.side, desired.price) : null;
       const hasOrder = key ? openOrderKeys.has(key) : false;
       const active = Boolean(desired && key && desiredKeys.has(key));
       return {
@@ -805,7 +793,6 @@ export class GridEngine {
         side,
         active,
         hasOrder,
-        reduceOnly: desired?.reduceOnly ?? false,
       };
     });
 
@@ -981,14 +968,14 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
         );
         if (placed) {
           // mark pending exposure broadly so we don't re-open immediately on that source level (choose closest source side)
           const source = this.findSourceForInitialPosition(side);
           if (side === "SELL") this.pendingLongLevels.add(source);
           else this.pendingShortLevels.add(source);
-          this.closeKeyBySourceLevel.set(source, this.getOrderKey(side, priceStr, false));
+          this.closeKeyBySourceLevel.set(source, this.getOrderKey(side, priceStr));
           this.log("order", `为已有仓位挂出一次性平仓单 ${side} @ ${priceStr}`);
         }
       } catch (error) {

@@ -91,7 +91,6 @@ export function GridApp({ onExit }: GridAppProps) {
     { key: "side", header: "Side", minWidth: 4 },
     { key: "active", header: "Active", minWidth: 6 },
     { key: "hasOrder", header: "Order", minWidth: 5 },
-    { key: "reduceOnly", header: "RO", minWidth: 4 },
   ];
   const gridRows = snapshot.gridLines.map((line) => ({
     level: line.level,
@@ -99,7 +98,6 @@ export function GridApp({ onExit }: GridAppProps) {
     side: line.side,
     active: line.active ? "yes" : "no",
     hasOrder: line.hasOrder ? "yes" : "no",
-    reduceOnly: line.reduceOnly ? "yes" : "no",
   }));
 
   const desiredColumns: TableColumn[] = [
@@ -107,14 +105,12 @@ export function GridApp({ onExit }: GridAppProps) {
     { key: "side", header: "Side", minWidth: 4 },
     { key: "price", header: "Price", align: "right", minWidth: 10 },
     { key: "amount", header: "Qty", align: "right", minWidth: 8 },
-    { key: "reduceOnly", header: "RO", minWidth: 4 },
   ];
   const desiredRows = snapshot.desiredOrders.map((order) => ({
     level: order.level,
     side: order.side,
     price: order.price,
     amount: formatNumber(order.amount, 4),
-    reduceOnly: order.reduceOnly ? "yes" : "no",
   }));
 
   return (
