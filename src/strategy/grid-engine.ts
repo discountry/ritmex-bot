@@ -649,7 +649,13 @@ export class GridEngine {
         this.log("info", `跳过 BUY @ ${this.formatPrice(levelPrice)}：等待对应平仓成交`);
         continue; // wait until close filled
       }
-      const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), "ENTRY");
+      const priceStr = this.formatPrice(levelPrice);
+      const key = this.getOrderKey("BUY", priceStr, "ENTRY");
+      // If an EXIT at the same side+price is planned/active, skip ENTRY to avoid intent conflict
+      const exitKeySame = this.getOrderKey("BUY", priceStr, "EXIT");
+      if ((plannedKeyCounts.get(exitKeySame) ?? 0) >= 1 || desiredKeySet.has(exitKeySame)) {
+        continue;
+      }
       const until = this.pendingKeyUntil.get(key);
       const nowTs = this.now();
       if (until && until > nowTs) {
@@ -657,7 +663,7 @@ export class GridEngine {
       }
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
-        desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize, intent: "ENTRY" });
+        desired.push({ level, side: "BUY", price: priceStr, amount: this.config.orderSize, intent: "ENTRY" });
         desiredKeySet.add(key);
         plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
       }
@@ -675,7 +681,13 @@ export class GridEngine {
         this.log("info", `跳过 SELL @ ${this.formatPrice(levelPrice)}：等待对应平仓成交`);
         continue;
       }
-      const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), "ENTRY");
+      const priceStr = this.formatPrice(levelPrice);
+      const key = this.getOrderKey("SELL", priceStr, "ENTRY");
+      // If an EXIT at the same side+price is planned/active, skip ENTRY to avoid intent conflict
+      const exitKeySame = this.getOrderKey("SELL", priceStr, "EXIT");
+      if ((plannedKeyCounts.get(exitKeySame) ?? 0) >= 1 || desiredKeySet.has(exitKeySame)) {
+        continue;
+      }
       const until = this.pendingKeyUntil.get(key);
       const nowTs = this.now();
       if (until && until > nowTs) {
@@ -683,7 +695,7 @@ export class GridEngine {
       }
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
-        desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize, intent: "ENTRY" });
+        desired.push({ level, side: "SELL", price: priceStr, amount: this.config.orderSize, intent: "ENTRY" });
         desiredKeySet.add(key);
         plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
       }
