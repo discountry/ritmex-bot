@@ -98,8 +98,8 @@ export class GridEngine {
   // temporarily block re-opening at that level to avoid immediate re-placement.
   private readonly levelReopenBlockUntil = new Map<number, number>();
   private static readonly DISAPPEAR_REOPEN_COOLDOWN_MS = 2000;
-  // Track levels awaiting classification after disappearance when neither fill nor cancel is confirmed
-  private readonly awaitingClassification = new Map<number, { until: number; absAtStart: number }>();
+  // Track levels awaiting classification after disappearance until next account snapshot confirms
+  private readonly awaitingClassification = new Map<number, { accountVerAtStart: number; absAtStart: number }>();
   private static readonly AWAIT_CLASSIFICATION_TIMEOUT_MS = 2500;
   private sidesLocked = false;
   private startupCleaned = false;
@@ -135,6 +135,7 @@ export class GridEngine {
   private running: boolean;
   private stopReason: string | null = null;
   private lastUpdated: number | null = null;
+  private accountVersion = 0;
 
   constructor(private readonly config: GridConfig, private readonly exchange: ExchangeAdapter, options: EngineOptions = {}) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -210,6 +211,7 @@ export class GridEngine {
       (snapshot) => {
         this.accountSnapshot = snapshot;
         this.position = getPosition(snapshot, this.config.symbol);
+        this.accountVersion += 1;
         this.lastAbsPositionAmt = Math.abs(this.position.positionAmt);
         if (!this.feedArrived.account) {
           this.feedArrived.account = true;
@@ -529,9 +531,8 @@ export class GridEngine {
           this.awaitingClassification.delete(meta.level);
           this.levelReopenBlockUntil.delete(meta.level);
         } else {
-          // unknown: defer decision until position/account updates or timeout
-          const until = this.now() + GridEngine.AWAIT_CLASSIFICATION_TIMEOUT_MS;
-          this.awaitingClassification.set(meta.level, { until, absAtStart: this.lastAbsPositionAmt });
+          // unknown: defer decision until we see a newer account snapshot
+          this.awaitingClassification.set(meta.level, { accountVerAtStart: this.accountVersion, absAtStart: this.lastAbsPositionAmt });
           this.blockLevelReopen(meta.level);
         }
       }
@@ -541,20 +542,19 @@ export class GridEngine {
     this.lastKeyMeta = keyToMeta;
     this.lastOrderIdsByKey = currentOrderIdsByKey;
 
-    // Resolve any awaiting classifications based on updated account snapshot or timeout
+    // Resolve awaiting classifications only after a new account snapshot
     if (this.awaitingClassification.size) {
-      const nowTs = this.now();
       for (const [level, info] of Array.from(this.awaitingClassification.entries())) {
         const absNow = Math.abs(this.position.positionAmt);
-        if (absNow > info.absAtStart + EPSILON) {
+        if (this.accountVersion > info.accountVerAtStart && absNow > info.absAtStart + EPSILON) {
           // treat as filled
           const side = this.levelMeta[level]?.side === "BUY" ? "BUY" : "SELL";
           if (side === "BUY") this.pendingLongLevels.add(level);
           else this.pendingShortLevels.add(level);
           this.awaitingClassification.delete(level);
           this.levelReopenBlockUntil.delete(level);
-        } else if (nowTs >= info.until) {
-          // timeout -> treat as canceled
+        } else if (this.accountVersion > info.accountVerAtStart && !(absNow > info.absAtStart + EPSILON)) {
+          // after new account snapshot without increased exposure -> canceled
           this.awaitingClassification.delete(level);
           this.levelReopenBlockUntil.delete(level);
         }
