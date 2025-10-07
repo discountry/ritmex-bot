@@ -444,7 +444,7 @@ export class GridEngine {
         side,
         amount,
         this.log,
-        true,
+        false,
         undefined,
         { qtyStep: this.config.qtyStep }
       );
@@ -1136,7 +1136,7 @@ export class GridEngine {
           priceStr,
           Math.abs(qty),
           this.log,
-          true,
+          false,
           undefined,
           { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
         );
