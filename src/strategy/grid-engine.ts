@@ -856,15 +856,13 @@ export class GridEngine {
         this.log("info", "存在未完成的 LIMIT 操作，本轮不再下新单");
         break;
       }
-      // Gate: require a new orders snapshot since last placement to proceed
-      if (this.lastPlacementOrdersVersion === this.ordersVersion) {
-        this.log("info", "等待订单快照更新后再下单");
-        break;
-      }
-      // Gate: cooldown between LIMIT attempts to avoid thrashing
+      // Gate: require either a new orders snapshot OR cooldown elapsed
       const nowTs2 = this.now();
-      if (nowTs2 - this.lastLimitAttemptAt < GridEngine.LIMIT_COOLDOWN_MS) {
-        this.log("info", "冷却期内，暂不下新 LIMIT 单");
+      const needSnapshotUpdated = this.lastPlacementOrdersVersion === this.ordersVersion;
+      const inCooldown = nowTs2 - this.lastLimitAttemptAt < GridEngine.LIMIT_COOLDOWN_MS;
+      if (needSnapshotUpdated && inCooldown) {
+        // both conditions unmet: still waiting for either snapshot or cooldown
+        this.log("info", "等待订单快照或冷却结束再下单");
         break;
       }
       // If a LIMIT operation is already pending (coordinator lock), skip issuing more this tick
@@ -900,6 +898,8 @@ export class GridEngine {
         continue;
       }
       try {
+        // record attempt time to avoid rapid retries even if placement fails
+        this.lastLimitAttemptAt = nowTs2;
         const placed = await placeOrder(
           this.exchange,
           this.config.symbol,
@@ -917,7 +917,6 @@ export class GridEngine {
         );
         if (placed) {
           this.lastPlacementOrdersVersion = this.ordersVersion;
-          this.lastLimitAttemptAt = this.now();
           newOrdersPlaced += 1;
           plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
           activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
