@@ -135,6 +135,7 @@ export class GridEngine {
   private stopReason: string | null = null;
   private lastUpdated: number | null = null;
   private accountVersion = 0;
+  private awaitingByLevel = new Map<number, { accountVerAtStart: number; absAtStart: number }>();
 
   constructor(private readonly config: GridConfig, private readonly exchange: ExchangeAdapter, options: EngineOptions = {}) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -148,6 +149,12 @@ export class GridEngine {
     if (!this.configValid) {
       this.stopReason = "配置无效，已暂停网格";
       this.log("error", this.stopReason);
+    }
+    if (this.gridLevels.length === 0) {
+      this.running = false;
+      this.stopReason = `网格价位计算失败，模式不支持或参数无效: ${String(this.config.gridMode)}`;
+      this.log("error", this.stopReason);
+      this.emitUpdate();
     }
     this.bootstrap();
   }
@@ -197,6 +204,9 @@ export class GridEngine {
       return false;
     }
     if (!Number.isFinite(this.config.maxPositionSize) || this.config.maxPositionSize <= 0) {
+      return false;
+    }
+    if (!Number.isFinite(this.config.refreshIntervalMs) || this.config.refreshIntervalMs < 100) {
       return false;
     }
     return true;
@@ -294,11 +304,17 @@ export class GridEngine {
 
   private synchronizeLocks(orders: AsterOrder[] | null | undefined): void {
     const list = Array.isArray(orders) ? orders : [];
+    const FINAL = new Set(["FILLED", "CANCELED", "CANCELLED", "REJECTED", "EXPIRED"]);
     Object.keys(this.pendings).forEach((type) => {
       const pendingId = this.pendings[type];
       if (!pendingId) return;
       const match = list.find((order) => String(order.orderId) === pendingId);
-      if (!match || (match.status && match.status !== "NEW")) {
+      if (!match) {
+        unlockOperating(this.locks, this.timers, this.pendings, type);
+        return;
+      }
+      const status = String(match.status || "").toUpperCase();
+      if (FINAL.has(status)) {
         unlockOperating(this.locks, this.timers, this.pendings, type);
       }
     });
@@ -397,6 +413,13 @@ export class GridEngine {
     this.running = false;
     this.pendingLongLevels.clear();
     this.pendingShortLevels.clear();
+    this.awaitingByLevel.clear();
+    this.closeKeyBySourceLevel.clear();
+    this.immediateCloseToPlace = [];
+    // 仅在不需要自动重启时停止轮询定时器
+    if (!this.config.autoRestart) {
+      this.stop();
+    }
   }
 
   private async closePosition(): Promise<void> {
@@ -441,11 +464,14 @@ export class GridEngine {
     this.log("info", "价格重新回到网格区间，恢复网格运行");
     this.running = true;
     this.stopReason = null;
+    // 重新锚定买卖侧（可选：根据当前价格）
+    this.sidesLocked = false;
+    this.tryLockSidesOnce();
     this.start();
   }
 
   private async syncGridSimple(price: number): Promise<void> {
-    const activeOrders = this.openOrders.filter((o) => o.symbol === this.config.symbol && o.type === "LIMIT");
+    const activeOrders = this.openOrders.filter((o) => this.isActiveLimitOrder(o));
     // Build lookup for all recent orders by id (including non-active) to read final statuses
     const allOrdersById = new Map<string, AsterOrder>();
     for (const o of this.openOrders) {
@@ -488,11 +514,14 @@ export class GridEngine {
         }
       }
       if (classified === "unknown") {
-        const absNow = Math.abs(this.position.positionAmt);
-        const expectUp = meta.intent === "ENTRY"; // ENTRY should increase abs position; EXIT should decrease
-        if (expectUp && absNow > this.lastAbsPositionAmt + EPSILON) classified = "filled";
-        else if (!expectUp && absNow + EPSILON < this.lastAbsPositionAmt) classified = "filled";
-        else classified = "canceled"; // conservative default
+        // Defer classification until next account snapshot; block ENTRY on that level in the meantime
+        const level = meta.intent === "EXIT"
+          ? (meta.sourceLevel ?? this.findSourceForCloseTarget(meta.level, meta.side))
+          : meta.level;
+        this.awaitingByLevel.set(level, { accountVerAtStart: this.accountVersion, absAtStart: this.lastAbsPositionAmt });
+        // skip side effects for this disappeared id in this tick
+        this.orderIntentById.delete(id);
+        continue;
       }
       if (classified === "filled") {
         if (meta.intent === "ENTRY") {
@@ -524,9 +553,37 @@ export class GridEngine {
           this.closeKeyBySourceLevel.delete(src);
         }
       }
+      // cleanup intent map for this disappeared id to avoid leaks
+      this.orderIntentById.delete(id);
     }
     // Update prevActiveIds for next tick
     this.prevActiveIds = currIds;
+
+    // Resolve deferred unknown classifications after a new account snapshot
+    if (this.awaitingByLevel.size) {
+      for (const [level, info] of Array.from(this.awaitingByLevel.entries())) {
+        if (this.accountVersion <= info.accountVerAtStart) continue;
+        const absNow = Math.abs(this.position.positionAmt);
+        if (absNow > info.absAtStart + EPSILON) {
+          // infer ENTRY filled -> mark level pending
+          const sideAtLevel = this.levelMeta[level]?.side === "BUY" ? "BUY" : "SELL";
+          if (sideAtLevel === "BUY") this.pendingLongLevels.add(level);
+          else this.pendingShortLevels.add(level);
+          this.awaitingByLevel.delete(level);
+          continue;
+        }
+        if (absNow + EPSILON < info.absAtStart) {
+          // infer EXIT filled -> clear pending and close key for source level
+          this.pendingLongLevels.delete(level);
+          this.pendingShortLevels.delete(level);
+          this.closeKeyBySourceLevel.delete(level);
+          this.awaitingByLevel.delete(level);
+          continue;
+        }
+        // no abs change after new account snapshot -> treat as canceled/no-op
+        this.awaitingByLevel.delete(level);
+      }
+    }
 
     // Desired open orders according to locked sides
     const desired: DesiredGridOrder[] = [];
@@ -556,6 +613,7 @@ export class GridEngine {
     for (const level of this.buyLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
+      if (this.awaitingByLevel.has(level)) continue;
       if (this.pendingLongLevels.has(level)) continue; // wait until close filled
       const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), "ENTRY");
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
@@ -570,6 +628,7 @@ export class GridEngine {
     for (const level of this.sellLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
+      if (this.awaitingByLevel.has(level)) continue;
       if (this.pendingShortLevels.has(level)) continue;
       const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), "ENTRY");
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
@@ -615,12 +674,14 @@ export class GridEngine {
     for (const d of desired) {
       const isClose = d.intent === "EXIT" || (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
       const intent: "ENTRY" | "EXIT" = isClose ? "EXIT" : "ENTRY";
-      // Cap EXIT quantity to avoid over-closing and accidental flip
+      // Cap quantities: EXIT by remaining position; ENTRY by maxPositionSize guard
       if (intent === "EXIT") {
         const capped = this.capExitQty(d.amount, d.side);
-        if (capped <= EPSILON) {
-          continue;
-        }
+        if (capped <= EPSILON) continue;
+        d.amount = capped;
+      } else {
+        const capped = this.capEntryQty(d.amount);
+        if (capped <= EPSILON) continue;
         d.amount = capped;
       }
       const key = this.getOrderKey(d.side, d.price, intent);
@@ -677,8 +738,7 @@ export class GridEngine {
     if (absPos <= EPSILON) return 0;
     let pendingExitQty = 0;
     for (const o of this.openOrders) {
-      if (o.symbol !== this.config.symbol) continue;
-      if (o.type !== "LIMIT") continue;
+      if (!this.isActiveLimitOrder(o)) continue;
       if (o.side !== side) continue; // same side as this EXIT order
       const meta = this.orderIntentById.get(String(o.orderId));
       if (!meta || meta.intent !== "EXIT") continue;
@@ -688,6 +748,26 @@ export class GridEngine {
       pendingExitQty += remaining;
     }
     const remain = Math.max(absPos - pendingExitQty, 0);
+    return Math.min(desiredQty, remain);
+  }
+
+  private estimatePendingEntryQty(): number {
+    let sum = 0;
+    for (const o of this.openOrders) {
+      if (!this.isActiveLimitOrder(o)) continue;
+      const meta = this.orderIntentById.get(String(o.orderId));
+      if (!meta || meta.intent !== "ENTRY") continue;
+      const orig = Number(o.origQty || 0);
+      const exec = Number(o.executedQty || 0);
+      sum += Math.max(orig - exec, 0);
+    }
+    return sum;
+  }
+
+  private capEntryQty(desiredQty: number): number {
+    const absPos = Math.abs(this.position.positionAmt);
+    const pendingEntry = this.estimatePendingEntryQty();
+    const remain = Math.max(this.config.maxPositionSize - absPos - pendingEntry, 0);
     return Math.min(desiredQty, remain);
   }
 
@@ -735,8 +815,14 @@ export class GridEngine {
         const price = lowerPrice * Math.pow(ratio, i);
         levels.push(Number(price.toFixed(this.priceDecimals)));
       }
+      // snap endpoints to exact bounds to avoid drift
+      if (levels.length) {
+        levels[0] = Number(lowerPrice.toFixed(this.priceDecimals));
+        levels[levels.length - 1] = Number(upperPrice.toFixed(this.priceDecimals));
+      }
       return levels;
     }
+    this.log("error", `不支持的网格模式: ${String(this.config.gridMode)}`);
     return [];
   }
 
@@ -750,7 +836,7 @@ export class GridEngine {
     );
     const openOrderKeys = new Set(
       this.openOrders
-        .filter((order) => order.symbol === this.config.symbol && order.type === "LIMIT")
+        .filter((order) => this.isActiveLimitOrder(order))
         .map((order) => {
           const id = String(order.orderId);
           const meta = this.orderIntentById.get(id);
@@ -784,7 +870,7 @@ export class GridEngine {
       midPrice,
       gridLines,
       desiredOrders: this.desiredOrders.slice(),
-      openOrders: this.openOrders.filter((order) => order.symbol === this.config.symbol),
+      openOrders: this.openOrders.filter((order) => this.isActiveLimitOrder(order)),
       position: this.position,
       running: this.running,
       stopReason: this.running ? null : this.stopReason,
@@ -801,6 +887,13 @@ export class GridEngine {
 
   private getOrderKey(side: "BUY" | "SELL", price: string, intent: "ENTRY" | "EXIT" = "ENTRY"): string {
     return `${side}:${price}:${intent}`;
+  }
+
+  private isActiveLimitOrder(o: AsterOrder): boolean {
+    if (o.symbol !== this.config.symbol) return false;
+    if (o.type !== "LIMIT") return false;
+    const s = String(o.status || "").toUpperCase();
+    return !["FILLED", "CANCELED", "CANCELLED", "REJECTED", "EXPIRED"].includes(s);
   }
 
   private normalizePrice(price: string | number): string {
@@ -829,15 +922,11 @@ export class GridEngine {
     this.sellLevelIndices.length = 0;
     if (!this.gridLevels.length) return;
     const pivotIndex = Math.floor(Math.max(this.gridLevels.length - 1, 0) / 2);
-    const anchorByLevel = new Map<number, { side: "BUY" | "SELL" }>();
     const hasReference = Number.isFinite(referencePrice ?? NaN);
     const pivotPrice = hasReference ? this.clampReferencePrice(Number(referencePrice)) : null;
     for (let i = 0; i < this.gridLevels.length; i += 1) {
       let side: "BUY" | "SELL";
-      const anchor = anchorByLevel.get(i);
-      if (anchor) {
-        side = anchor.side;
-      } else if (pivotPrice != null) {
+      if (pivotPrice != null) {
         side = this.gridLevels[i]! <= pivotPrice + EPSILON ? "BUY" : "SELL";
       } else {
         side = i <= pivotIndex ? "BUY" : "SELL";
@@ -930,7 +1019,7 @@ export class GridEngine {
           priceStr,
           Math.abs(qty),
           this.log,
-          false,
+          true,
           undefined,
           { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
