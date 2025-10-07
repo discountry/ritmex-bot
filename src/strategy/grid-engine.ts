@@ -593,6 +593,8 @@ export class GridEngine {
 
     // Desired open orders according to locked sides
     const desired: DesiredGridOrder[] = [];
+    const desiredKeySet = new Set<string>();
+    const plannedKeyCounts = new Map<string, number>(activeKeyCounts);
     const halfTick = this.config.priceTick / 2;
     const activeKeySet = new Set(
       activeOrders.map((o) => this.getOrderKey(o.side, this.normalizePrice(o.price)))
@@ -603,9 +605,11 @@ export class GridEngine {
     if (this.immediateCloseToPlace.length) {
       for (const item of this.immediateCloseToPlace) {
         const key = this.getOrderKey(item.side, item.price);
-        const count = activeKeyCounts.get(key) ?? 0;
-        if (count < 1) {
+        const count = plannedKeyCounts.get(key) ?? 0;
+        if (count < 1 && !desiredKeySet.has(key)) {
           desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize });
+          desiredKeySet.add(key);
+          plannedKeyCounts.set(key, count + 1);
         }
         if (!this.closeKeyBySourceLevel.has(item.sourceLevel)) {
           this.closeKeyBySourceLevel.set(item.sourceLevel, key);
@@ -623,8 +627,12 @@ export class GridEngine {
       if (this.pendingLongLevels.has(level)) continue; // wait until close filled
       const key = this.getOrderKey("BUY", this.formatPrice(levelPrice));
       const targetMax = this.isCloseDesiredForSideAtLevel("BUY", level) ? 2 : 1;
-      if ((activeKeyCounts.get(key) ?? 0) >= targetMax) continue;
-      desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
+      if ((plannedKeyCounts.get(key) ?? 0) >= targetMax) continue;
+      if (!desiredKeySet.has(key)) {
+        desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
+        desiredKeySet.add(key);
+        plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
+      }
     }
 
     // opens above price (SELL)
@@ -635,8 +643,12 @@ export class GridEngine {
       if (this.pendingShortLevels.has(level)) continue;
       const key = this.getOrderKey("SELL", this.formatPrice(levelPrice));
       const targetMax = this.isCloseDesiredForSideAtLevel("SELL", level) ? 2 : 1;
-      if ((activeKeyCounts.get(key) ?? 0) >= targetMax) continue;
-      desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
+      if ((plannedKeyCounts.get(key) ?? 0) >= targetMax) continue;
+      if (!desiredKeySet.has(key)) {
+        desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
+        desiredKeySet.add(key);
+        plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
+      }
     }
 
     // close orders for pending levels (now non-reduce-only)
@@ -645,8 +657,10 @@ export class GridEngine {
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
       const closeKey = this.getOrderKey("SELL", priceStr);
-      if ((activeKeyCounts.get(closeKey) ?? 0) < 1) {
+      if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
         desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize });
+        desiredKeySet.add(closeKey);
+        plannedKeyCounts.set(closeKey, (plannedKeyCounts.get(closeKey) ?? 0) + 1);
       }
       if (!this.closeKeyBySourceLevel.has(source)) {
         this.closeKeyBySourceLevel.set(source, closeKey);
@@ -657,8 +671,10 @@ export class GridEngine {
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
       const closeKey = this.getOrderKey("BUY", priceStr);
-      if ((activeKeyCounts.get(closeKey) ?? 0) < 1) {
+      if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
         desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize });
+        desiredKeySet.add(closeKey);
+        plannedKeyCounts.set(closeKey, (plannedKeyCounts.get(closeKey) ?? 0) + 1);
       }
       if (!this.closeKeyBySourceLevel.has(source)) {
         this.closeKeyBySourceLevel.set(source, closeKey);
