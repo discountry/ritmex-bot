@@ -637,7 +637,10 @@ export class GridEngine {
 
     if (this.config.direction !== "short") {
       for (const { level, levelPrice } of belowPrice) {
-        if (shortCloseRequirements.has(level)) continue;
+        // 平仓档位和开仓档位独立：检查是否有减仓订单占用此档位
+        const hasCloseOrder = longCloseRequirements.has(level);
+        if (hasCloseOrder) continue;
+        
         const exposure = this.longExposure.get(level) ?? 0;
         if (exposure >= this.config.orderSize - EPSILON) continue;
         if (remainingLongHeadroom < this.config.orderSize - EPSILON) continue;
@@ -654,7 +657,10 @@ export class GridEngine {
 
     if (this.config.direction !== "long") {
       for (const { level, levelPrice } of abovePrice) {
-        if (longCloseRequirements.has(level)) continue;
+        // 平仓档位和开仓档位独立：检查是否有减仓订单占用此档位
+        const hasCloseOrder = shortCloseRequirements.has(level);
+        if (hasCloseOrder) continue;
+        
         const exposure = this.shortExposure.get(level) ?? 0;
         if (exposure >= this.config.orderSize - EPSILON) continue;
         if (remainingShortHeadroom < this.config.orderSize - EPSILON) continue;
@@ -1008,12 +1014,30 @@ export class GridEngine {
       if (side === "BUY") this.buyLevelIndices.push(i);
       else this.sellLevelIndices.push(i);
     }
+    // 为每个买入档位分配独立的卖出档位，实现一对一映射
+    const sellLevels = this.levelMeta.filter(meta => meta.side === "SELL").sort((a, b) => a.index - b.index);
+    let sellLevelIndex = 0;
+    
     for (const meta of this.levelMeta) {
       if (meta.side === "BUY") {
-        const target = this.levelMeta.find((candidate) => candidate.index > meta.index && candidate.side === "SELL");
-        meta.closeTarget = target?.index ?? null;
-        if (target) target.closeSources.push(meta.index);
+        // 为每个买入档位分配下一个可用的卖出档位
+        if (sellLevelIndex < sellLevels.length) {
+          const targetSellLevel = sellLevels[sellLevelIndex]!;
+          meta.closeTarget = targetSellLevel.index;
+          targetSellLevel.closeSources.push(meta.index);
+          sellLevelIndex++;
+        } else {
+          // 如果没有足够的卖出档位，使用最后一个卖出档位
+          const lastSellLevel = sellLevels[sellLevels.length - 1];
+          if (lastSellLevel) {
+            meta.closeTarget = lastSellLevel.index;
+            lastSellLevel.closeSources.push(meta.index);
+          } else {
+            meta.closeTarget = null;
+          }
+        }
       } else {
+        // 卖出档位：找到对应的买入档位（用于空单平仓）
         for (let j = meta.index - 1; j >= 0; j -= 1) {
           if (this.levelMeta[j]!.side === "BUY") {
             meta.closeTarget = this.levelMeta[j]!.index;
