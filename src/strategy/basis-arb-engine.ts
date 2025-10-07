@@ -103,6 +103,7 @@ export class BasisArbEngine {
   private stopped = false;
   private lastEntrySignalAt = 0;
   private lastExitSignalAt = 0;
+  private marketReadyAt: number | null = null;
 
   constructor(config: BasisArbConfig, exchange: ExchangeAdapter, deps: BasisArbDependencies = {}) {
     this.config = config;
@@ -179,6 +180,9 @@ export class BasisArbEngine {
     if (!this.feedReady.futures) {
       this.feedReady.futures = true;
       this.tradeLog.push("info", `期货深度已就绪 (${this.config.futuresSymbol})`);
+    }
+    if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
+      this.marketReadyAt = this.now();
     }
     this.emitUpdate();
   }
@@ -293,13 +297,17 @@ export class BasisArbEngine {
       this.feedReady.spot = true;
       this.tradeLog.push("info", `现货盘口已就绪 (${this.config.spotSymbol})`);
     }
+    if (this.feedReady.futures && this.feedReady.spot && this.marketReadyAt == null) {
+      this.marketReadyAt = this.now();
+    }
     this.emitUpdate();
   }
 
   private emitUpdate(): void {
-    // Evaluate entry/exit signals before emitting so the snapshot includes new log lines
-    this.evaluateSignals();
-    this.events.emit("update", this.buildSnapshot(), (error) => {
+    // Build a single snapshot, evaluate signals against EXACTLY the same data, then emit that snapshot
+    const snapshot = this.buildSnapshot();
+    this.evaluateSignals(snapshot);
+    this.events.emit("update", snapshot, (error) => {
       this.tradeLog.push("error", `推送订阅失败: ${String(error)}`);
     });
   }
@@ -380,16 +388,19 @@ export class BasisArbEngine {
     return sellFuturesNet - buySpotNet;
   }
 
-  private evaluateSignals(): void {
-    // Require both futures and spot feeds before computing signals
-    if (!this.feedReady.futures || !this.feedReady.spot) return;
+  private evaluateSignals(snapshot: BasisArbSnapshot): void {
+    // Require futures, spot, and funding feeds ready
+    if (!snapshot.feedStatus.futures || !snapshot.feedStatus.spot || !snapshot.feedStatus.funding) return;
+    // Require at least one refresh of both futures and spot AFTER initial readiness to avoid startup triggers
+    const readyAt = this.marketReadyAt;
+    if (readyAt == null) return;
+    const futTs = snapshot.futuresLastUpdate ?? 0;
+    const spotTs = snapshot.spotLastUpdate ?? 0;
+    if (futTs <= readyAt || spotTs <= readyAt) return;
     const now = this.now();
-    const futuresBid = this.futures.bid;
-    const spotAsk = this.spot.ask;
-    const spread = this.computeSpread(futuresBid, spotAsk);
-    const spreadBps = this.computeSpreadBps(spread, spotAsk);
-    const fundingRate = this.funding.rate;
-    const nextFundingTime = this.funding.nextFundingTime;
+    const spreadBps = snapshot.spreadBps;
+    const fundingRate = snapshot.fundingRate;
+    const nextFundingTime = snapshot.nextFundingTime;
     const msUntilFunding = typeof nextFundingTime === "number" ? nextFundingTime - now : null;
 
     // Entry signal: positive bp and next funding >= 10 minutes away
