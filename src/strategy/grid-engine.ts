@@ -105,6 +105,8 @@ export class GridEngine {
 
   private sidesLocked = false;
   private startupCleaned = false;
+  private startupCancelDone = false;
+  private startupCancelPromise: Promise<void> | null = null;
   private initialCloseHandled = false;
   private lastAbsPositionAmt = 0;
   private immediateCloseToPlace: Array<{ sourceLevel: number; targetLevel: number; side: "BUY" | "SELL"; price: string }> = [];
@@ -253,7 +255,7 @@ export class GridEngine {
           this.feedArrived.orders = true;
           log("info", "订单快照已同步");
           // cancel all existing orders at startup per simplified rules
-          void this.cancelAllExistingOrdersOnStartup();
+          this.startupCancelPromise = this.cancelAllExistingOrdersOnStartup();
         }
         this.feedStatus.orders = true;
         this.tryLockSidesOnce();
@@ -637,8 +639,15 @@ export class GridEngine {
       this.immediateCloseToPlace = [];
     }
 
+    const hasNetLong = this.position.positionAmt > EPSILON;
+    const hasNetShort = this.position.positionAmt < -EPSILON;
+
     // ENTRY opens below price (BUY)
     for (const level of this.buyLevelIndices) {
+      if (hasNetShort) {
+        // Avoid competing with EXIT(BUY) while holding net short; focus on closing first
+        continue;
+      }
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
       if (this.awaitingByLevel.has(level)) {
@@ -671,6 +680,10 @@ export class GridEngine {
 
     // ENTRY opens above price (SELL)
     for (const level of this.sellLevelIndices) {
+      if (hasNetLong) {
+        // Avoid competing with EXIT(SELL) while holding net long; focus on closing first
+        continue;
+      }
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
       if (this.awaitingByLevel.has(level)) {
@@ -788,7 +801,7 @@ export class GridEngine {
         if (placed) {
           plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
           activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
-          // start local suppression window for this key
+          // ensure suppression window persists after success
           this.pendingKeyUntil.set(key, this.now() + GridEngine.PENDING_TTL_MS);
           if (placed.orderId != null) {
             const record: { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT"; sourceLevel?: number } = {
@@ -802,6 +815,10 @@ export class GridEngine {
             }
             this.orderIntentById.set(String(placed.orderId), record);
           }
+        }
+        // optimistic suppression even if not placed to avoid rapid retries during WS lag/dedupe
+        if (!this.pendingKeyUntil.has(key)) {
+          this.pendingKeyUntil.set(key, this.now() + GridEngine.PENDING_TTL_MS);
         }
         if (placed && isClose) {
           this.closeKeyBySourceLevel.set(
@@ -1078,12 +1095,21 @@ export class GridEngine {
       this.log("order", "启动阶段：已撤销全部历史挂单");
     } catch (error) {
       this.log("error", `启动撤单失败: ${extractMessage(error)}`);
+    } finally {
+      this.startupCancelDone = true;
     }
   }
 
-  private tryHandleInitialClose(): void {
+  private async tryHandleInitialClose(): Promise<void> {
     if (this.initialCloseHandled) return;
     if (!(this.feedStatus.account && this.feedStatus.orders && (this.feedStatus.ticker || this.feedStatus.depth))) return;
+    // Wait for startup cancel barrier to avoid racing with initial close
+    if (!this.startupCancelDone) {
+      if (this.startupCancelPromise) {
+        try { await this.startupCancelPromise; } catch {}
+      }
+      if (!this.startupCancelDone) return;
+    }
     this.initialCloseHandled = true;
     const qty = this.position.positionAmt;
     if (!Number.isFinite(qty) || Math.abs(qty) <= EPSILON) return;
@@ -1096,6 +1122,9 @@ export class GridEngine {
     const priceStr = this.formatPrice(this.gridLevels[nearest]!);
     void (async () => {
       try {
+        // optimistic suppression for initial close key
+        const exitKey = this.getOrderKey(side, priceStr, "EXIT");
+        this.pendingKeyUntil.set(exitKey, this.now() + GridEngine.PENDING_TTL_MS);
         const placed = await placeOrder(
           this.exchange,
           this.config.symbol,
@@ -1109,14 +1138,13 @@ export class GridEngine {
           this.log,
           true,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
         );
         if (placed) {
           // mark pending exposure broadly so we don't re-open immediately on that source level (choose closest source side)
           const source = this.findSourceForInitialPosition(side);
           if (side === "SELL") this.pendingLongLevels.add(source);
           else this.pendingShortLevels.add(source);
-          const exitKey = this.getOrderKey(side, priceStr, "EXIT");
           this.closeKeyBySourceLevel.set(source, exitKey);
           if (placed.orderId != null) {
             this.orderIntentById.set(String(placed.orderId), { side, price: priceStr, level: nearest, intent: "EXIT", sourceLevel: source });
