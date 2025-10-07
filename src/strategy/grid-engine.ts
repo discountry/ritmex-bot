@@ -14,10 +14,9 @@ import {
   type OrderPendingMap,
   type OrderTimerMap,
 } from "../core/order-coordinator";
-import { safeCancelOrder } from "../core/lib/orders";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
-import { clearGridState, loadGridState, saveGridState, type StoredGridState } from "./common/grid-storage";
+// persistence removed per simplified rules
 
 interface DesiredGridOrder {
   level: number;
@@ -90,15 +89,16 @@ export class GridEngine {
   private readonly levelMeta: LevelMeta[] = [];
   private readonly buyLevelIndices: number[] = [];
   private readonly sellLevelIndices: number[] = [];
-  private readonly longExposure = new Map<number, number>();
-  private readonly shortExposure = new Map<number, number>();
-  private readonly lastOrderBook = new Map<
-    string,
-    { side: "BUY" | "SELL"; level: number; quantity: number; reduceOnly: boolean }
-  >();
-  private readonly pendingCancelKeys = new Set<string>();
-  private statePersistTimer: ReturnType<typeof setTimeout> | null = null;
-  private protectExistingOrdersUntil = 0;
+  // simplified: exposure maps removed; we only track pending-level states
+  // simplified state: track last seen open-order keys to detect fills, and pending exposures per-level
+  private lastOpenOrderKeys = new Set<string>();
+  private readonly pendingLongLevels = new Set<number>();
+  private readonly pendingShortLevels = new Set<number>();
+  private readonly reduceOnlyKeyBySourceLevel = new Map<number, string>();
+  private lastKeyMeta = new Map<string, { side: "BUY" | "SELL"; level: number; reduceOnly: boolean }>();
+  private sidesLocked = false;
+  private startupCleaned = false;
+  private initialCloseHandled = false;
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -129,9 +129,7 @@ export class GridEngine {
   private running: boolean;
   private stopReason: string | null = null;
   private lastUpdated: number | null = null;
-  private freshStartActive = false;
-  private pendingInitialSideAssignment = false;
-  private positionAlignHoldUntil = 0;
+  // fresh-start flags removed in simplified flow
 
   constructor(private readonly config: GridConfig, private readonly exchange: ExchangeAdapter, options: EngineOptions = {}) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -141,7 +139,7 @@ export class GridEngine {
     this.configValid = this.validateConfig();
     this.gridLevels = this.computeGridLevels();
     this.buildLevelMeta();
-    void this.restoreState();
+    // no persistence restore in simplified flow
     this.running = this.configValid;
     if (!this.configValid) {
       this.stopReason = "配置无效，已暂停网格";
@@ -213,7 +211,8 @@ export class GridEngine {
           log("info", "账户快照已同步");
         }
         this.feedStatus.account = true;
-        this.evaluateFreshStart();
+        this.tryLockSidesOnce();
+        this.tryHandleInitialClose();
         this.emitUpdate();
       },
       log,
@@ -231,15 +230,14 @@ export class GridEngine {
           : [];
         this.synchronizeLocks(orders);
         if (!this.feedArrived.orders) {
-          const bufferMs = Math.max(this.config.refreshIntervalMs * 2, 2000);
-          this.protectExistingOrdersUntil = Math.max(this.protectExistingOrdersUntil, this.now() + bufferMs);
-        }
-        if (!this.feedArrived.orders) {
           this.feedArrived.orders = true;
           log("info", "订单快照已同步");
+          // cancel all existing orders at startup per simplified rules
+          void this.cancelAllExistingOrdersOnStartup();
         }
         this.feedStatus.orders = true;
-        this.evaluateFreshStart();
+        this.tryLockSidesOnce();
+        this.tryHandleInitialClose();
         this.emitUpdate();
       },
       log,
@@ -258,7 +256,7 @@ export class GridEngine {
           log("info", "盘口深度已同步");
         }
         this.feedStatus.depth = true;
-        this.tryAssignInitialSidesFromPrice();
+        this.tryLockSidesOnce();
       },
       log,
       {
@@ -276,7 +274,8 @@ export class GridEngine {
           log("info", "行情推送已同步");
         }
         this.feedStatus.ticker = true;
-        this.tryAssignInitialSidesFromPrice();
+        this.tryLockSidesOnce();
+        this.tryHandleInitialClose();
         this.emitUpdate();
       },
       log,
@@ -303,7 +302,8 @@ export class GridEngine {
     if (this.processing) return;
     this.processing = true;
     try {
-      this.tryAssignInitialSidesFromPrice();
+      this.tryLockSidesOnce();
+      this.tryHandleInitialClose();
       if (!this.running) {
         await this.tryRestart();
         return;
@@ -315,12 +315,12 @@ export class GridEngine {
       if (!Number.isFinite(price) || price === null) {
         return;
       }
-      await this.enforceExposureSafety(price);
+      // simplified: optional stop-loss logic preserved
       if (this.shouldStop(price)) {
         await this.haltGrid(price);
         return;
       }
-      await this.syncGrid(price);
+      await this.syncGridSimple(price);
     } catch (error) {
       this.log("error", `网格轮询异常: ${extractMessage(error)}`);
     } finally {
@@ -337,59 +337,17 @@ export class GridEngine {
     return getMidOrLast(this.depthSnapshot, this.tickerSnapshot);
   }
 
-  private evaluateFreshStart(): void {
-    if (!this.feedStatus.account || !this.feedStatus.orders) return;
-    const hasPosition = Math.abs(this.position.positionAmt) > EPSILON;
-    const hasOrders = this.hasActiveOrders();
-    if (!hasPosition && !hasOrders) {
-      if (!this.freshStartActive) {
-        this.freshStartActive = true;
-        this.handleFreshStart();
-      }
-      return;
-    }
-    this.freshStartActive = false;
-    this.pendingInitialSideAssignment = false;
-  }
+  // fresh-start and persistence logic removed in simplified flow
 
-  private handleFreshStart(): void {
-    this.log("info", "检测到无持仓且无挂单，重置本地网格状态");
-    this.longExposure.clear();
-    this.shortExposure.clear();
-    this.lastOrderBook.clear();
-    this.pendingCancelKeys.clear();
-    this.desiredOrders = [];
-    this.positionAlignHoldUntil = 0;
-    if (this.statePersistTimer) {
-      clearTimeout(this.statePersistTimer);
-      this.statePersistTimer = null;
-    }
-    void this.clearPersistedGridState();
-    const assigned = this.assignInitialSidesFromPrice();
-    this.pendingInitialSideAssignment = !assigned;
-    if (!assigned) {
-      this.log("info", "等待行情价格以完成网格方向初始化");
-    }
-    this.emitUpdate();
-  }
-
-  private assignInitialSidesFromPrice(): boolean {
+  private tryLockSidesOnce(): void {
+    if (this.sidesLocked) return;
+    if (!this.feedStatus.ticker && !this.feedStatus.depth) return;
     const reference = this.getReferencePrice();
-    if (!Number.isFinite(reference) || reference == null) {
-      return false;
-    }
+    if (!Number.isFinite(reference) || reference == null) return;
     const price = this.clampReferencePrice(Number(reference));
     this.buildLevelMeta(price);
-    return true;
-  }
-
-  private tryAssignInitialSidesFromPrice(): void {
-    if (!this.pendingInitialSideAssignment) return;
-    if (!this.freshStartActive) return;
-    if (this.assignInitialSidesFromPrice()) {
-      this.pendingInitialSideAssignment = false;
-      this.emitUpdate();
-    }
+    this.sidesLocked = true;
+    this.log("info", "已根据现价一次性划分买卖档位");
   }
 
   private clampReferencePrice(price: number): number {
@@ -399,13 +357,7 @@ export class GridEngine {
     return Math.min(Math.max(price, minLevel), maxLevel);
   }
 
-  private async clearPersistedGridState(): Promise<void> {
-    try {
-      await clearGridState(this.config.symbol);
-    } catch (error) {
-      this.log("error", `清理本地网格状态失败: ${extractMessage(error)}`);
-    }
-  }
+  // persistence removed
 
   private hasActiveOrders(): boolean {
     return this.openOrders.some((order) => {
@@ -417,11 +369,7 @@ export class GridEngine {
     });
   }
 
-  private deferPositionAlignment(): void {
-    const buffer = Math.max(this.config.refreshIntervalMs * 2, 1000);
-    const deadline = this.now() + buffer;
-    this.positionAlignHoldUntil = Math.max(this.positionAlignHoldUntil, deadline);
-  }
+  private deferPositionAlignment(): void {}
 
   private shouldStop(price: number): boolean {
     if (this.config.stopLossPct <= 0) return false;
@@ -452,11 +400,8 @@ export class GridEngine {
     this.desiredOrders = [];
     this.lastUpdated = this.now();
     this.running = false;
-    this.longExposure.clear();
-    this.shortExposure.clear();
-    this.lastOrderBook.clear();
-    this.pendingCancelKeys.clear();
-    this.schedulePersist();
+    this.pendingLongLevels.clear();
+    this.pendingShortLevels.clear();
   }
 
   private async closePosition(): Promise<void> {
@@ -504,75 +449,108 @@ export class GridEngine {
     this.start();
   }
 
-  private async syncGrid(price: number): Promise<void> {
-    const activeOrders = this.openOrders.filter((order) => order.symbol === this.config.symbol && order.type === "LIMIT");
+  private async syncGridSimple(price: number): Promise<void> {
+    const activeOrders = this.openOrders.filter((o) => o.symbol === this.config.symbol && o.type === "LIMIT");
 
-    // Keep level side assignment consistent with currently open orders to avoid churn on restart
-    this.buildLevelMeta(price);
-
-    this.backfillExposureFromOpenOrders(activeOrders);
-
-    const desired = this.computeDesiredOrders(price);
-    this.desiredOrders = desired;
-
-    const desiredKeys = new Set(desired.map((order) => this.getOrderKey(order.side, order.price, order.reduceOnly)));
-    const orderMap = new Map<string, AsterOrder>();
-    const orderBookEntries = new Map<
-      string,
-      { side: "BUY" | "SELL"; level: number; quantity: number; reduceOnly: boolean }
-    >();
-    for (const order of activeOrders) {
-      const key = this.getOrderKey(order.side, this.normalizePrice(order.price), order.reduceOnly === true);
-      orderMap.set(key, order);
-      const level = this.resolveLevelIndex(Number(order.price));
+    // Detect fills by comparing last keys
+    const currentKeys = new Set<string>();
+    const keyToMeta = new Map<string, { side: "BUY" | "SELL"; level: number; reduceOnly: boolean }>();
+    for (const o of activeOrders) {
+      const key = this.getOrderKey(o.side, this.normalizePrice(o.price), o.reduceOnly === true);
+      currentKeys.add(key);
+      const level = this.resolveLevelIndex(Number(o.price));
       if (level != null) {
-        const quantity = Math.max(0, Number(order.origQty) - Number(order.executedQty ?? 0));
-        orderBookEntries.set(key, {
-          side: order.side,
-          level,
-          quantity,
-          reduceOnly: order.reduceOnly === true,
-        });
+        keyToMeta.set(key, { side: o.side, level, reduceOnly: o.reduceOnly === true });
       }
     }
-
-    this.updateLevelExposure(orderBookEntries);
-
-    // During protection window, treat existing orders as desired to ensure no cancellations
-    if (this.now() < this.protectExistingOrdersUntil) {
-      for (const key of orderBookEntries.keys()) {
-        desiredKeys.add(key);
-      }
-    }
-
-    for (const order of activeOrders) {
-      const key = this.getOrderKey(order.side, this.normalizePrice(order.price), order.reduceOnly === true);
-      if (desiredKeys.has(key)) continue;
-      this.pendingCancelKeys.add(key);
-      await safeCancelOrder(
-        this.exchange,
-        this.config.symbol,
-        order,
-        (orderId) => {
-          this.log("order", `撤销网格单 #${orderId}: ${order.side} @ ${order.price}`);
-          orderMap.delete(key);
-          this.pendingCancelKeys.delete(key);
-        },
-        () => {
-          this.log("order", `撤销时订单已完成: ${order.orderId}`);
-          orderMap.delete(key);
-          this.pendingCancelKeys.delete(key);
-        },
-        (error) => {
-          this.log("error", `撤销订单失败: ${extractMessage(error)}`);
-          this.pendingCancelKeys.delete(key);
+    // persist metadata for next tick to detect fills
+    this.lastKeyMeta = keyToMeta;
+    for (const prevKey of this.lastOpenOrderKeys) {
+      if (currentKeys.has(prevKey)) continue;
+      const meta = this.lastKeyMeta.get(prevKey) || keyToMeta.get(prevKey);
+      // If we can't resolve from current snapshot, try to decode by stored mapping
+      if (!meta) {
+        // For reduce-only disappearance, check mapping
+        for (const [source, roKey] of this.reduceOnlyKeyBySourceLevel.entries()) {
+          if (roKey === prevKey) {
+            // close filled for this source
+            this.pendingLongLevels.delete(source);
+            this.pendingShortLevels.delete(source);
+            this.reduceOnlyKeyBySourceLevel.delete(source);
+            break;
+          }
         }
-      );
+        continue;
+      }
+      if (!meta.reduceOnly) {
+        if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
+        else this.pendingShortLevels.add(meta.level);
+      } else {
+        // reduce-only filled: clear exposure for mapped source level
+        for (const [source, roKey] of this.reduceOnlyKeyBySourceLevel.entries()) {
+          if (roKey === prevKey) {
+            this.pendingLongLevels.delete(source);
+            this.pendingShortLevels.delete(source);
+            this.reduceOnlyKeyBySourceLevel.delete(source);
+            break;
+          }
+        }
+      }
+    }
+    this.lastOpenOrderKeys = currentKeys;
+
+    // Desired open orders according to locked sides
+    const desired: DesiredGridOrder[] = [];
+    const halfTick = this.config.priceTick / 2;
+    const activeKeySet = new Set(
+      activeOrders.map((o) => this.getOrderKey(o.side, this.normalizePrice(o.price), o.reduceOnly === true))
+    );
+
+    // opens below price (BUY)
+    for (const level of this.buyLevelIndices) {
+      const levelPrice = this.gridLevels[level]!;
+      if (levelPrice >= price - halfTick) continue;
+      if (this.pendingLongLevels.has(level)) continue; // wait until close filled
+      const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), false);
+      if (activeKeySet.has(key)) continue; // already has open order
+      desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize, reduceOnly: false });
     }
 
-    for (const desiredOrder of desired) {
-      const key = this.getOrderKey(desiredOrder.side, desiredOrder.price, desiredOrder.reduceOnly);
-      if (orderMap.has(key)) continue;
+    // opens above price (SELL)
+    for (const level of this.sellLevelIndices) {
+      const levelPrice = this.gridLevels[level]!;
+      if (levelPrice <= price + halfTick) continue;
+      if (this.pendingShortLevels.has(level)) continue;
+      const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), false);
+      if (activeKeySet.has(key)) continue;
+      desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize, reduceOnly: false });
+    }
+
+    // reduce-only close orders for pending levels
+    for (const source of this.pendingLongLevels) {
+      const target = this.levelMeta[source]?.closeTarget;
+      if (target == null) continue;
+      const priceStr = this.formatPrice(this.gridLevels[target]!);
+      const roKey = this.getOrderKey("SELL", priceStr, true);
+      if (!activeKeySet.has(roKey)) {
+        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, reduceOnly: true });
+      }
+    }
+    for (const source of this.pendingShortLevels) {
+      const target = this.levelMeta[source]?.closeTarget;
+      if (target == null) continue;
+      const priceStr = this.formatPrice(this.gridLevels[target]!);
+      const roKey = this.getOrderKey("BUY", priceStr, true);
+      if (!activeKeySet.has(roKey)) {
+        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, reduceOnly: true });
+      }
+    }
+
+    // Place desired orders
+    this.desiredOrders = desired;
+    for (const d of desired) {
+      const key = this.getOrderKey(d.side, d.price, d.reduceOnly);
+      if (activeKeySet.has(key)) continue;
       try {
         const placed = await placeOrder(
           this.exchange,
@@ -581,302 +559,46 @@ export class GridEngine {
           this.locks,
           this.timers,
           this.pendings,
-          desiredOrder.side,
-          desiredOrder.price,
-          desiredOrder.amount,
+          d.side,
+          d.price,
+          d.amount,
           this.log,
-          desiredOrder.reduceOnly,
+          d.reduceOnly,
           undefined,
           { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
-        if (placed) {
-          orderMap.set(key, placed);
+        if (placed && d.reduceOnly) {
+          this.reduceOnlyKeyBySourceLevel.set(
+            // map by source: find the source whose target equals d.level
+            this.findSourceForCloseTarget(d.level, d.side),
+            key
+          );
         }
       } catch (error) {
-        this.log("error", `挂单失败 (${desiredOrder.side} @ ${desiredOrder.price}): ${extractMessage(error)}`);
+        this.log("error", `挂单失败 (${d.side} @ ${d.price}): ${extractMessage(error)}`);
       }
     }
 
     this.lastUpdated = this.now();
   }
 
-  private computeDesiredOrders(price: number): DesiredGridOrder[] {
-    if (!this.running || !this.gridLevels.length || !this.configValid) return [];
-    this.alignExposureWithPosition();
-    const desired: DesiredGridOrder[] = [];
-    const totalLongExposure = this.sumExposure(this.longExposure);
-    const totalShortExposure = this.sumExposure(this.shortExposure);
-    let remainingLongHeadroom = Math.max(this.config.maxPositionSize - totalLongExposure, 0);
-    let remainingShortHeadroom = Math.max(this.config.maxPositionSize - totalShortExposure, 0);
-
-    const halfTick = this.config.priceTick / 2;
-    const belowPrice = this.buyLevelIndices
-      .map((level) => ({ level, levelPrice: this.gridLevels[level]! }))
-      .filter(({ levelPrice }) => levelPrice < price - halfTick)
-      .sort((a, b) => b.levelPrice - a.levelPrice);
-    const abovePrice = this.sellLevelIndices
-      .map((level) => ({ level, levelPrice: this.gridLevels[level]! }))
-      .filter(({ levelPrice }) => levelPrice > price + halfTick)
-      .sort((a, b) => a.levelPrice - b.levelPrice);
-
-    const longCloseRequirements = new Map<number, number>();
-    for (const [level, exposure] of this.longExposure) {
-      if (exposure <= EPSILON) continue;
-      const targetIndex = this.levelMeta[level]?.closeTarget;
-      if (targetIndex == null) continue;
-      longCloseRequirements.set(targetIndex, (longCloseRequirements.get(targetIndex) ?? 0) + exposure);
-    }
-
-    const shortCloseRequirements = new Map<number, number>();
-    for (const [level, exposure] of this.shortExposure) {
-      if (exposure <= EPSILON) continue;
-      const targetIndex = this.levelMeta[level]?.closeTarget;
-      if (targetIndex == null) continue;
-      shortCloseRequirements.set(targetIndex, (shortCloseRequirements.get(targetIndex) ?? 0) + exposure);
-    }
-
-    if (this.config.direction !== "short") {
-      for (const { level, levelPrice } of belowPrice) {
-        // 平仓档位和开仓档位独立：检查是否有减仓订单占用此档位
-        const hasCloseOrder = longCloseRequirements.has(level);
-        if (hasCloseOrder) continue;
-        
-        const exposure = this.longExposure.get(level) ?? 0;
-        if (exposure >= this.config.orderSize - EPSILON) continue;
-        if (remainingLongHeadroom < this.config.orderSize - EPSILON) continue;
-        desired.push({
-          level,
-          side: "BUY",
-          price: this.formatPrice(levelPrice),
-          amount: this.config.orderSize,
-          reduceOnly: false,
-        });
-        remainingLongHeadroom -= this.config.orderSize;
-      }
-    }
-
-    if (this.config.direction !== "long") {
-      for (const { level, levelPrice } of abovePrice) {
-        // 平仓档位和开仓档位独立：检查是否有减仓订单占用此档位
-        const hasCloseOrder = shortCloseRequirements.has(level);
-        if (hasCloseOrder) continue;
-        
-        const exposure = this.shortExposure.get(level) ?? 0;
-        if (exposure >= this.config.orderSize - EPSILON) continue;
-        if (remainingShortHeadroom < this.config.orderSize - EPSILON) continue;
-        desired.push({
-          level,
-          side: "SELL",
-          price: this.formatPrice(levelPrice),
-          amount: this.config.orderSize,
-          reduceOnly: false,
-        });
-        remainingShortHeadroom -= this.config.orderSize;
-      }
-    }
-
-    for (const [level, quantity] of longCloseRequirements) {
-      const rawPrice = this.gridLevels[level]!;
-      const clamped = this.clampClosePrice({ side: "SELL", rawPrice });
-      desired.push({
-        level,
-        side: "SELL",
-        price: this.formatPrice(clamped),
-        amount: quantity,
-        reduceOnly: true,
-      });
-    }
-
-    for (const [level, quantity] of shortCloseRequirements) {
-      const rawPrice = this.gridLevels[level]!;
-      const clamped = this.clampClosePrice({ side: "BUY", rawPrice });
-      desired.push({
-        level,
-        side: "BUY",
-        price: this.formatPrice(clamped),
-        amount: quantity,
-        reduceOnly: true,
-      });
-    }
-
-    return desired;
-  }
-
-  private clampClosePrice(params: { side: "BUY" | "SELL"; rawPrice: number }): number {
-    const slippage = Math.max(0, this.config.maxCloseSlippagePct);
-    if (slippage <= 0) return params.rawPrice;
-    const referenceCandidates = [
-      Number.isFinite(this.position.markPrice) ? this.position.markPrice : null,
-      this.getReferencePrice(),
-    ];
-    const mark = referenceCandidates.find((value) => Number.isFinite(value) && Number(value) > 0);
-    if (!Number.isFinite(mark) || Number(mark) <= 0) {
-      return params.rawPrice;
-    }
-    const markNumber = Number(mark);
-    if (params.side === "SELL") {
-      const floor = markNumber * (1 - slippage);
-      return Math.max(params.rawPrice, floor);
-    }
-    const ceiling = markNumber * (1 + slippage);
-    return Math.min(params.rawPrice, ceiling);
-  }
-
-  private async enforceExposureSafety(referencePrice: number): Promise<void> {
-    const toCloseLongLevels: Array<{ level: number; quantity: number }> = [];
-    for (const [level, quantity] of this.longExposure) {
-      if (quantity <= EPSILON) continue;
-      const target = this.levelMeta[level]?.closeTarget;
-      if (target == null) continue;
-      const closePrice = this.gridLevels[target]!;
-      if (referencePrice >= closePrice - this.config.priceTick / 2) {
-        toCloseLongLevels.push({ level, quantity });
-      }
-    }
-
-    const toCloseShortLevels: Array<{ level: number; quantity: number }> = [];
-    for (const [level, quantity] of this.shortExposure) {
-      if (quantity <= EPSILON) continue;
-      const target = this.levelMeta[level]?.closeTarget;
-      if (target == null) continue;
-      const closePrice = this.gridLevels[target]!;
-      if (referencePrice <= closePrice + this.config.priceTick / 2) {
-        toCloseShortLevels.push({ level, quantity });
-      }
-    }
-
-    const totalLongClose = toCloseLongLevels.reduce((acc, item) => acc + item.quantity, 0);
-    const totalShortClose = toCloseShortLevels.reduce((acc, item) => acc + item.quantity, 0);
-
-    const actualLong = Math.max(this.position.positionAmt, 0);
-    const actualShort = Math.max(-this.position.positionAmt, 0);
-
-    if (actualLong <= EPSILON && totalLongClose > EPSILON) {
-      this.resyncLongExposure(actualLong);
-    }
-
-    if (actualShort <= EPSILON && totalShortClose > EPSILON) {
-      this.resyncShortExposure(actualShort);
-    }
-
-    const safeLongClose = Math.min(totalLongClose, Math.max(actualLong - EPSILON, 0));
-    if (safeLongClose > EPSILON) {
-      try {
-        await placeMarketOrder(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pendings,
-          "SELL",
-          safeLongClose,
-          this.log,
-          true,
-          { expectedPrice: referencePrice },
-          { qtyStep: this.config.qtyStep }
-        );
-        for (const { level } of toCloseLongLevels) {
-          this.longExposure.delete(level);
+  private findSourceForCloseTarget(targetLevel: number, side: "BUY" | "SELL"): number {
+    // side here is reduce-only side at target level; source is opposite side level which maps to this target
+    if (side === "SELL") {
+      // closing long: find a BUY source that maps to targetLevel
+      for (const meta of this.levelMeta) {
+        if (meta.side === "BUY" && meta.closeTarget === targetLevel && this.pendingLongLevels.has(meta.index)) {
+          return meta.index;
         }
-        this.deferPositionAlignment();
-        this.schedulePersist();
-      } catch (error) {
-        this.log("error", `市价平仓多单失败: ${extractMessage(error)}`);
       }
-    }
-
-    const safeShortClose = Math.min(totalShortClose, Math.max(actualShort - EPSILON, 0));
-    if (safeShortClose > EPSILON) {
-      try {
-        await placeMarketOrder(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pendings,
-          "BUY",
-          safeShortClose,
-          this.log,
-          true,
-          { expectedPrice: referencePrice },
-          { qtyStep: this.config.qtyStep }
-        );
-        for (const { level } of toCloseShortLevels) {
-          this.shortExposure.delete(level);
+    } else {
+      for (const meta of this.levelMeta) {
+        if (meta.side === "SELL" && meta.closeTarget === targetLevel && this.pendingShortLevels.has(meta.index)) {
+          return meta.index;
         }
-        this.deferPositionAlignment();
-        this.schedulePersist();
-      } catch (error) {
-        this.log("error", `市价平仓空单失败: ${extractMessage(error)}`);
       }
     }
-  }
-
-  private schedulePersist(): void {
-    if (this.statePersistTimer) return;
-    this.statePersistTimer = setTimeout(() => {
-      this.statePersistTimer = null;
-      void this.persistState();
-    }, 200);
-  }
-
-  private async persistState(): Promise<void> {
-    if (!this.configValid) return;
-    const snapshot: StoredGridState = {
-      symbol: this.config.symbol,
-      lowerPrice: this.config.lowerPrice,
-      upperPrice: this.config.upperPrice,
-      gridLevels: this.config.gridLevels,
-      orderSize: this.config.orderSize,
-      maxPositionSize: this.config.maxPositionSize,
-      direction: this.config.direction,
-      longExposure: Object.fromEntries([...this.longExposure.entries()].map(([level, qty]) => [String(level), qty])),
-      shortExposure: Object.fromEntries([...this.shortExposure.entries()].map(([level, qty]) => [String(level), qty])),
-      updatedAt: Date.now(),
-    };
-    try {
-      await saveGridState(snapshot);
-    } catch (error) {
-      this.log("error", `保存网格状态失败: ${extractMessage(error)}`);
-    }
-  }
-
-  private async restoreState(): Promise<void> {
-    try {
-      const snapshot = await loadGridState(this.config.symbol);
-      if (!snapshot) return;
-      if (!this.isSnapshotCompatible(snapshot)) return;
-      this.longExposure.clear();
-      this.shortExposure.clear();
-      for (const [key, value] of Object.entries(snapshot.longExposure ?? {})) {
-        const level = Number(key);
-        if (!Number.isInteger(level)) continue;
-        if (!this.buyLevelIndices.includes(level)) continue;
-        if (value > EPSILON) this.longExposure.set(level, value);
-      }
-      for (const [key, value] of Object.entries(snapshot.shortExposure ?? {})) {
-        const level = Number(key);
-        if (!Number.isInteger(level)) continue;
-        if (!this.sellLevelIndices.includes(level)) continue;
-        if (value > EPSILON) this.shortExposure.set(level, value);
-      }
-      const bufferMs = Math.max(this.config.refreshIntervalMs * 2, 2000);
-      this.protectExistingOrdersUntil = Math.max(this.protectExistingOrdersUntil, this.now() + bufferMs);
-    } catch (error) {
-      this.log("error", `读取网格状态失败: ${extractMessage(error)}`);
-    }
-  }
-
-  private isSnapshotCompatible(snapshot: StoredGridState): boolean {
-    const sameSymbol = snapshot.symbol === this.config.symbol;
-    const sameLevels = snapshot.gridLevels === this.config.gridLevels;
-    const sameRange =
-      Math.abs(snapshot.lowerPrice - this.config.lowerPrice) <= this.config.priceTick &&
-      Math.abs(snapshot.upperPrice - this.config.upperPrice) <= this.config.priceTick;
-    const sameOrder = Math.abs(snapshot.orderSize - this.config.orderSize) <= this.config.qtyStep;
-    return sameSymbol && sameLevels && sameRange && sameOrder;
+    return targetLevel; // fallback
   }
 
   private computeGridLevels(): number[] {
@@ -981,16 +703,6 @@ export class GridEngine {
     if (!this.gridLevels.length) return;
     const pivotIndex = Math.floor(Math.max(this.gridLevels.length - 1, 0) / 2);
     const anchorByLevel = new Map<number, { side: "BUY" | "SELL" }>();
-    if (Array.isArray(this.openOrders) && this.openOrders.length) {
-      for (const order of this.openOrders) {
-        if (order.symbol !== this.config.symbol || order.type !== "LIMIT") continue;
-        const level = this.resolveLevelIndex(Number(order.price));
-        if (level == null) continue;
-        if (!anchorByLevel.has(level)) {
-          anchorByLevel.set(level, { side: order.side });
-        }
-      }
-    }
     const hasReference = Number.isFinite(referencePrice ?? NaN);
     const pivotPrice = hasReference ? this.clampReferencePrice(Number(referencePrice)) : null;
     for (let i = 0; i < this.gridLevels.length; i += 1) {
@@ -1014,30 +726,19 @@ export class GridEngine {
       if (side === "BUY") this.buyLevelIndices.push(i);
       else this.sellLevelIndices.push(i);
     }
-    // 为每个买入档位分配独立的卖出档位，实现一对一映射
-    const sellLevels = this.levelMeta.filter(meta => meta.side === "SELL").sort((a, b) => a.index - b.index);
-    let sellLevelIndex = 0;
-    
+    // 简化映射：
+    // - BUY 关单目标为其上方最近的 SELL 档
+    // - SELL 关单目标为其下方最近的 BUY 档
     for (const meta of this.levelMeta) {
       if (meta.side === "BUY") {
-        // 为每个买入档位分配下一个可用的卖出档位
-        if (sellLevelIndex < sellLevels.length) {
-          const targetSellLevel = sellLevels[sellLevelIndex]!;
-          meta.closeTarget = targetSellLevel.index;
-          targetSellLevel.closeSources.push(meta.index);
-          sellLevelIndex++;
-        } else {
-          // 如果没有足够的卖出档位，使用最后一个卖出档位
-          const lastSellLevel = sellLevels[sellLevels.length - 1];
-          if (lastSellLevel) {
-            meta.closeTarget = lastSellLevel.index;
-            lastSellLevel.closeSources.push(meta.index);
-          } else {
-            meta.closeTarget = null;
+        for (let j = meta.index + 1; j < this.levelMeta.length; j += 1) {
+          if (this.levelMeta[j]!.side === "SELL") {
+            meta.closeTarget = this.levelMeta[j]!.index;
+            this.levelMeta[j]!.closeSources.push(meta.index);
+            break;
           }
         }
       } else {
-        // 卖出档位：找到对应的买入档位（用于空单平仓）
         for (let j = meta.index - 1; j >= 0; j -= 1) {
           if (this.levelMeta[j]!.side === "BUY") {
             meta.closeTarget = this.levelMeta[j]!.index;
@@ -1049,337 +750,106 @@ export class GridEngine {
     }
   }
 
-  private updateLevelExposure(
-    currentOrders: Map<string, { side: "BUY" | "SELL"; level: number; quantity: number; reduceOnly: boolean }>
-  ): void {
-    for (const [key, previous] of this.lastOrderBook) {
-      const current = currentOrders.get(key);
-      if (current) {
-        const delta = previous.quantity - current.quantity;
-        if (Math.abs(delta) > EPSILON) {
-          this.applyFillDelta(previous, delta);
+  // exposure summation removed in simplified flow
+
+  private async cancelAllExistingOrdersOnStartup(): Promise<void> {
+    if (this.startupCleaned) return;
+    this.startupCleaned = true;
+    try {
+      await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
+      this.log("order", "启动阶段：已撤销全部历史挂单");
+    } catch (error) {
+      this.log("error", `启动撤单失败: ${extractMessage(error)}`);
+    }
+  }
+
+  private tryHandleInitialClose(): void {
+    if (this.initialCloseHandled) return;
+    if (!(this.feedStatus.account && this.feedStatus.orders && (this.feedStatus.ticker || this.feedStatus.depth))) return;
+    this.initialCloseHandled = true;
+    const qty = this.position.positionAmt;
+    if (!Number.isFinite(qty) || Math.abs(qty) <= EPSILON) return;
+    const entry = this.position.entryPrice;
+    const priceRef = this.getReferencePrice();
+    if (!Number.isFinite(entry) || !Number.isFinite(priceRef)) return;
+    const nearest = this.findNearestProfitableCloseLevel(qty > 0 ? "long" : "short", Number(entry));
+    if (nearest == null) return;
+    const side = qty > 0 ? "SELL" : "BUY";
+    const priceStr = this.formatPrice(this.gridLevels[nearest]!);
+    void (async () => {
+      try {
+        const placed = await placeOrder(
+          this.exchange,
+          this.config.symbol,
+          this.openOrders,
+          this.locks,
+          this.timers,
+          this.pendings,
+          side,
+          priceStr,
+          Math.abs(qty),
+          this.log,
+          true,
+          undefined,
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
+        );
+        if (placed) {
+          // mark pending exposure broadly so we don't re-open immediately on that source level (choose closest source side)
+          const source = this.findSourceForInitialPosition(side);
+          if (side === "SELL") this.pendingLongLevels.add(source);
+          else this.pendingShortLevels.add(source);
+          this.reduceOnlyKeyBySourceLevel.set(source, this.getOrderKey(side, priceStr, true));
+          this.log("order", `为已有仓位挂出一次性减仓单 ${side} @ ${priceStr}`);
         }
-        continue;
+      } catch (error) {
+        this.log("error", `启动阶段挂减仓单失败: ${extractMessage(error)}`);
       }
-      if (this.pendingCancelKeys.has(key)) {
-        this.pendingCancelKeys.delete(key);
-        continue;
-      }
-      this.applyFillDelta(previous, previous.quantity);
-    }
-    this.lastOrderBook.clear();
-    for (const [key, entry] of currentOrders) {
-      this.lastOrderBook.set(key, entry);
-    }
+    })();
   }
 
-  private backfillExposureFromOpenOrders(activeOrders: AsterOrder[]): void {
-    if (!activeOrders.length) return;
-    const reduceSellByLevel = new Map<number, number>();
-    const reduceBuyByLevel = new Map<number, number>();
-
-    for (const order of activeOrders) {
-      if (order.reduceOnly !== true) continue;
-      const level = this.resolveLevelIndex(Number(order.price));
-      if (level == null) continue;
-      const remaining = Math.max(
-        0,
-        Number(order.origQty ?? 0) - Number(order.executedQty ?? 0)
-      );
-      if (remaining <= EPSILON) continue;
-      if (order.side === "SELL") {
-        reduceSellByLevel.set(level, (reduceSellByLevel.get(level) ?? 0) + remaining);
-      } else if (order.side === "BUY") {
-        reduceBuyByLevel.set(level, (reduceBuyByLevel.get(level) ?? 0) + remaining);
+  private findNearestProfitableCloseLevel(direction: "long" | "short", entryPrice: number): number | null {
+    if (!this.levelMeta.length) return null;
+    if (direction === "long") {
+      for (const idx of this.sellLevelIndices) {
+        if (this.gridLevels[idx]! > entryPrice + this.config.priceTick / 2) return idx;
       }
+      return this.sellLevelIndices.length ? this.sellLevelIndices[0]! : null;
     }
-
-    const longChanged = this.rebuildLongExposureFromReduceOrders(reduceSellByLevel);
-    const shortChanged = this.rebuildShortExposureFromReduceOrders(reduceBuyByLevel);
-
-    if (longChanged || shortChanged) {
-      this.schedulePersist();
+    for (const idx of this.buyLevelIndices.slice().reverse()) {
+      if (this.gridLevels[idx]! < entryPrice - this.config.priceTick / 2) return idx;
     }
+    return this.buyLevelIndices.length ? this.buyLevelIndices[this.buyLevelIndices.length - 1]! : null;
   }
 
-  private rebuildLongExposureFromReduceOrders(reduceOrders: Map<number, number>): boolean {
-    const actualLong = Math.max(this.position.positionAmt, 0);
-    if (actualLong <= EPSILON && !reduceOrders.size) {
-      if (this.longExposure.size) {
-        this.longExposure.clear();
-        return true;
+  private findSourceForInitialPosition(closeSide: "BUY" | "SELL"): number {
+    // choose the closest open side level to current price as source marker
+    const price = this.getReferencePrice();
+    if (!Number.isFinite(price)) return 0;
+    const p = Number(price);
+    if (closeSide === "SELL") {
+      // long position: mark nearest BUY level below price
+      let best = 0;
+      let bestDiff = Number.POSITIVE_INFINITY;
+      for (const idx of this.buyLevelIndices) {
+        const lv = this.gridLevels[idx]!;
+        const diff = p - lv;
+        if (diff >= 0 && diff < bestDiff) {
+          bestDiff = diff;
+          best = idx;
+        }
       }
-      return false;
+      return best;
     }
-
-    const computed = new Map<number, number>();
-    let remaining = actualLong;
-
-    if (reduceOrders.size) {
-      const ordered = [...reduceOrders.entries()].sort((a, b) => a[0] - b[0]);
-      for (const [closeLevel, quantity] of ordered) {
-        if (remaining <= EPSILON) break;
-        const meta = this.levelMeta[closeLevel];
-        if (!meta || meta.side !== "SELL" || !meta.closeSources.length) continue;
-        const sources = [...meta.closeSources]
-          .filter((source) => this.buyLevelIndices.includes(source))
-          .sort((a, b) => b - a);
-        if (!sources.length) continue;
-        const toAllocate = Math.min(quantity, remaining);
-        if (toAllocate <= EPSILON) continue;
-        const allocated = this.distributeExposure(computed, sources, toAllocate);
-        remaining -= allocated;
-      }
-    }
-
-    if (remaining > EPSILON) {
-      const fallbackSources = [...this.buyLevelIndices].sort((a, b) => b - a);
-      const assigned = this.distributeExposure(computed, fallbackSources, remaining);
-      remaining -= assigned;
-    }
-
-    for (const [level, amount] of computed) {
-      if (amount <= EPSILON) {
-        computed.delete(level);
+    let best = 0;
+    let bestDiff = Number.POSITIVE_INFINITY;
+    for (const idx of this.sellLevelIndices) {
+      const lv = this.gridLevels[idx]!;
+      const diff = lv - p;
+      if (diff >= 0 && diff < bestDiff) {
+        bestDiff = diff;
+        best = idx;
       }
     }
-
-    return this.replaceExposureMap(this.longExposure, computed);
-  }
-
-  private rebuildShortExposureFromReduceOrders(reduceOrders: Map<number, number>): boolean {
-    const actualShort = Math.max(-this.position.positionAmt, 0);
-    if (actualShort <= EPSILON && !reduceOrders.size) {
-      if (this.shortExposure.size) {
-        this.shortExposure.clear();
-        return true;
-      }
-      return false;
-    }
-
-    const computed = new Map<number, number>();
-    let remaining = actualShort;
-
-    if (reduceOrders.size) {
-      const ordered = [...reduceOrders.entries()].sort((a, b) => a[0] - b[0]);
-      for (const [closeLevel, quantity] of ordered) {
-        if (remaining <= EPSILON) break;
-        const meta = this.levelMeta[closeLevel];
-        if (!meta || meta.side !== "BUY" || !meta.closeSources.length) continue;
-        const sources = [...meta.closeSources]
-          .filter((source) => this.sellLevelIndices.includes(source))
-          .sort((a, b) => a - b);
-        if (!sources.length) continue;
-        const toAllocate = Math.min(quantity, remaining);
-        if (toAllocate <= EPSILON) continue;
-        const allocated = this.distributeExposure(computed, sources, toAllocate);
-        remaining -= allocated;
-      }
-    }
-
-    if (remaining > EPSILON) {
-      const fallbackSources = [...this.sellLevelIndices].sort((a, b) => a - b);
-      const assigned = this.distributeExposure(computed, fallbackSources, remaining);
-      remaining -= assigned;
-    }
-
-    for (const [level, amount] of computed) {
-      if (amount <= EPSILON) {
-        computed.delete(level);
-      }
-    }
-
-    return this.replaceExposureMap(this.shortExposure, computed);
-  }
-
-  private distributeExposure(target: Map<number, number>, sources: number[], amount: number): number {
-    if (amount <= EPSILON) return 0;
-    let remaining = amount;
-    let assigned = 0;
-    for (const level of sources) {
-      if (remaining <= EPSILON) break;
-      const current = target.get(level) ?? 0;
-      const capacity = Math.max(this.config.orderSize - current, 0);
-      if (capacity <= EPSILON) continue;
-      const toAssign = Math.min(capacity, remaining);
-      if (toAssign <= EPSILON) continue;
-      target.set(level, current + toAssign);
-      remaining -= toAssign;
-      assigned += toAssign;
-    }
-    return assigned;
-  }
-
-  private replaceExposureMap(target: Map<number, number>, source: Map<number, number>): boolean {
-    let changed = false;
-    for (const key of [...target.keys()]) {
-      if (!source.has(key)) {
-        target.delete(key);
-        changed = true;
-      }
-    }
-    for (const [key, value] of source) {
-      const current = target.get(key) ?? 0;
-      if (Math.abs(current - value) > EPSILON) {
-        target.set(key, value);
-        changed = true;
-      }
-    }
-    return changed;
-  }
-
-  private applyFillDelta(
-    entry: { side: "BUY" | "SELL"; level: number; quantity: number; reduceOnly: boolean },
-    filled: number
-  ): void {
-    if (filled <= EPSILON) return;
-    if (entry.reduceOnly) {
-      if (entry.side === "SELL") {
-        this.consumeLongExposure(entry.level, filled);
-      } else {
-        this.consumeShortExposure(entry.level, filled);
-      }
-      return;
-    }
-    if (entry.side === "BUY") {
-      this.incrementLongExposure(entry.level, filled);
-    } else {
-      this.incrementShortExposure(entry.level, filled);
-    }
-  }
-
-  private alignExposureWithPosition(): void {
-    const actualLong = Math.max(this.position.positionAmt, 0);
-    const trackedLong = this.sumExposure(this.longExposure);
-    const actualShort = Math.max(-this.position.positionAmt, 0);
-    const trackedShort = this.sumExposure(this.shortExposure);
-    const tolerance = Math.max(this.config.qtyStep * 0.25, EPSILON);
-    const now = this.now();
-
-    const longDiff = actualLong - trackedLong;
-    if (longDiff > tolerance || (longDiff < -tolerance && now >= this.positionAlignHoldUntil)) {
-      this.resyncLongExposure(actualLong);
-    }
-
-    const shortDiff = actualShort - trackedShort;
-    if (shortDiff > tolerance || (shortDiff < -tolerance && now >= this.positionAlignHoldUntil)) {
-      this.resyncShortExposure(actualShort);
-    }
-  }
-
-  private resyncLongExposure(total: number): void {
-    this.longExposure.clear();
-    let remaining = total;
-    for (const level of [...this.buyLevelIndices].sort((a, b) => b - a)) {
-      if (remaining <= EPSILON) break;
-      const qty = Math.min(this.config.orderSize, remaining);
-      if (qty > EPSILON) {
-        this.longExposure.set(level, qty);
-        remaining -= qty;
-      }
-    }
-    this.schedulePersist();
-  }
-
-  private resyncShortExposure(total: number): void {
-    this.shortExposure.clear();
-    let remaining = total;
-    for (const level of [...this.sellLevelIndices].sort((a, b) => a - b)) {
-      if (remaining <= EPSILON) break;
-      const qty = Math.min(this.config.orderSize, remaining);
-      if (qty > EPSILON) {
-        this.shortExposure.set(level, qty);
-        remaining -= qty;
-      }
-    }
-    this.schedulePersist();
-  }
-
-  private incrementLongExposure(level: number, quantity: number): void {
-    if (quantity <= EPSILON) return;
-    const current = this.longExposure.get(level) ?? 0;
-    const next = Math.min(this.config.orderSize, current + quantity);
-    if (next <= EPSILON) {
-      if (this.longExposure.has(level)) {
-        this.longExposure.delete(level);
-        this.deferPositionAlignment();
-        this.schedulePersist();
-      }
-      return;
-    }
-    if (Math.abs(next - current) <= EPSILON) return;
-    this.longExposure.set(level, next);
-    this.deferPositionAlignment();
-    this.schedulePersist();
-  }
-
-  private incrementShortExposure(level: number, quantity: number): void {
-    if (quantity <= EPSILON) return;
-    const current = this.shortExposure.get(level) ?? 0;
-    const next = Math.min(this.config.orderSize, current + quantity);
-    if (next <= EPSILON) {
-      if (this.shortExposure.has(level)) {
-        this.shortExposure.delete(level);
-        this.deferPositionAlignment();
-        this.schedulePersist();
-      }
-      return;
-    }
-    if (Math.abs(next - current) <= EPSILON) return;
-    this.shortExposure.set(level, next);
-    this.deferPositionAlignment();
-    this.schedulePersist();
-  }
-
-  private consumeLongExposure(closeLevel: number, quantity: number): void {
-    if (quantity <= EPSILON) return;
-    const sources = this.levelMeta[closeLevel]?.closeSources ?? [];
-    let remaining = quantity;
-    let consumedAny = false;
-    for (const source of [...sources].sort((a, b) => b - a)) {
-      if (remaining <= EPSILON) break;
-      const current = this.longExposure.get(source) ?? 0;
-      if (current <= EPSILON) continue;
-      const consumed = Math.min(current, remaining);
-      const next = current - consumed;
-      if (next <= EPSILON) this.longExposure.delete(source);
-      else this.longExposure.set(source, next);
-      remaining -= consumed;
-      if (consumed > EPSILON) consumedAny = true;
-      this.schedulePersist();
-    }
-    if (consumedAny) {
-      this.deferPositionAlignment();
-    }
-  }
-
-  private consumeShortExposure(closeLevel: number, quantity: number): void {
-    if (quantity <= EPSILON) return;
-    const sources = this.levelMeta[closeLevel]?.closeSources ?? [];
-    let remaining = quantity;
-    let consumedAny = false;
-    for (const source of [...sources].sort((a, b) => a - b)) {
-      if (remaining <= EPSILON) break;
-      const current = this.shortExposure.get(source) ?? 0;
-      if (current <= EPSILON) continue;
-      const consumed = Math.min(current, remaining);
-      const next = current - consumed;
-      if (next <= EPSILON) this.shortExposure.delete(source);
-      else this.shortExposure.set(source, next);
-      remaining -= consumed;
-      if (consumed > EPSILON) consumedAny = true;
-      this.schedulePersist();
-    }
-    if (consumedAny) {
-      this.deferPositionAlignment();
-    }
-  }
-
-  private sumExposure(storage: Map<number, number>): number {
-    let total = 0;
-    for (const value of storage.values()) {
-      total += value;
-    }
-    return total;
+    return best;
   }
 }
