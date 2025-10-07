@@ -87,6 +87,8 @@ export function BasisApp({ onExit }: BasisAppProps) {
   const nextFundingTime = snapshot.nextFundingTime ? new Date(snapshot.nextFundingTime).toLocaleTimeString() : "-";
   const feedStatus = snapshot.feedStatus;
   const lastLogs = snapshot.tradeLog.slice(-5);
+  const spotBalances = (snapshot.spotBalances ?? []).filter((b) => Math.abs(b.free) > 0 || Math.abs(b.locked) > 0);
+  const futuresBalances = (snapshot.futuresBalances ?? []).filter((b) => Math.abs(b.wallet) > 0);
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -116,6 +118,33 @@ export function BasisApp({ onExit }: BasisAppProps) {
         <Text color="yellow">资金费率</Text>
         <Text>当前资金费率: {fundingRatePct}</Text>
         <Text color="gray">资金费率更新时间: {fundingUpdated} ｜ 下次结算时间: {nextFundingTime}</Text>
+      </Box>
+
+      <Box flexDirection="row" marginBottom={1}>
+        <Box flexDirection="column" marginRight={4}>
+          <Text color="cyan">现货账户余额（非0）</Text>
+          {spotBalances.length ? (
+            spotBalances.map((b) => (
+              <Text key={`spot-${b.asset}`}>
+                {b.asset}: 可用 {formatNumber(b.free, 8)} ｜ 冻结 {formatNumber(b.locked, 8)}
+              </Text>
+            ))
+          ) : (
+            <Text color="gray">无</Text>
+          )}
+        </Box>
+        <Box flexDirection="column">
+          <Text color="cyan">合约账户余额（非0）</Text>
+          {futuresBalances.length ? (
+            futuresBalances.map((b) => (
+              <Text key={`fut-${b.asset}`}>
+                {b.asset}: 钱包 {formatNumber(b.wallet, 8)} ｜ 可用 {formatNumber(b.available, 8)}
+              </Text>
+            ))
+          ) : (
+            <Text color="gray">无</Text>
+          )}
+        </Box>
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>

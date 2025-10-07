@@ -30,6 +30,8 @@ export interface BasisArbSnapshot {
     spot: boolean;
     funding: boolean;
   };
+  spotBalances: Array<{ asset: string; free: number; locked: number }>;
+  futuresBalances: Array<{ asset: string; wallet: number; available: number }>;
   opportunity: boolean;
 }
 
@@ -60,6 +62,18 @@ interface FundingState {
   updatedAt: number | null;
 }
 
+interface SpotBalanceStateEntry {
+  asset: string;
+  free: number;
+  locked: number;
+}
+
+interface FuturesBalanceStateEntry {
+  asset: string;
+  wallet: number;
+  available: number;
+}
+
 export class BasisArbEngine {
   private readonly events = new StrategyEventEmitter<BasisArbEvent, BasisArbSnapshot>();
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
@@ -72,12 +86,16 @@ export class BasisArbEngine {
   private readonly futures: DepthState = { bid: null, ask: null, updatedAt: null };
   private readonly spot: SpotState = { bid: null, ask: null, updatedAt: null };
   private readonly funding: FundingState = { rate: null, nextFundingTime: null, updatedAt: null };
+  private spotBalances: SpotBalanceStateEntry[] = [];
+  private futuresBalances: FuturesBalanceStateEntry[] = [];
 
   private readonly feedReady = { futures: false, spot: false, funding: false };
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private spotInFlight = false;
   private fundingInFlight = false;
+  private spotAccountInFlight = false;
+  private futuresAccountInFlight = false;
   private stopped = false;
 
   constructor(config: BasisArbConfig, exchange: ExchangeAdapter, deps: BasisArbDependencies = {}) {
@@ -95,9 +113,13 @@ export class BasisArbEngine {
     this.timer = setInterval(() => {
       void this.pollSpot();
       void this.pollFunding();
+      void this.pollSpotAccount();
+      void this.pollFuturesAccount();
     }, Math.max(this.config.refreshIntervalMs, 200));
     void this.pollSpot();
     void this.pollFunding();
+    void this.pollSpotAccount();
+    void this.pollFuturesAccount();
   }
 
   stop(): void {
@@ -197,6 +219,61 @@ export class BasisArbEngine {
     }
   }
 
+  private async pollSpotAccount(): Promise<void> {
+    if (this.spotAccountInFlight || this.stopped) return;
+    this.spotAccountInFlight = true;
+    try {
+      // Spot balances via spot REST
+      const account: any = await (this.spotClient as any).getAccount?.();
+      const balances = Array.isArray(account?.balances) ? account.balances : [];
+      const next: SpotBalanceStateEntry[] = [];
+      for (const b of balances) {
+        const asset = String(b.asset ?? "");
+        const free = Number(b.free ?? 0);
+        const locked = Number(b.locked ?? 0);
+        if (!asset) continue;
+        if (Math.abs(free) > 0 || Math.abs(locked) > 0) {
+          next.push({ asset, free, locked });
+        }
+      }
+      next.sort((a, b) => a.asset.localeCompare(b.asset));
+      this.spotBalances = next;
+      this.emitUpdate();
+    } catch (error) {
+      this.tradeLog.push("error", `获取现货余额失败: ${String(error instanceof Error ? error.message : error)}`);
+    } finally {
+      this.spotAccountInFlight = false;
+    }
+  }
+
+  private async pollFuturesAccount(): Promise<void> {
+    if (this.futuresAccountInFlight || this.stopped) return;
+    this.futuresAccountInFlight = true;
+    try {
+      // Futures balances via futures REST
+      const rest = new AsterRestClient();
+      const account: any = await rest.getAccount();
+      const assets = Array.isArray(account?.assets) ? account.assets : [];
+      const next: FuturesBalanceStateEntry[] = [];
+      for (const a of assets) {
+        const asset = String(a.asset ?? "");
+        const wallet = Number(a.walletBalance ?? a.wb ?? 0);
+        const available = Number(a.availableBalance ?? a.bc ?? 0);
+        if (!asset) continue;
+        if (Math.abs(wallet) > 0 || Math.abs(available) > 0) {
+          next.push({ asset, wallet, available });
+        }
+      }
+      next.sort((a, b) => a.asset.localeCompare(b.asset));
+      this.futuresBalances = next;
+      this.emitUpdate();
+    } catch (error) {
+      this.tradeLog.push("error", `获取合约余额失败: ${String(error instanceof Error ? error.message : error)}`);
+    } finally {
+      this.futuresAccountInFlight = false;
+    }
+  }
+
   private applySpotTicker(ticker: AsterSpotBookTicker): void {
     const bid = Number(ticker.bidPrice);
     const ask = Number(ticker.askPrice);
@@ -257,6 +334,8 @@ export class BasisArbEngine {
       lastUpdated: lastUpdated > 0 ? lastUpdated : null,
       tradeLog: this.tradeLog.all(),
       feedStatus: { ...this.feedReady },
+      spotBalances: [...this.spotBalances],
+      futuresBalances: [...this.futuresBalances],
       opportunity,
     };
   }
