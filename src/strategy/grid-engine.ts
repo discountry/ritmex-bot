@@ -87,20 +87,18 @@ export class GridEngine {
   private readonly levelMeta: LevelMeta[] = [];
   private readonly buyLevelIndices: number[] = [];
   private readonly sellLevelIndices: number[] = [];
-  private lastOpenOrderKeys = new Set<string>();
+  
   private readonly pendingLongLevels = new Set<number>();
   private readonly pendingShortLevels = new Set<number>();
   private readonly closeKeyBySourceLevel = new Map<number, string>();
-  private lastKeyMeta = new Map<string, { side: "BUY" | "SELL"; level: number }>();
-  private lastOrderIdsByKey = new Map<string, Set<string>>();
+  
   private prevActiveIds: Set<string> = new Set<string>();
-  private orderIntentById = new Map<string, { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT" }>();
+  private orderIntentById = new Map<string, { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT"; sourceLevel?: number }>();
   // When an order at a level disappears but account delta hasn't arrived yet,
   // temporarily block re-opening at that level to avoid immediate re-placement.
-  private readonly levelReopenBlockUntil = new Map<number, number>();
-  private static readonly DISAPPEAR_REOPEN_COOLDOWN_MS = 2000;
+  
   // Track levels awaiting classification after disappearance until next account snapshot confirms
-  private readonly awaitingClassification = new Map<number, { accountVerAtStart: number; absAtStart: number }>();
+  
   private sidesLocked = false;
   private startupCleaned = false;
   private initialCloseHandled = false;
@@ -364,15 +362,7 @@ export class GridEngine {
   }
 
 
-  private hasActiveOrders(): boolean {
-    return this.openOrders.some((order) => {
-      if (order.symbol !== this.config.symbol) return false;
-      if (order.type && order.type !== "LIMIT") return false;
-      const status = typeof order.status === "string" ? order.status.toUpperCase() : null;
-      if (!status) return true;
-      return !["FILLED", "CANCELED", "CANCELLED", "REJECTED", "EXPIRED"].includes(status);
-    });
-  }
+  // removed unused hasActiveOrders
 
   private deferPositionAlignment(): void {}
 
@@ -485,20 +475,24 @@ export class GridEngine {
     for (const id of disappeared) {
       const meta = this.orderIntentById.get(id);
       if (!meta) continue;
-      // Classify by position delta or final observable status
+      // Classify by final observable status or position delta (direction-aware)
       let classified: "filled" | "canceled" | "unknown" = "unknown";
       const rec = allOrdersById.get(id);
       if (rec) {
         const status = String(rec.status || "").toUpperCase();
-        const executed = Number(rec.executedQty);
-        if (["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status) && executed <= EPSILON) {
+        const executed = Number(rec.executedQty || 0);
+        if (status === "FILLED" || executed > EPSILON) {
+          classified = "filled";
+        } else if (["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status)) {
           classified = "canceled";
         }
       }
       if (classified === "unknown") {
         const absNow = Math.abs(this.position.positionAmt);
-        if (absNow > this.lastAbsPositionAmt + EPSILON) classified = "filled";
-        else classified = "canceled"; // best-effort default if no exposure change
+        const expectUp = meta.intent === "ENTRY"; // ENTRY should increase abs position; EXIT should decrease
+        if (expectUp && absNow > this.lastAbsPositionAmt + EPSILON) classified = "filled";
+        else if (!expectUp && absNow + EPSILON < this.lastAbsPositionAmt) classified = "filled";
+        else classified = "canceled"; // conservative default
       }
       if (classified === "filled") {
         if (meta.intent === "ENTRY") {
@@ -517,40 +511,22 @@ export class GridEngine {
             this.closeKeyBySourceLevel.set(meta.level, exitKey);
           }
         } else {
-          // EXIT filled
-          this.pendingLongLevels.delete(meta.level);
-          this.pendingShortLevels.delete(meta.level);
-          this.closeKeyBySourceLevel.delete(meta.level);
+          // EXIT filled -> clear using sourceLevel
+          const src = meta.sourceLevel ?? this.findSourceForCloseTarget(meta.level, meta.side);
+          this.pendingLongLevels.delete(src);
+          this.pendingShortLevels.delete(src);
+          this.closeKeyBySourceLevel.delete(src);
         }
       } else if (classified === "canceled") {
-        // allow re-open; clear temporary blocks
-        this.awaitingClassification.delete(meta.level);
-        this.levelReopenBlockUntil.delete(meta.level);
-        // if it was EXIT we also drop mapping
-        if (meta.intent === "EXIT") this.closeKeyBySourceLevel.delete(meta.level);
+        // if it was EXIT we also drop mapping by source
+        if (meta.intent === "EXIT") {
+          const src = meta.sourceLevel ?? this.findSourceForCloseTarget(meta.level, meta.side);
+          this.closeKeyBySourceLevel.delete(src);
+        }
       }
     }
     // Update prevActiveIds for next tick
     this.prevActiveIds = currIds;
-
-    // Resolve awaiting classifications only after a new account snapshot
-    if (this.awaitingClassification.size) {
-      for (const [level, info] of Array.from(this.awaitingClassification.entries())) {
-        const absNow = Math.abs(this.position.positionAmt);
-        if (this.accountVersion > info.accountVerAtStart && absNow > info.absAtStart + EPSILON) {
-          // treat as filled
-          const side = this.levelMeta[level]?.side === "BUY" ? "BUY" : "SELL";
-          if (side === "BUY") this.pendingLongLevels.add(level);
-          else this.pendingShortLevels.add(level);
-          this.awaitingClassification.delete(level);
-          this.levelReopenBlockUntil.delete(level);
-        } else if (this.accountVersion > info.accountVerAtStart && !(absNow > info.absAtStart + EPSILON)) {
-          // after new account snapshot without increased exposure -> canceled
-          this.awaitingClassification.delete(level);
-          this.levelReopenBlockUntil.delete(level);
-        }
-      }
-    }
 
     // Desired open orders according to locked sides
     const desired: DesiredGridOrder[] = [];
@@ -580,7 +556,6 @@ export class GridEngine {
     for (const level of this.buyLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
-      if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingLongLevels.has(level)) continue; // wait until close filled
       const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), "ENTRY");
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
@@ -595,7 +570,6 @@ export class GridEngine {
     for (const level of this.sellLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
-      if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingShortLevels.has(level)) continue;
       const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), "ENTRY");
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
@@ -641,6 +615,14 @@ export class GridEngine {
     for (const d of desired) {
       const isClose = d.intent === "EXIT" || (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
       const intent: "ENTRY" | "EXIT" = isClose ? "EXIT" : "ENTRY";
+      // Cap EXIT quantity to avoid over-closing and accidental flip
+      if (intent === "EXIT") {
+        const capped = this.capExitQty(d.amount, d.side);
+        if (capped <= EPSILON) {
+          continue;
+        }
+        d.amount = capped;
+      }
       const key = this.getOrderKey(d.side, d.price, intent);
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       try {
@@ -662,7 +644,16 @@ export class GridEngine {
         if (placed) {
           plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
           if (placed.orderId != null) {
-            this.orderIntentById.set(String(placed.orderId), { side: d.side, price: d.price, level: d.level, intent });
+            const record: { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT"; sourceLevel?: number } = {
+              side: d.side,
+              price: d.price,
+              level: d.level,
+              intent,
+            };
+            if (intent === "EXIT") {
+              record.sourceLevel = this.findSourceForCloseTarget(d.level, d.side);
+            }
+            this.orderIntentById.set(String(placed.orderId), record);
           }
         }
         if (placed && isClose) {
@@ -679,6 +670,25 @@ export class GridEngine {
     this.lastUpdated = this.now();
     // Update last observed absolute position amount for next disappearance classification
     this.lastAbsPositionAmt = Math.abs(this.position.positionAmt);
+  }
+
+  private capExitQty(desiredQty: number, side: "BUY" | "SELL"): number {
+    const absPos = Math.abs(this.position.positionAmt);
+    if (absPos <= EPSILON) return 0;
+    let pendingExitQty = 0;
+    for (const o of this.openOrders) {
+      if (o.symbol !== this.config.symbol) continue;
+      if (o.type !== "LIMIT") continue;
+      if (o.side !== side) continue; // same side as this EXIT order
+      const meta = this.orderIntentById.get(String(o.orderId));
+      if (!meta || meta.intent !== "EXIT") continue;
+      const orig = Number(o.origQty || 0);
+      const exec = Number(o.executedQty || 0);
+      const remaining = Math.max(orig - exec, 0);
+      pendingExitQty += remaining;
+    }
+    const remain = Math.max(absPos - pendingExitQty, 0);
+    return Math.min(desiredQty, remain);
   }
 
   private findSourceForCloseTarget(targetLevel: number, side: "BUY" | "SELL"): number {
@@ -712,17 +722,6 @@ export class GridEngine {
       if (this.levelMeta[source]?.closeTarget === targetLevel) return true;
     }
     return false;
-  }
-
-  private isCloseDesiredForSideAtLevel(side: "BUY" | "SELL", level: number): boolean {
-    if (side === "SELL") {
-      return this.isTargetOfPendingLong(level);
-    }
-    return this.isTargetOfPendingShort(level);
-  }
-
-  private isTargetOfPendingShortOrLong(targetLevel: number): boolean {
-    return this.isTargetOfPendingLong(targetLevel) || this.isTargetOfPendingShort(targetLevel);
   }
 
   private computeGridLevels(): number[] {
@@ -822,21 +821,6 @@ export class GridEngine {
       }
     }
     return null;
-  }
-
-  private blockLevelReopen(level: number): void {
-    const until = this.now() + GridEngine.DISAPPEAR_REOPEN_COOLDOWN_MS;
-    this.levelReopenBlockUntil.set(level, until);
-  }
-
-  private isLevelTemporarilyBlocked(level: number): boolean {
-    const until = this.levelReopenBlockUntil.get(level);
-    if (!Number.isFinite(until ?? NaN)) return false;
-    if (this.now() >= Number(until)) {
-      this.levelReopenBlockUntil.delete(level);
-      return false;
-    }
-    return true;
   }
 
   private buildLevelMeta(referencePrice?: number | null): void {
@@ -958,7 +942,7 @@ export class GridEngine {
           const exitKey = this.getOrderKey(side, priceStr, "EXIT");
           this.closeKeyBySourceLevel.set(source, exitKey);
           if (placed.orderId != null) {
-            this.orderIntentById.set(String(placed.orderId), { side, price: priceStr, level: nearest, intent: "EXIT" });
+            this.orderIntentById.set(String(placed.orderId), { side, price: priceStr, level: nearest, intent: "EXIT", sourceLevel: source });
           }
           this.log("order", `为已有仓位挂出一次性平仓单 ${side} @ ${priceStr}`);
         }
