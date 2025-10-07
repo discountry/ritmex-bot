@@ -100,12 +100,11 @@ export class GridEngine {
   private static readonly DISAPPEAR_REOPEN_COOLDOWN_MS = 2000;
   // Track levels awaiting classification after disappearance until next account snapshot confirms
   private readonly awaitingClassification = new Map<number, { accountVerAtStart: number; absAtStart: number }>();
-  private static readonly AWAIT_CLASSIFICATION_TIMEOUT_MS = 2500;
   private sidesLocked = false;
   private startupCleaned = false;
   private initialCloseHandled = false;
   private lastAbsPositionAmt = 0;
-  private immediateCloseToPlace: Array<{ sourceLevel: number; targetLevel: number; side: "BUY" | "SELL"; price: string }> = [];
+  private immediateCloseToPlace: Array<{ sourceLevel: number; targetLevel: number; side: "BUY" | "SELL"; price: string; reduceOnly: boolean }> = [];
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -483,6 +482,18 @@ export class GridEngine {
       currentOrderIdsByKey.set(key, set);
     }
 
+    // Build active order key counts (open and reduce-only) for placement and disappearance handling
+    const activeKeyCounts = new Map<string, number>();
+    for (const o of activeOrders) {
+      const k = this.getOrderKey(o.side, this.normalizePrice(o.price), false);
+      activeKeyCounts.set(k, (activeKeyCounts.get(k) ?? 0) + 1);
+    }
+    const activeKeyCountsRO = new Map<string, number>();
+    for (const o of activeOrders) {
+      const k = this.getOrderKey(o.side, this.normalizePrice(o.price), true);
+      activeKeyCountsRO.set(k, (activeKeyCountsRO.get(k) ?? 0) + 1);
+    }
+
     for (const prevKey of prevKeys) {
       if (currentKeys.has(prevKey)) continue;
       const meta = prevMeta.get(prevKey);
@@ -504,6 +515,20 @@ export class GridEngine {
         }
       }
       if (handledByCloseTracking) continue;
+      // Proactively queue a reduce-only close at target to safely capture profit if the disappearance was a fill
+      if (meta) {
+        const target0 = this.levelMeta[meta.level]?.closeTarget;
+        if (target0 != null) {
+          const priceStr0 = this.formatPrice(this.gridLevels[target0]!);
+          const side0: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
+          const roKey = this.getOrderKey(side0, priceStr0, true);
+          const roCount = activeKeyCountsRO.get(roKey) ?? 0;
+          if (roCount < 1) {
+            this.immediateCloseToPlace.push({ sourceLevel: meta.level, targetLevel: target0, side: side0, price: priceStr0, reduceOnly: true });
+            this.closeKeyBySourceLevel.set(meta.level, roKey);
+          }
+        }
+      }
       // Use order records to classify disappearance: filled vs canceled
       if (meta) {
         const prevIds = this.lastOrderIdsByKey.get(prevKey);
@@ -527,19 +552,21 @@ export class GridEngine {
         if (classified === "filled") {
           if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
           else this.pendingShortLevels.add(meta.level);
-          // Immediately queue a close at the mapped target to ensure it is placed this tick
-          const target = this.levelMeta[meta.level]?.closeTarget;
-          if (target != null) {
-            const priceStr = this.formatPrice(this.gridLevels[target]!);
-            const side: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
-            this.immediateCloseToPlace.push({ sourceLevel: meta.level, targetLevel: target, side, price: priceStr });
-            // also map source->close key for disappearance tracking
-            this.closeKeyBySourceLevel.set(meta.level, this.getOrderKey(side, priceStr, false));
-          }
+          // ensure reduce-only close mapping exists for disappearance tracking (already queued above)
         } else if (classified === "canceled") {
           // no action; allow immediate re-open (do not block)
           this.awaitingClassification.delete(meta.level);
           this.levelReopenBlockUntil.delete(meta.level);
+          // clear any reduce-only mapping queued earlier
+          const target = this.levelMeta[meta.level]?.closeTarget;
+          if (target != null) {
+            const priceStr = this.formatPrice(this.gridLevels[target]!);
+            const side: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
+            const roKey = this.getOrderKey(side, priceStr, true);
+            if (this.closeKeyBySourceLevel.get(meta.level) === roKey) {
+              this.closeKeyBySourceLevel.delete(meta.level);
+            }
+          }
         } else {
           // unknown: defer decision until we see a newer account snapshot
           this.awaitingClassification.set(meta.level, { accountVerAtStart: this.accountVersion, absAtStart: this.lastAbsPositionAmt });
@@ -577,19 +604,15 @@ export class GridEngine {
     const activeKeySet = new Set(
       activeOrders.map((o) => this.getOrderKey(o.side, this.normalizePrice(o.price), o.reduceOnly === true))
     );
-    const activeKeyCounts = new Map<string, number>();
-    for (const o of activeOrders) {
-      const k = this.getOrderKey(o.side, this.normalizePrice(o.price), false);
-      activeKeyCounts.set(k, (activeKeyCounts.get(k) ?? 0) + 1);
-    }
+    // activeKeyCounts and activeKeyCountsRO already computed above
 
     // First, place any immediate close orders queued by fresh fills
     if (this.immediateCloseToPlace.length) {
       for (const item of this.immediateCloseToPlace) {
-        const key = this.getOrderKey(item.side, item.price, false);
-        const count = activeKeyCounts.get(key) ?? 0;
-        if (count < 2) {
-          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize, reduceOnly: false });
+        const key = this.getOrderKey(item.side, item.price, item.reduceOnly);
+        const count = item.reduceOnly ? (activeKeyCountsRO.get(key) ?? 0) : (activeKeyCounts.get(key) ?? 0);
+        if (item.reduceOnly ? count < 1 : count < 2) {
+          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize, reduceOnly: item.reduceOnly });
         }
       }
       // clear queue regardless to avoid duplicates next tick
@@ -625,8 +648,12 @@ export class GridEngine {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
+      const closeKeyRO = this.getOrderKey("SELL", priceStr, true);
+      if ((activeKeyCountsRO.get(closeKeyRO) ?? 0) < 1) {
+        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, reduceOnly: true });
+      }
       const closeKey = this.getOrderKey("SELL", priceStr, false);
-      if ((activeKeyCounts.get(closeKey) ?? 0) < 2) {
+      if ((activeKeyCounts.get(closeKey) ?? 0) < 1) {
         desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
       } else {
         // Map existing identical open as the close so disappearance clears pending
@@ -639,8 +666,12 @@ export class GridEngine {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
+      const closeKeyRO = this.getOrderKey("BUY", priceStr, true);
+      if ((activeKeyCountsRO.get(closeKeyRO) ?? 0) < 1) {
+        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, reduceOnly: true });
+      }
       const closeKey = this.getOrderKey("BUY", priceStr, false);
-      if ((activeKeyCounts.get(closeKey) ?? 0) < 2) {
+      if ((activeKeyCounts.get(closeKey) ?? 0) < 1) {
         desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, reduceOnly: false });
       } else {
         if (!this.closeKeyBySourceLevel.has(source)) {
