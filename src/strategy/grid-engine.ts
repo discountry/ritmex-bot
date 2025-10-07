@@ -99,6 +99,7 @@ export class GridEngine {
   private sidesLocked = false;
   private startupCleaned = false;
   private initialCloseHandled = false;
+  private lastAbsPositionAmt = 0;
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -206,6 +207,7 @@ export class GridEngine {
       (snapshot) => {
         this.accountSnapshot = snapshot;
         this.position = getPosition(snapshot, this.config.symbol);
+        this.lastAbsPositionAmt = Math.abs(this.position.positionAmt);
         if (!this.feedArrived.account) {
           this.feedArrived.account = true;
           log("info", "账户快照已同步");
@@ -342,12 +344,12 @@ export class GridEngine {
   private tryLockSidesOnce(): void {
     if (this.sidesLocked) return;
     if (!this.feedStatus.ticker && !this.feedStatus.depth) return;
-    const reference = this.getReferencePrice();
-    if (!Number.isFinite(reference) || reference == null) return;
-    const price = this.clampReferencePrice(Number(reference));
+    const anchor = this.chooseAnchoringPrice();
+    if (!Number.isFinite(anchor) || anchor == null) return;
+    const price = this.clampReferencePrice(Number(anchor));
     this.buildLevelMeta(price);
     this.sidesLocked = true;
-    this.log("info", "已根据现价一次性划分买卖档位");
+    this.log("info", "已根据锚定价一次性划分买卖档位");
   }
 
   private clampReferencePrice(price: number): number {
@@ -473,10 +475,16 @@ export class GridEngine {
         // For reduce-only disappearance, check mapping
         for (const [source, roKey] of this.reduceOnlyKeyBySourceLevel.entries()) {
           if (roKey === prevKey) {
-            // close filled for this source
-            this.pendingLongLevels.delete(source);
-            this.pendingShortLevels.delete(source);
-            this.reduceOnlyKeyBySourceLevel.delete(source);
+            // Determine if disappearance was a fill or a manual cancel via position change
+            const absNow = Math.abs(this.position.positionAmt);
+            if (absNow + EPSILON < this.lastAbsPositionAmt) {
+              // treated as filled: clear pending mapping
+              this.pendingLongLevels.delete(source);
+              this.pendingShortLevels.delete(source);
+              this.reduceOnlyKeyBySourceLevel.delete(source);
+            } else {
+              // treated as canceled: keep pending so we re-arm close order
+            }
             break;
           }
         }
@@ -486,12 +494,18 @@ export class GridEngine {
         if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
         else this.pendingShortLevels.add(meta.level);
       } else {
-        // reduce-only filled: clear exposure for mapped source level
+        // reduce-only disappeared: decide filled vs canceled by observing position delta
         for (const [source, roKey] of this.reduceOnlyKeyBySourceLevel.entries()) {
           if (roKey === prevKey) {
-            this.pendingLongLevels.delete(source);
-            this.pendingShortLevels.delete(source);
-            this.reduceOnlyKeyBySourceLevel.delete(source);
+            const absNow = Math.abs(this.position.positionAmt);
+            if (absNow + EPSILON < this.lastAbsPositionAmt) {
+              // filled: clear pending mapping
+              this.pendingLongLevels.delete(source);
+              this.pendingShortLevels.delete(source);
+              this.reduceOnlyKeyBySourceLevel.delete(source);
+            } else {
+              // canceled: keep pending mapping so desired will re-place close order
+            }
             break;
           }
         }
@@ -580,6 +594,8 @@ export class GridEngine {
     }
 
     this.lastUpdated = this.now();
+    // Update last observed absolute position amount for next disappearance classification
+    this.lastAbsPositionAmt = Math.abs(this.position.positionAmt);
   }
 
   private findSourceForCloseTarget(targetLevel: number, side: "BUY" | "SELL"): number {
@@ -748,6 +764,21 @@ export class GridEngine {
         }
       }
     }
+  }
+
+  private chooseAnchoringPrice(): number | null {
+    const reference = this.getReferencePrice();
+    if (!Number.isFinite(reference) || reference == null) return null;
+    const ref = Number(reference);
+    const qty = this.position.positionAmt;
+    const entry = this.position.entryPrice;
+    const hasEntry = Number.isFinite(entry) && Math.abs(entry) > EPSILON;
+    if (!hasEntry || Math.abs(qty) <= EPSILON) return ref;
+    // If long and market below cost, anchor at entry to avoid shorting below cost
+    if (qty > 0 && ref < Number(entry) - EPSILON) return Number(entry);
+    // If short and market above cost, anchor at entry to avoid longing above cost
+    if (qty < 0 && ref > Number(entry) + EPSILON) return Number(entry);
+    return ref;
   }
 
   // exposure summation removed in simplified flow
