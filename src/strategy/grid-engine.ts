@@ -105,6 +105,7 @@ export class GridEngine {
   private startupCleaned = false;
   private initialCloseHandled = false;
   private lastAbsPositionAmt = 0;
+  private immediateCloseToPlace: Array<{ sourceLevel: number; targetLevel: number; side: "BUY" | "SELL"; price: string }> = [];
 
   private accountSnapshot: AsterAccountSnapshot | null = null;
   private depthSnapshot: AsterDepth | null = null;
@@ -526,6 +527,15 @@ export class GridEngine {
         if (classified === "filled") {
           if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
           else this.pendingShortLevels.add(meta.level);
+          // Immediately queue a close at the mapped target to ensure it is placed this tick
+          const target = this.levelMeta[meta.level]?.closeTarget;
+          if (target != null) {
+            const priceStr = this.formatPrice(this.gridLevels[target]!);
+            const side: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
+            this.immediateCloseToPlace.push({ sourceLevel: meta.level, targetLevel: target, side, price: priceStr });
+            // also map source->close key for disappearance tracking
+            this.closeKeyBySourceLevel.set(meta.level, this.getOrderKey(side, priceStr, false));
+          }
         } else if (classified === "canceled") {
           // no action; allow immediate re-open (do not block)
           this.awaitingClassification.delete(meta.level);
@@ -571,6 +581,19 @@ export class GridEngine {
     for (const o of activeOrders) {
       const k = this.getOrderKey(o.side, this.normalizePrice(o.price), false);
       activeKeyCounts.set(k, (activeKeyCounts.get(k) ?? 0) + 1);
+    }
+
+    // First, place any immediate close orders queued by fresh fills
+    if (this.immediateCloseToPlace.length) {
+      for (const item of this.immediateCloseToPlace) {
+        const key = this.getOrderKey(item.side, item.price, false);
+        const count = activeKeyCounts.get(key) ?? 0;
+        if (count < 2) {
+          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize, reduceOnly: false });
+        }
+      }
+      // clear queue regardless to avoid duplicates next tick
+      this.immediateCloseToPlace = [];
     }
 
     // opens below price (BUY)
