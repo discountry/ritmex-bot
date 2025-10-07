@@ -398,7 +398,8 @@ export class BasisArbEngine {
     const spotTs = snapshot.spotLastUpdate ?? 0;
     if (futTs <= readyAt || spotTs <= readyAt) return;
     const now = this.now();
-    const spreadBps = snapshot.spreadBps;
+    // Use net spread after taker fees to match UI's "扣除 taker 手续费" bp
+    const spreadBps = snapshot.netSpreadBps;
     const fundingRate = snapshot.fundingRate;
     const nextFundingTime = snapshot.nextFundingTime;
     const msUntilFunding = typeof nextFundingTime === "number" ? nextFundingTime - now : null;
@@ -409,7 +410,7 @@ export class BasisArbEngine {
         this.lastEntrySignalAt = now;
         const bpTxt = (spreadBps as number).toFixed(2);
         const minutes = Math.floor(((msUntilFunding as number) / 60000));
-        this.tradeLog.push("entry", `入场机会: 价差 ${bpTxt} bp ｜ 距下次资金费约 ${minutes} 分钟`);
+        this.tradeLog.push("entry", `入场机会: 扣费后价差 ${bpTxt} bp ｜ 距下次资金费约 ${minutes} 分钟`);
       }
     }
 
