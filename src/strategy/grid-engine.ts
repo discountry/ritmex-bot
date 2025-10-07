@@ -477,6 +477,82 @@ export class GridEngine {
   }
 
   private async syncGridSimple(price: number): Promise<void> {
+    // --- 0) If there is an existing net position, enforce "exit-first" before any ENTRY ---
+    const hasNetLong = this.position.positionAmt > EPSILON;
+    const hasNetShort = this.position.positionAmt < -EPSILON;
+
+    const hasActiveExit = (side: "BUY" | "SELL"): boolean => {
+      for (const o of this.openOrders) {
+        if (!this.isActiveLimitOrder(o)) continue;
+        if (o.side !== side) continue;
+        const meta = this.orderIntentById.get(String(o.orderId));
+        if (meta && meta.intent === "EXIT") return true;
+      }
+      return false;
+    };
+
+    const ensureSingleExitForExistingPosition = async (): Promise<boolean> => {
+      const qty = this.position.positionAmt;
+      if (!Number.isFinite(qty) || Math.abs(qty) <= EPSILON) return false;
+      const entry = this.position.entryPrice;
+      if (!Number.isFinite(entry)) return false;
+      const dir: "long" | "short" = qty > 0 ? "long" : "short";
+      const nearest = this.findNearestProfitableCloseLevel(dir, Number(entry));
+      if (nearest == null) return false;
+      const exitSide: "BUY" | "SELL" = qty > 0 ? "SELL" : "BUY";
+      const priceStr = this.formatPrice(this.gridLevels[nearest]!);
+      const key = this.getOrderKey(exitSide, priceStr, "EXIT");
+      const activeAlready = hasActiveExit(exitSide);
+      const until = this.pendingKeyUntil.get(key);
+      if (activeAlready || (until && until > this.now())) return activeAlready;
+      try {
+        const placed = await placeOrder(
+          this.exchange,
+          this.config.symbol,
+          this.openOrders,
+          this.locks,
+          this.timers,
+          this.pendings,
+          exitSide,
+          priceStr,
+          Math.abs(qty),
+          this.log,
+          false,
+          undefined,
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
+        );
+        this.pendingKeyUntil.set(key, this.now() + GridEngine.PENDING_TTL_MS);
+        if (placed?.orderId != null) {
+          const source = this.findSourceForInitialPosition(exitSide);
+          if (exitSide === "SELL") this.pendingLongLevels.add(source);
+          else this.pendingShortLevels.add(source);
+          this.closeKeyBySourceLevel.set(source, key);
+          this.orderIntentById.set(String(placed.orderId), {
+            side: exitSide,
+            price: priceStr,
+            level: nearest,
+            intent: "EXIT",
+            sourceLevel: source,
+          });
+          this.log("order", `兜底：为已有仓位挂平仓单 ${exitSide} @ ${priceStr}`);
+        }
+        return true;
+      } catch (err) {
+        this.log("error", `兜底平仓单下单失败: ${extractMessage(err)}`);
+        return false;
+      }
+    };
+
+    if (hasNetLong || hasNetShort) {
+      const needExitSide: "BUY" | "SELL" = hasNetLong ? "SELL" : "BUY";
+      if (!hasActiveExit(needExitSide)) {
+        await ensureSingleExitForExistingPosition();
+        this.lastUpdated = this.now();
+        this.prevActiveIds = new Set(this.openOrders.filter(o => this.isActiveLimitOrder(o)).map(o => String(o.orderId)));
+        return;
+      }
+    }
+
     const activeOrders = this.openOrders.filter((o) => this.isActiveLimitOrder(o));
     // Build lookup for all recent orders by id (including non-active) to read final statuses
     const allOrdersById = new Map<string, AsterOrder>();
@@ -639,13 +715,12 @@ export class GridEngine {
       this.immediateCloseToPlace = [];
     }
 
-    const hasNetLong = this.position.positionAmt > EPSILON;
-    const hasNetShort = this.position.positionAmt < -EPSILON;
+    // hasNetLong/hasNetShort already computed above for exit-first
 
     // ENTRY opens below price (BUY)
     for (const level of this.buyLevelIndices) {
-      if (hasNetShort) {
-        // Avoid competing with EXIT(BUY) while holding net short; focus on closing first
+      if (hasNetLong || hasNetShort) {
+        // During exit-first, do not place any ENTRY orders
         continue;
       }
       const levelPrice = this.gridLevels[level]!;
@@ -680,8 +755,8 @@ export class GridEngine {
 
     // ENTRY opens above price (SELL)
     for (const level of this.sellLevelIndices) {
-      if (hasNetLong) {
-        // Avoid competing with EXIT(SELL) while holding net long; focus on closing first
+      if (hasNetLong || hasNetShort) {
+        // During exit-first, do not place any ENTRY orders
         continue;
       }
       const levelPrice = this.gridLevels[level]!;
