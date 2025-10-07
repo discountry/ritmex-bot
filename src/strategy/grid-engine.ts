@@ -141,7 +141,11 @@ export class GridEngine {
   private stopReason: string | null = null;
   private lastUpdated: number | null = null;
   private accountVersion = 0;
+  private ordersVersion = 0;
   private awaitingByLevel = new Map<number, { accountVerAtStart: number; absAtStart: number; ts: number }>();
+  private lastPlacementOrdersVersion = -1;
+  private lastLimitAttemptAt = 0;
+  static readonly LIMIT_COOLDOWN_MS = 3000;
 
   constructor(private readonly config: GridConfig, private readonly exchange: ExchangeAdapter, options: EngineOptions = {}) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -251,6 +255,7 @@ export class GridEngine {
           ? orders.filter((order) => order.symbol === this.config.symbol)
           : [];
         this.synchronizeLocks(orders);
+        this.ordersVersion += 1;
         if (!this.feedArrived.orders) {
           this.feedArrived.orders = true;
           log("info", "订单快照已同步");
@@ -846,6 +851,22 @@ export class GridEngine {
     const MAX_NEW_ORDERS_PER_TICK = 1;
     for (const d of desired) {
       if (newOrdersPlaced >= MAX_NEW_ORDERS_PER_TICK) break;
+      // Gate: avoid overlapping with coordinator pending LIMIT
+      if (this.pendings["LIMIT"]) {
+        this.log("info", "存在未完成的 LIMIT 操作，本轮不再下新单");
+        break;
+      }
+      // Gate: require a new orders snapshot since last placement to proceed
+      if (this.lastPlacementOrdersVersion === this.ordersVersion) {
+        this.log("info", "等待订单快照更新后再下单");
+        break;
+      }
+      // Gate: cooldown between LIMIT attempts to avoid thrashing
+      const nowTs2 = this.now();
+      if (nowTs2 - this.lastLimitAttemptAt < GridEngine.LIMIT_COOLDOWN_MS) {
+        this.log("info", "冷却期内，暂不下新 LIMIT 单");
+        break;
+      }
       // If a LIMIT operation is already pending (coordinator lock), skip issuing more this tick
       if (this.pendings["LIMIT"]) {
         this.log("info", "存在未完成的 LIMIT 操作，本轮不再下新单");
@@ -895,6 +916,8 @@ export class GridEngine {
           { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
         );
         if (placed) {
+          this.lastPlacementOrdersVersion = this.ordersVersion;
+          this.lastLimitAttemptAt = this.now();
           newOrdersPlaced += 1;
           plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
           activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
