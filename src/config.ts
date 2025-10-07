@@ -113,6 +113,7 @@ export interface BasisArbConfig {
   refreshIntervalMs: number;
   maxLogEntries: number;
   takerFeeRate: number;
+  arbAmount: number; // base asset amount to arb (e.g., ASTER amount when ASTERUSDT)
 }
 
 export type GridDirection = "both" | "long" | "short";
@@ -158,6 +159,7 @@ export const basisConfig: BasisArbConfig = {
   refreshIntervalMs: parseNumber(process.env.BASIS_REFRESH_INTERVAL_MS, 1000),
   maxLogEntries: parseNumber(process.env.BASIS_MAX_LOG_ENTRIES, 200),
   takerFeeRate: parseNumber(process.env.BASIS_TAKER_FEE_RATE, 0.0004),
+  arbAmount: parseNumber(process.env.ARB_AMOUNT, parseNumber(process.env.TRADE_AMOUNT, 0)),
 };
 
 const resolveGridDirection = (raw: string | undefined, fallback: GridDirection): GridDirection => {

@@ -85,6 +85,10 @@ export function BasisApp({ onExit }: BasisAppProps) {
   const fundingRatePct = snapshot.fundingRate != null ? `${(snapshot.fundingRate * 100).toFixed(4)}%` : "-";
   const fundingUpdated = snapshot.fundingLastUpdate ? new Date(snapshot.fundingLastUpdate).toLocaleTimeString() : "-";
   const nextFundingTime = snapshot.nextFundingTime ? new Date(snapshot.nextFundingTime).toLocaleTimeString() : "-";
+  const fundingIncomePerFunding = snapshot.fundingIncomePerFunding != null ? `${formatNumber(snapshot.fundingIncomePerFunding, 4)} USDT` : "-";
+  const fundingIncomePerDay = snapshot.fundingIncomePerDay != null ? `${formatNumber(snapshot.fundingIncomePerDay, 4)} USDT` : "-";
+  const takerFeesPerRoundTrip = snapshot.takerFeesPerRoundTrip != null ? `${formatNumber(snapshot.takerFeesPerRoundTrip, 4)} USDT` : "-";
+  const fundingCountToBreakeven = snapshot.fundingCountToBreakeven != null ? `${formatNumber(snapshot.fundingCountToBreakeven, 2)} 次` : "-";
   const feedStatus = snapshot.feedStatus;
   const lastLogs = snapshot.tradeLog.slice(-5);
   const spotBalances = (snapshot.spotBalances ?? []).filter((b) => Math.abs(b.free) > 0 || Math.abs(b.locked) > 0);
@@ -118,6 +122,8 @@ export function BasisApp({ onExit }: BasisAppProps) {
         <Text color="yellow">资金费率</Text>
         <Text>当前资金费率: {fundingRatePct}</Text>
         <Text color="gray">资金费率更新时间: {fundingUpdated} ｜ 下次结算时间: {nextFundingTime}</Text>
+        <Text>单次资金费率收益(估): {fundingIncomePerFunding} ｜ 日收益(估): {fundingIncomePerDay}</Text>
+        <Text>双边吃单手续费(估): {takerFeesPerRoundTrip} ｜ 回本所需资金费率次数: {fundingCountToBreakeven}</Text>
       </Box>
 
       <Box flexDirection="row" marginBottom={1}>
@@ -158,11 +164,14 @@ export function BasisApp({ onExit }: BasisAppProps) {
       <Box flexDirection="column">
         <Text color="yellow">最近事件</Text>
         {lastLogs.length ? (
-          lastLogs.map((entry, index) => (
-            <Text key={`${entry.time}-${index}`}>
-              [{entry.time}] [{entry.type}] {entry.detail}
-            </Text>
-          ))
+          lastLogs.map((entry, index) => {
+            const color = entry.type === "entry" ? "green" : entry.type === "exit" ? "red" : undefined;
+            return (
+              <Text key={`${entry.time}-${index}`} color={color}>
+                [{entry.time}] [{entry.type}] {entry.detail}
+              </Text>
+            );
+          })
         ) : (
           <Text color="gray">暂无日志</Text>
         )}

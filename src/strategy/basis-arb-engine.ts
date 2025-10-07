@@ -19,6 +19,10 @@ export interface BasisArbSnapshot {
   fundingRate: number | null;
   nextFundingTime: number | null;
   fundingLastUpdate: number | null;
+  fundingIncomePerFunding: number | null; // USDT per funding event
+  fundingIncomePerDay: number | null; // USDT per day (assuming 3 fundings/day)
+  takerFeesPerRoundTrip: number | null; // USDT cost to open both legs
+  fundingCountToBreakeven: number | null; // number of fundings to cover fees
   spread: number | null;
   spreadBps: number | null;
   netSpread: number | null;
@@ -97,6 +101,8 @@ export class BasisArbEngine {
   private spotAccountInFlight = false;
   private futuresAccountInFlight = false;
   private stopped = false;
+  private lastEntrySignalAt = 0;
+  private lastExitSignalAt = 0;
 
   constructor(config: BasisArbConfig, exchange: ExchangeAdapter, deps: BasisArbDependencies = {}) {
     this.config = config;
@@ -291,6 +297,8 @@ export class BasisArbEngine {
   }
 
   private emitUpdate(): void {
+    // Evaluate entry/exit signals before emitting so the snapshot includes new log lines
+    this.evaluateSignals();
     this.events.emit("update", this.buildSnapshot(), (error) => {
       this.tradeLog.push("error", `推送订阅失败: ${String(error)}`);
     });
@@ -307,6 +315,12 @@ export class BasisArbEngine {
     const spreadBps = this.computeSpreadBps(spread, spotAsk);
     const netSpread = this.computeNetSpread(futuresBid, spotAsk);
     const netSpreadBps = this.computeSpreadBps(netSpread, spotAsk);
+    const perFundingIncome = this.computeFundingIncomeUSDT(fundingRate, spotAsk);
+    const perDayIncome = perFundingIncome != null ? perFundingIncome * 3 : null; // 3 times/day typical
+    const takerFeesPerRoundTrip = this.computeRoundTripFeesUSDT(spotAsk);
+    const fundingCountToBreakeven = perFundingIncome && perFundingIncome > 0 && takerFeesPerRoundTrip != null
+      ? takerFeesPerRoundTrip / perFundingIncome
+      : null;
     const opportunity = netSpread != null && netSpread >= 0;
     const lastUpdated = Math.max(
       futuresBid != null && this.futures.updatedAt ? this.futures.updatedAt : 0,
@@ -327,6 +341,10 @@ export class BasisArbEngine {
       fundingRate,
       nextFundingTime,
       fundingLastUpdate: this.funding.updatedAt,
+      fundingIncomePerFunding: perFundingIncome,
+      fundingIncomePerDay: perDayIncome,
+      takerFeesPerRoundTrip,
+      fundingCountToBreakeven,
       spread,
       spreadBps,
       netSpread,
@@ -360,5 +378,59 @@ export class BasisArbEngine {
     const sellFuturesNet = Number(futuresBid) * (1 - effectiveFee);
     const buySpotNet = Number(spotAsk) * (1 + effectiveFee);
     return sellFuturesNet - buySpotNet;
+  }
+
+  private evaluateSignals(): void {
+    // Require both futures and spot feeds before computing signals
+    if (!this.feedReady.futures || !this.feedReady.spot) return;
+    const now = this.now();
+    const futuresBid = this.futures.bid;
+    const spotAsk = this.spot.ask;
+    const spread = this.computeSpread(futuresBid, spotAsk);
+    const spreadBps = this.computeSpreadBps(spread, spotAsk);
+    const fundingRate = this.funding.rate;
+    const nextFundingTime = this.funding.nextFundingTime;
+    const msUntilFunding = typeof nextFundingTime === "number" ? nextFundingTime - now : null;
+
+    // Entry signal: positive bp and next funding >= 10 minutes away
+    if (Number.isFinite(spreadBps ?? NaN) && (spreadBps as number) > 0 && Number.isFinite(msUntilFunding ?? NaN) && (msUntilFunding as number) >= 10 * 60 * 1000) {
+      if (now - this.lastEntrySignalAt >= 60 * 1000) { // debounce 60s
+        this.lastEntrySignalAt = now;
+        const bpTxt = (spreadBps as number).toFixed(2);
+        const minutes = Math.floor(((msUntilFunding as number) / 60000));
+        this.tradeLog.push("entry", `入场机会: 价差 ${bpTxt} bp ｜ 距下次资金费约 ${minutes} 分钟`);
+      }
+    }
+
+    // Exit signal: funding rate negative and within 10 minutes before collection
+    if (Number.isFinite(fundingRate ?? NaN) && (fundingRate as number) < 0 && Number.isFinite(msUntilFunding ?? NaN) && (msUntilFunding as number) > 0 && (msUntilFunding as number) <= 10 * 60 * 1000) {
+      if (now - this.lastExitSignalAt >= 60 * 1000) { // debounce 60s
+        this.lastExitSignalAt = now;
+        const minutes = Math.max(0, Math.floor(((msUntilFunding as number) / 60000)));
+        this.tradeLog.push("exit", `出场机会: 资金费率为负 ｜ 距收取约 ${minutes} 分钟`);
+      }
+    }
+  }
+
+  private computeFundingIncomeUSDT(fundingRate: number | null, spotAsk: number | null): number | null {
+    if (!Number.isFinite(fundingRate ?? NaN)) return null;
+    const price = Number.isFinite(spotAsk ?? NaN) ? Number(spotAsk) : null;
+    const amount = Number.isFinite(this.config.arbAmount ?? NaN) ? Number(this.config.arbAmount) : null;
+    if (price == null || amount == null) return null;
+    // Funding income per event for a delta-neutral hedge ~ rate * notional
+    // Notional in USDT = amount * price
+    const notional = amount * price;
+    const rate = Number(fundingRate);
+    return notional * rate;
+  }
+
+  private computeRoundTripFeesUSDT(spotAsk: number | null): number | null {
+    const price = Number.isFinite(spotAsk ?? NaN) ? Number(spotAsk) : null;
+    const amount = Number.isFinite(this.config.arbAmount ?? NaN) ? Number(this.config.arbAmount) : null;
+    if (price == null || amount == null) return null;
+    const notional = amount * price;
+    // Two taker trades (sell futures, buy spot) → fees on both legs
+    const perSide = (this.config.takerFeeRate ?? 0) * notional;
+    return perSide * 2;
   }
 }
