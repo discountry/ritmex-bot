@@ -99,6 +99,10 @@ export class GridEngine {
   
   // Track levels awaiting classification after disappearance until next account snapshot confirms
   
+  // Key-level suppression for (side:price:intent) to bridge WS latency windows
+  private readonly pendingKeyUntil = new Map<string, number>();
+  static readonly PENDING_TTL_MS = 10_000;
+
   private sidesLocked = false;
   private startupCleaned = false;
   private initialCloseHandled = false;
@@ -486,9 +490,22 @@ export class GridEngine {
       const id = String(o.orderId);
       currIds.add(id);
       const meta = this.orderIntentById.get(id);
-      if (!meta) continue; // unknown intent from legacy/startup orders
-      const k = this.getOrderKey(o.side, this.normalizePrice(o.price), meta.intent);
-      activeKeyCounts.set(k, (activeKeyCounts.get(k) ?? 0) + 1);
+      const priceStr = this.normalizePrice(o.price);
+      if (meta) {
+        const k = this.getOrderKey(o.side, priceStr, meta.intent);
+        activeKeyCounts.set(k, (activeKeyCounts.get(k) ?? 0) + 1);
+      } else {
+        // Conservative: count both ENTRY and EXIT to avoid duplicate placements when intent is unknown
+        const kEntry = this.getOrderKey(o.side, priceStr, "ENTRY");
+        const kExit = this.getOrderKey(o.side, priceStr, "EXIT");
+        activeKeyCounts.set(kEntry, (activeKeyCounts.get(kEntry) ?? 0) + 1);
+        activeKeyCounts.set(kExit, (activeKeyCounts.get(kExit) ?? 0) + 1);
+      }
+    }
+
+    // Any key that is already visible as active should clear local suppression
+    for (const [k, cnt] of activeKeyCounts.entries()) {
+      if ((cnt ?? 0) > 0) this.pendingKeyUntil.delete(k);
     }
 
     // Detect disappeared orders by id
@@ -546,12 +563,18 @@ export class GridEngine {
           this.pendingShortLevels.delete(src);
           this.closeKeyBySourceLevel.delete(src);
         }
+        // Clear suppression for this key on fill
+        const filledKey = this.getOrderKey(meta.side, meta.price, meta.intent);
+        this.pendingKeyUntil.delete(filledKey);
       } else if (classified === "canceled") {
         // if it was EXIT we also drop mapping by source
         if (meta.intent === "EXIT") {
           const src = meta.sourceLevel ?? this.findSourceForCloseTarget(meta.level, meta.side);
           this.closeKeyBySourceLevel.delete(src);
         }
+        // Clear suppression for this key on cancel
+        const canceledKey = this.getOrderKey(meta.side, meta.price, meta.intent);
+        this.pendingKeyUntil.delete(canceledKey);
       }
       // cleanup intent map for this disappeared id to avoid leaks
       this.orderIntentById.delete(id);
@@ -595,6 +618,11 @@ export class GridEngine {
     if (this.immediateCloseToPlace.length) {
       for (const item of this.immediateCloseToPlace) {
         const key = this.getOrderKey(item.side, item.price, "EXIT");
+        const until = this.pendingKeyUntil.get(key);
+        const nowTs = this.now();
+        if (until && until > nowTs) {
+          continue;
+        }
         const count = plannedKeyCounts.get(key) ?? 0;
         if (count < 1 && !desiredKeySet.has(key)) {
           desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize, intent: "EXIT" });
@@ -622,6 +650,11 @@ export class GridEngine {
         continue; // wait until close filled
       }
       const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), "ENTRY");
+      const until = this.pendingKeyUntil.get(key);
+      const nowTs = this.now();
+      if (until && until > nowTs) {
+        continue;
+      }
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
         desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize, intent: "ENTRY" });
@@ -643,6 +676,11 @@ export class GridEngine {
         continue;
       }
       const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), "ENTRY");
+      const until = this.pendingKeyUntil.get(key);
+      const nowTs = this.now();
+      if (until && until > nowTs) {
+        continue;
+      }
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
         desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize, intent: "ENTRY" });
@@ -657,6 +695,11 @@ export class GridEngine {
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
       const closeKey = this.getOrderKey("SELL", priceStr, "EXIT");
+      const until = this.pendingKeyUntil.get(closeKey);
+      const nowTs = this.now();
+      if (until && until > nowTs) {
+        continue;
+      }
       if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
         desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, intent: "EXIT" });
         desiredKeySet.add(closeKey);
@@ -671,6 +714,11 @@ export class GridEngine {
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
       const closeKey = this.getOrderKey("BUY", priceStr, "EXIT");
+      const until = this.pendingKeyUntil.get(closeKey);
+      const nowTs = this.now();
+      if (until && until > nowTs) {
+        continue;
+      }
       if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
         desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, intent: "EXIT" });
         desiredKeySet.add(closeKey);
@@ -723,11 +771,13 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
         );
         if (placed) {
           plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
           activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
+          // start local suppression window for this key
+          this.pendingKeyUntil.set(key, this.now() + GridEngine.PENDING_TTL_MS);
           if (placed.orderId != null) {
             const record: { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT"; sourceLevel?: number } = {
               side: d.side,
