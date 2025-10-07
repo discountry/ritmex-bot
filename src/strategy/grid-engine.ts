@@ -477,6 +477,12 @@ export class GridEngine {
   }
 
   private async syncGridSimple(price: number): Promise<void> {
+    // 启动撤单未完成前，禁止铺网/下单，避免新单被启动撤单冲掉造成“消失待判定”
+    if (!this.startupCancelDone) {
+      this.log("info", "启动撤单未完成，等待后再部网");
+      this.lastUpdated = this.now();
+      return;
+    }
     // --- 0) If there is an existing net position, enforce "exit-first" before any ENTRY ---
     const hasNetLong = this.position.positionAmt > EPSILON;
     const hasNetShort = this.position.positionAmt < -EPSILON;
@@ -1172,6 +1178,15 @@ export class GridEngine {
       this.log("error", `启动撤单失败: ${extractMessage(error)}`);
     } finally {
       this.startupCancelDone = true;
+      // 清理本地判定/抑制状态，避免被启动撤单冲掉的新单在本地留下“待判定”残留
+      this.prevActiveIds.clear();
+      this.orderIntentById.clear();
+      this.awaitingByLevel.clear();
+      this.pendingKeyUntil.clear();
+      this.pendingLongLevels.clear();
+      this.pendingShortLevels.clear();
+      this.closeKeyBySourceLevel.clear();
+      this.immediateCloseToPlace = [];
     }
   }
 
