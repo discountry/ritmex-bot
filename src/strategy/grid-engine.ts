@@ -530,7 +530,7 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
         this.pendingKeyUntil.set(key, this.now() + GridEngine.PENDING_TTL_MS);
         if (placed?.orderId != null) {
@@ -913,7 +913,7 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
         if (placed) {
           this.lastPlacementOrdersVersion = this.ordersVersion;
@@ -1266,7 +1266,7 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
         if (placed) {
           // mark pending exposure broadly so we don't re-open immediately on that source level (choose closest source side)
