@@ -454,7 +454,10 @@ export class GridEngine {
   private async syncGridSimple(price: number): Promise<void> {
     const activeOrders = this.openOrders.filter((o) => o.symbol === this.config.symbol && o.type === "LIMIT");
 
-    // Detect fills by comparing last keys
+    // Detect fills by comparing previous keys vs current snapshot
+    const prevKeys = this.lastOpenOrderKeys;
+    const prevMeta = this.lastKeyMeta;
+
     const currentKeys = new Set<string>();
     const keyToMeta = new Map<string, { side: "BUY" | "SELL"; level: number; reduceOnly: boolean }>();
     for (const o of activeOrders) {
@@ -465,11 +468,10 @@ export class GridEngine {
         keyToMeta.set(key, { side: o.side, level, reduceOnly: o.reduceOnly === true });
       }
     }
-    // persist metadata for next tick to detect fills
-    this.lastKeyMeta = keyToMeta;
-    for (const prevKey of this.lastOpenOrderKeys) {
+
+    for (const prevKey of prevKeys) {
       if (currentKeys.has(prevKey)) continue;
-      const meta = this.lastKeyMeta.get(prevKey) || keyToMeta.get(prevKey);
+      const meta = prevMeta.get(prevKey);
       // If we can't resolve from current snapshot, try to decode by stored mapping
       if (!meta) {
         // For reduce-only disappearance, check mapping
@@ -512,6 +514,8 @@ export class GridEngine {
       }
     }
     this.lastOpenOrderKeys = currentKeys;
+    // persist metadata for next tick to detect fills
+    this.lastKeyMeta = keyToMeta;
 
     // Desired open orders according to locked sides
     const desired: DesiredGridOrder[] = [];
