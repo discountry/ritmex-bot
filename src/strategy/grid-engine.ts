@@ -701,7 +701,7 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
         if (placed) {
           activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
@@ -984,7 +984,7 @@ export class GridEngine {
           this.log,
           false,
           undefined,
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
+          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
         if (placed) {
           // mark pending exposure broadly so we don't re-open immediately on that source level (choose closest source side)
