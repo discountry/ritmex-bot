@@ -22,6 +22,7 @@ interface DesiredGridOrder {
   side: "BUY" | "SELL";
   price: string;
   amount: number;
+  intent?: "ENTRY" | "EXIT";
 }
 
 interface LevelMeta {
@@ -92,6 +93,8 @@ export class GridEngine {
   private readonly closeKeyBySourceLevel = new Map<number, string>();
   private lastKeyMeta = new Map<string, { side: "BUY" | "SELL"; level: number }>();
   private lastOrderIdsByKey = new Map<string, Set<string>>();
+  private prevActiveIds: Set<string> = new Set<string>();
+  private orderIntentById = new Map<string, { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT" }>();
   // When an order at a level disappears but account delta hasn't arrived yet,
   // temporarily block re-opening at that level to avoid immediate re-placement.
   private readonly levelReopenBlockUntil = new Map<number, number>();
@@ -460,117 +463,75 @@ export class GridEngine {
       allOrdersById.set(String(o.orderId), o);
     }
 
-    // Detect fills by comparing previous keys vs current snapshot
-    const prevKeys = this.lastOpenOrderKeys;
-    const prevMeta = this.lastKeyMeta;
-
-    const currentKeys = new Set<string>();
-    const keyToMeta = new Map<string, { side: "BUY" | "SELL"; level: number }>();
-    const currentOrderIdsByKey = new Map<string, Set<string>>();
-    for (const o of activeOrders) {
-      const key = this.getOrderKey(o.side, this.normalizePrice(o.price));
-      currentKeys.add(key);
-      const level = this.resolveLevelIndex(Number(o.price));
-      if (level != null) {
-        keyToMeta.set(key, { side: o.side, level });
-      }
-      const id = String(o.orderId);
-      const set = currentOrderIdsByKey.get(key) ?? new Set<string>();
-      set.add(id);
-      currentOrderIdsByKey.set(key, set);
-    }
-
-    // Build active order key counts (open and reduce-only) for placement and disappearance handling
+    // Build active order key counts with intent awareness
     const activeKeyCounts = new Map<string, number>();
+    const currIds = new Set<string>();
     for (const o of activeOrders) {
-      const k = this.getOrderKey(o.side, this.normalizePrice(o.price));
+      const id = String(o.orderId);
+      currIds.add(id);
+      const meta = this.orderIntentById.get(id);
+      if (!meta) continue; // unknown intent from legacy/startup orders
+      const k = this.getOrderKey(o.side, this.normalizePrice(o.price), meta.intent);
       activeKeyCounts.set(k, (activeKeyCounts.get(k) ?? 0) + 1);
     }
 
-    for (const prevKey of prevKeys) {
-      if (currentKeys.has(prevKey)) continue;
-      const meta = prevMeta.get(prevKey);
-      // First, check if this missing key corresponds to a tracked close order
-      let handledByCloseTracking = false;
-      for (const [source, closeKey] of this.closeKeyBySourceLevel.entries()) {
-        if (closeKey === prevKey) {
-          handledByCloseTracking = true;
-          const absNow = Math.abs(this.position.positionAmt);
-          if (absNow + EPSILON < this.lastAbsPositionAmt) {
-            // filled: clear pending mapping
-            this.pendingLongLevels.delete(source);
-            this.pendingShortLevels.delete(source);
-            this.closeKeyBySourceLevel.delete(source);
-          } else {
-            // canceled: keep pending mapping so desired will re-place close order
-          }
-          break;
+    // Detect disappeared orders by id
+    const disappeared: string[] = [];
+    for (const id of this.prevActiveIds) {
+      if (!currIds.has(id)) disappeared.push(id);
+    }
+
+    // Handle disappeared orders classification and reactions
+    for (const id of disappeared) {
+      const meta = this.orderIntentById.get(id);
+      if (!meta) continue;
+      // Classify by position delta or final observable status
+      let classified: "filled" | "canceled" | "unknown" = "unknown";
+      const rec = allOrdersById.get(id);
+      if (rec) {
+        const status = String(rec.status || "").toUpperCase();
+        const executed = Number(rec.executedQty);
+        if (["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status) && executed <= EPSILON) {
+          classified = "canceled";
         }
       }
-      if (handledByCloseTracking) continue;
-      // Proactively queue a close at target to safely capture profit if the disappearance was a fill
-      if (meta) {
-        const target0 = this.levelMeta[meta.level]?.closeTarget;
-        if (target0 != null) {
-          const priceStr0 = this.formatPrice(this.gridLevels[target0]!);
-          const side0: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
-          const key = this.getOrderKey(side0, priceStr0);
-          const count = activeKeyCounts.get(key) ?? 0;
-          if (count < 1) {
-            this.immediateCloseToPlace.push({ sourceLevel: meta.level, targetLevel: target0, side: side0, price: priceStr0 });
-          }
-          this.closeKeyBySourceLevel.set(meta.level, key);
-        }
-      }
-      // Use order records to classify disappearance: filled vs canceled
-      if (meta) {
-        const prevIds = this.lastOrderIdsByKey.get(prevKey);
-        let classified: "filled" | "canceled" | "unknown" = "unknown";
-        // We generally cannot see final states for disappeared orders in openOrders; rely on position if available
+      if (classified === "unknown") {
         const absNow = Math.abs(this.position.positionAmt);
-        if (absNow > this.lastAbsPositionAmt + EPSILON) {
-          classified = "filled";
-        } else if (prevIds && prevIds.size) {
-          // If any explicit canceled-like status is observable (rare in open snapshot), allow classification
-          for (const id of prevIds) {
-            const rec = allOrdersById.get(id);
-            if (!rec) continue;
-            const status = String(rec.status || "").toUpperCase();
-            const executed = Number(rec.executedQty);
-            if (["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status) && executed <= EPSILON) {
-              classified = "canceled";
-            }
-          }
-        }
-        if (classified === "filled") {
+        if (absNow > this.lastAbsPositionAmt + EPSILON) classified = "filled";
+        else classified = "canceled"; // best-effort default if no exposure change
+      }
+      if (classified === "filled") {
+        if (meta.intent === "ENTRY") {
           if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
           else this.pendingShortLevels.add(meta.level);
-          // ensure reduce-only close mapping exists for disappearance tracking (already queued above)
-        } else if (classified === "canceled") {
-          // no action; allow immediate re-open (do not block)
-          this.awaitingClassification.delete(meta.level);
-          this.levelReopenBlockUntil.delete(meta.level);
-          // clear any close mapping queued earlier
-          const target = this.levelMeta[meta.level]?.closeTarget;
-          if (target != null) {
-            const priceStr = this.formatPrice(this.gridLevels[target]!);
-            const side: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
-            const closeKey = this.getOrderKey(side, priceStr);
-            if (this.closeKeyBySourceLevel.get(meta.level) === closeKey) {
-              this.closeKeyBySourceLevel.delete(meta.level);
+          // Immediately plan EXIT for the mapped target
+          const target0 = this.levelMeta[meta.level]?.closeTarget;
+          if (target0 != null) {
+            const priceStr0 = this.formatPrice(this.gridLevels[target0]!);
+            const side0: "BUY" | "SELL" = meta.side === "BUY" ? "SELL" : "BUY";
+            const exitKey = this.getOrderKey(side0, priceStr0, "EXIT");
+            const count = activeKeyCounts.get(exitKey) ?? 0;
+            if (count < 1) {
+              this.immediateCloseToPlace.push({ sourceLevel: meta.level, targetLevel: target0, side: side0, price: priceStr0 });
             }
+            this.closeKeyBySourceLevel.set(meta.level, exitKey);
           }
         } else {
-          // unknown: defer decision until we see a newer account snapshot
-          this.awaitingClassification.set(meta.level, { accountVerAtStart: this.accountVersion, absAtStart: this.lastAbsPositionAmt });
-          this.blockLevelReopen(meta.level);
+          // EXIT filled
+          this.pendingLongLevels.delete(meta.level);
+          this.pendingShortLevels.delete(meta.level);
+          this.closeKeyBySourceLevel.delete(meta.level);
         }
+      } else if (classified === "canceled") {
+        // allow re-open; clear temporary blocks
+        this.awaitingClassification.delete(meta.level);
+        this.levelReopenBlockUntil.delete(meta.level);
+        // if it was EXIT we also drop mapping
+        if (meta.intent === "EXIT") this.closeKeyBySourceLevel.delete(meta.level);
       }
     }
-    this.lastOpenOrderKeys = currentKeys;
-    // persist metadata for next tick to detect fills
-    this.lastKeyMeta = keyToMeta;
-    this.lastOrderIdsByKey = currentOrderIdsByKey;
+    // Update prevActiveIds for next tick
+    this.prevActiveIds = currIds;
 
     // Resolve awaiting classifications only after a new account snapshot
     if (this.awaitingClassification.size) {
@@ -596,18 +557,14 @@ export class GridEngine {
     const desiredKeySet = new Set<string>();
     const plannedKeyCounts = new Map<string, number>(activeKeyCounts);
     const halfTick = this.config.priceTick / 2;
-    const activeKeySet = new Set(
-      activeOrders.map((o) => this.getOrderKey(o.side, this.normalizePrice(o.price)))
-    );
-    // activeKeyCounts and activeKeyCountsRO already computed above
 
-    // First, place any immediate close orders queued by fresh fills
+    // First, place any immediate close (EXIT) orders queued by fresh fills
     if (this.immediateCloseToPlace.length) {
       for (const item of this.immediateCloseToPlace) {
-        const key = this.getOrderKey(item.side, item.price);
+        const key = this.getOrderKey(item.side, item.price, "EXIT");
         const count = plannedKeyCounts.get(key) ?? 0;
         if (count < 1 && !desiredKeySet.has(key)) {
-          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize });
+          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize, intent: "EXIT" });
           desiredKeySet.add(key);
           plannedKeyCounts.set(key, count + 1);
         }
@@ -619,46 +576,44 @@ export class GridEngine {
       this.immediateCloseToPlace = [];
     }
 
-    // opens below price (BUY)
+    // ENTRY opens below price (BUY)
     for (const level of this.buyLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
       if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingLongLevels.has(level)) continue; // wait until close filled
-      const key = this.getOrderKey("BUY", this.formatPrice(levelPrice));
-      const targetMax = this.isCloseDesiredForSideAtLevel("BUY", level) ? 2 : 1;
-      if ((plannedKeyCounts.get(key) ?? 0) >= targetMax) continue;
+      const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), "ENTRY");
+      if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
-        desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
+        desired.push({ level, side: "BUY", price: this.formatPrice(levelPrice), amount: this.config.orderSize, intent: "ENTRY" });
         desiredKeySet.add(key);
         plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
       }
     }
 
-    // opens above price (SELL)
+    // ENTRY opens above price (SELL)
     for (const level of this.sellLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
       if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingShortLevels.has(level)) continue;
-      const key = this.getOrderKey("SELL", this.formatPrice(levelPrice));
-      const targetMax = this.isCloseDesiredForSideAtLevel("SELL", level) ? 2 : 1;
-      if ((plannedKeyCounts.get(key) ?? 0) >= targetMax) continue;
+      const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), "ENTRY");
+      if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
-        desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize });
+        desired.push({ level, side: "SELL", price: this.formatPrice(levelPrice), amount: this.config.orderSize, intent: "ENTRY" });
         desiredKeySet.add(key);
         plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
       }
     }
 
-    // close orders for pending levels (now non-reduce-only)
+    // EXIT close orders for pending levels
     for (const source of this.pendingLongLevels) {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
-      const closeKey = this.getOrderKey("SELL", priceStr);
+      const closeKey = this.getOrderKey("SELL", priceStr, "EXIT");
       if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
-        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize });
+        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, intent: "EXIT" });
         desiredKeySet.add(closeKey);
         plannedKeyCounts.set(closeKey, (plannedKeyCounts.get(closeKey) ?? 0) + 1);
       }
@@ -670,9 +625,9 @@ export class GridEngine {
       const target = this.levelMeta[source]?.closeTarget;
       if (target == null) continue;
       const priceStr = this.formatPrice(this.gridLevels[target]!);
-      const closeKey = this.getOrderKey("BUY", priceStr);
+      const closeKey = this.getOrderKey("BUY", priceStr, "EXIT");
       if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
-        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize });
+        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, intent: "EXIT" });
         desiredKeySet.add(closeKey);
         plannedKeyCounts.set(closeKey, (plannedKeyCounts.get(closeKey) ?? 0) + 1);
       }
@@ -684,9 +639,10 @@ export class GridEngine {
     // Place desired orders
     this.desiredOrders = desired;
     for (const d of desired) {
-      const key = this.getOrderKey(d.side, d.price);
-      const isClose = (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
-      if ((activeKeyCounts.get(key) ?? 0) >= 1) continue;
+      const isClose = d.intent === "EXIT" || (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
+      const intent: "ENTRY" | "EXIT" = isClose ? "EXIT" : "ENTRY";
+      const key = this.getOrderKey(d.side, d.price, intent);
+      if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       try {
         const placed = await placeOrder(
           this.exchange,
@@ -704,7 +660,10 @@ export class GridEngine {
           { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep, skipDedupe: true }
         );
         if (placed) {
-          activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
+          plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
+          if (placed.orderId != null) {
+            this.orderIntentById.set(String(placed.orderId), { side: d.side, price: d.price, level: d.level, intent });
+          }
         }
         if (placed && isClose) {
           this.closeKeyBySourceLevel.set(
@@ -788,19 +747,24 @@ export class GridEngine {
     const lastPrice = Number.isFinite(tickerLast) ? tickerLast : reference;
     const midPrice = reference;
     const desiredKeys = new Set(
-      this.desiredOrders.map((order) => this.getOrderKey(order.side, order.price))
+      this.desiredOrders.map((order) => this.getOrderKey(order.side, order.price, order.intent ?? "ENTRY"))
     );
     const openOrderKeys = new Set(
       this.openOrders
         .filter((order) => order.symbol === this.config.symbol && order.type === "LIMIT")
-        .map((order) => this.getOrderKey(order.side, this.normalizePrice(order.price)))
+        .map((order) => {
+          const id = String(order.orderId);
+          const meta = this.orderIntentById.get(id);
+          const intent: "ENTRY" | "EXIT" = meta?.intent ?? "ENTRY";
+          return this.getOrderKey(order.side, this.normalizePrice(order.price), intent);
+        })
     );
 
     const gridLines: GridLineSnapshot[] = this.gridLevels.map((price, level) => {
       const desired = this.desiredOrders.find((order) => order.level === level);
       const defaultSide = this.buyLevelIndices.includes(level) ? "BUY" : "SELL";
       const side = desired?.side ?? defaultSide;
-      const key = desired ? this.getOrderKey(desired.side, desired.price) : null;
+      const key = desired ? this.getOrderKey(desired.side, desired.price, desired.intent ?? "ENTRY") : null;
       const hasOrder = key ? openOrderKeys.has(key) : false;
       const active = Boolean(desired && key && desiredKeys.has(key));
       return {
@@ -836,8 +800,8 @@ export class GridEngine {
     this.events.emit("update", this.buildSnapshot());
   }
 
-  private getOrderKey(side: "BUY" | "SELL", price: string, reduceOnly = false): string {
-    return `${side}:${price}:${reduceOnly ? "RO" : "OPEN"}`;
+  private getOrderKey(side: "BUY" | "SELL", price: string, intent: "ENTRY" | "EXIT" = "ENTRY"): string {
+    return `${side}:${price}:${intent}`;
   }
 
   private normalizePrice(price: string | number): string {
@@ -991,7 +955,11 @@ export class GridEngine {
           const source = this.findSourceForInitialPosition(side);
           if (side === "SELL") this.pendingLongLevels.add(source);
           else this.pendingShortLevels.add(source);
-          this.closeKeyBySourceLevel.set(source, this.getOrderKey(side, priceStr));
+          const exitKey = this.getOrderKey(side, priceStr, "EXIT");
+          this.closeKeyBySourceLevel.set(source, exitKey);
+          if (placed.orderId != null) {
+            this.orderIntentById.set(String(placed.orderId), { side, price: priceStr, level: nearest, intent: "EXIT" });
+          }
           this.log("order", `为已有仓位挂出一次性平仓单 ${side} @ ${priceStr}`);
         }
       } catch (error) {
