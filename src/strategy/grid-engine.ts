@@ -680,12 +680,12 @@ export class GridEngine {
         if (capped <= EPSILON) continue;
         d.amount = capped;
       } else {
-        const capped = this.capEntryQty(d.amount);
+        const capped = this.capEntryQty(d.amount, d.side);
         if (capped <= EPSILON) continue;
         d.amount = capped;
       }
       const key = this.getOrderKey(d.side, d.price, intent);
-      if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
+      if ((activeKeyCounts.get(key) ?? 0) >= 1) continue;
       try {
         const placed = await placeOrder(
           this.exchange,
@@ -704,6 +704,7 @@ export class GridEngine {
         );
         if (placed) {
           plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
+          activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
           if (placed.orderId != null) {
             const record: { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT"; sourceLevel?: number } = {
               side: d.side,
@@ -751,10 +752,11 @@ export class GridEngine {
     return Math.min(desiredQty, remain);
   }
 
-  private estimatePendingEntryQty(): number {
+  private estimatePendingEntryQty(side: "BUY" | "SELL"): number {
     let sum = 0;
     for (const o of this.openOrders) {
       if (!this.isActiveLimitOrder(o)) continue;
+      if (o.side !== side) continue;
       const meta = this.orderIntentById.get(String(o.orderId));
       if (!meta || meta.intent !== "ENTRY") continue;
       const orig = Number(o.origQty || 0);
@@ -764,10 +766,11 @@ export class GridEngine {
     return sum;
   }
 
-  private capEntryQty(desiredQty: number): number {
+  private capEntryQty(desiredQty: number, side: "BUY" | "SELL"): number {
+    // Cap per side to allow simultaneous BUY/SELL grids without mutual blocking
     const absPos = Math.abs(this.position.positionAmt);
-    const pendingEntry = this.estimatePendingEntryQty();
-    const remain = Math.max(this.config.maxPositionSize - absPos - pendingEntry, 0);
+    const pendingEntrySameSide = this.estimatePendingEntryQty(side);
+    const remain = Math.max(this.config.maxPositionSize - absPos - pendingEntrySameSide, 0);
     return Math.min(desiredQty, remain);
   }
 
