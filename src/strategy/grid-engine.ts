@@ -613,8 +613,14 @@ export class GridEngine {
     for (const level of this.buyLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
-      if (this.awaitingByLevel.has(level)) continue;
-      if (this.pendingLongLevels.has(level)) continue; // wait until close filled
+      if (this.awaitingByLevel.has(level)) {
+        this.log("info", `跳过 BUY @ ${this.formatPrice(levelPrice)}：等待上一笔消失判定`);
+        continue;
+      }
+      if (this.pendingLongLevels.has(level)) {
+        this.log("info", `跳过 BUY @ ${this.formatPrice(levelPrice)}：等待对应平仓成交`);
+        continue; // wait until close filled
+      }
       const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), "ENTRY");
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
@@ -628,8 +634,14 @@ export class GridEngine {
     for (const level of this.sellLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
-      if (this.awaitingByLevel.has(level)) continue;
-      if (this.pendingShortLevels.has(level)) continue;
+      if (this.awaitingByLevel.has(level)) {
+        this.log("info", `跳过 SELL @ ${this.formatPrice(levelPrice)}：等待上一笔消失判定`);
+        continue;
+      }
+      if (this.pendingShortLevels.has(level)) {
+        this.log("info", `跳过 SELL @ ${this.formatPrice(levelPrice)}：等待对应平仓成交`);
+        continue;
+      }
       const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), "ENTRY");
       if ((plannedKeyCounts.get(key) ?? 0) >= 1) continue;
       if (!desiredKeySet.has(key)) {
@@ -681,11 +693,22 @@ export class GridEngine {
         d.amount = capped;
       } else {
         const capped = this.capEntryQty(d.amount, d.side);
-        if (capped <= EPSILON) continue;
+        if (capped <= EPSILON) {
+          const absPos = Math.abs(this.position.positionAmt);
+          const pendingEntrySameSide = this.estimatePendingEntryQty(d.side);
+          this.log(
+            "info",
+            `跳过开仓 ${d.side} @ ${d.price}：仓位容量已满 (abs=${absPos}, pending=${pendingEntrySameSide}, max=${this.config.maxPositionSize})`
+          );
+          continue;
+        }
         d.amount = capped;
       }
       const key = this.getOrderKey(d.side, d.price, intent);
-      if ((activeKeyCounts.get(key) ?? 0) >= 1) continue;
+      if ((activeKeyCounts.get(key) ?? 0) >= 1) {
+        this.log("info", `已存在挂单，跳过 ${intent} ${d.side} @ ${d.price}`);
+        continue;
+      }
       try {
         const placed = await placeOrder(
           this.exchange,
@@ -766,11 +789,11 @@ export class GridEngine {
     return sum;
   }
 
-  private capEntryQty(desiredQty: number, side: "BUY" | "SELL"): number {
-    // Cap per side to allow simultaneous BUY/SELL grids without mutual blocking
+  private capEntryQty(desiredQty: number, _side: "BUY" | "SELL"): number {
+    // Relaxed policy: cap only by current absolute position, not by outstanding open entries
+    // This matches expectation to place the full grid even before any fills occur.
     const absPos = Math.abs(this.position.positionAmt);
-    const pendingEntrySameSide = this.estimatePendingEntryQty(side);
-    const remain = Math.max(this.config.maxPositionSize - absPos - pendingEntrySameSide, 0);
+    const remain = Math.max(this.config.maxPositionSize - absPos, 0);
     return Math.min(desiredQty, remain);
   }
 
