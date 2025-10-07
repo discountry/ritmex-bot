@@ -93,6 +93,11 @@ export class GridEngine {
   private readonly pendingShortLevels = new Set<number>();
   private readonly closeKeyBySourceLevel = new Map<number, string>();
   private lastKeyMeta = new Map<string, { side: "BUY" | "SELL"; level: number; reduceOnly: boolean }>();
+  private lastOrderIdsByKey = new Map<string, Set<string>>();
+  // When an order at a level disappears but account delta hasn't arrived yet,
+  // temporarily block re-opening at that level to avoid immediate re-placement.
+  private readonly levelReopenBlockUntil = new Map<number, number>();
+  private static readonly DISAPPEAR_REOPEN_COOLDOWN_MS = 2000;
   private sidesLocked = false;
   private startupCleaned = false;
   private initialCloseHandled = false;
@@ -445,6 +450,12 @@ export class GridEngine {
 
   private async syncGridSimple(price: number): Promise<void> {
     const activeOrders = this.openOrders.filter((o) => o.symbol === this.config.symbol && o.type === "LIMIT");
+    // Build lookup for all recent orders by id (including non-active) to read final statuses
+    const allOrdersById = new Map<string, AsterOrder>();
+    for (const o of this.openOrders) {
+      if (o.symbol !== this.config.symbol) continue;
+      allOrdersById.set(String(o.orderId), o);
+    }
 
     // Detect fills by comparing previous keys vs current snapshot
     const prevKeys = this.lastOpenOrderKeys;
@@ -452,6 +463,7 @@ export class GridEngine {
 
     const currentKeys = new Set<string>();
     const keyToMeta = new Map<string, { side: "BUY" | "SELL"; level: number; reduceOnly: boolean }>();
+    const currentOrderIdsByKey = new Map<string, Set<string>>();
     for (const o of activeOrders) {
       const key = this.getOrderKey(o.side, this.normalizePrice(o.price), o.reduceOnly === true);
       currentKeys.add(key);
@@ -459,6 +471,10 @@ export class GridEngine {
       if (level != null) {
         keyToMeta.set(key, { side: o.side, level, reduceOnly: o.reduceOnly === true });
       }
+      const id = String(o.orderId);
+      const set = currentOrderIdsByKey.get(key) ?? new Set<string>();
+      set.add(id);
+      currentOrderIdsByKey.set(key, set);
     }
 
     for (const prevKey of prevKeys) {
@@ -482,20 +498,49 @@ export class GridEngine {
         }
       }
       if (handledByCloseTracking) continue;
-      // Otherwise, treat disappearance as potential open fill: confirm by position delta increase
+      // Use order records to classify disappearance: filled vs canceled
       if (meta) {
-        const absNow = Math.abs(this.position.positionAmt);
-        if (absNow > this.lastAbsPositionAmt + EPSILON) {
+        const prevIds = this.lastOrderIdsByKey.get(prevKey);
+        let classified: "filled" | "canceled" | "unknown" = "unknown";
+        if (prevIds && prevIds.size) {
+          for (const id of prevIds) {
+            const rec = allOrdersById.get(id);
+            if (!rec) continue;
+            const status = String(rec.status || "").toUpperCase();
+            const executed = Number(rec.executedQty);
+            if (status === "FILLED" || (executed > EPSILON && ["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status) === false)) {
+              classified = "filled";
+              break;
+            }
+            if (["CANCELED", "CANCELLED", "EXPIRED", "REJECTED"].includes(status) && executed <= EPSILON) {
+              classified = "canceled";
+              // do not break; keep searching for any filled among duplicates; but canceled is acceptable if no filled found
+            }
+          }
+        }
+        if (classified === "unknown") {
+          // fallback to position delta confirmation
+          const absNow = Math.abs(this.position.positionAmt);
+          if (absNow > this.lastAbsPositionAmt + EPSILON) {
+            classified = "filled";
+          } else {
+            classified = "canceled";
+          }
+        }
+        if (classified === "filled") {
           if (meta.side === "BUY") this.pendingLongLevels.add(meta.level);
           else this.pendingShortLevels.add(meta.level);
-        } else {
-          // Likely canceled or expired; do not mark pending
+        } else if (classified === "canceled") {
+          // no action; allow immediate re-open (do not block)
         }
+        // ensure any previous block is cleared if exists
+        this.levelReopenBlockUntil.delete(meta.level);
       }
     }
     this.lastOpenOrderKeys = currentKeys;
     // persist metadata for next tick to detect fills
     this.lastKeyMeta = keyToMeta;
+    this.lastOrderIdsByKey = currentOrderIdsByKey;
 
     // Desired open orders according to locked sides
     const desired: DesiredGridOrder[] = [];
@@ -513,6 +558,7 @@ export class GridEngine {
     for (const level of this.buyLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
+      if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingLongLevels.has(level)) continue; // wait until close filled
       const key = this.getOrderKey("BUY", this.formatPrice(levelPrice), false);
       const targetMax = this.isCloseDesiredForSideAtLevel("BUY", level) ? 2 : 1;
@@ -524,6 +570,7 @@ export class GridEngine {
     for (const level of this.sellLevelIndices) {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
+      if (this.isLevelTemporarilyBlocked(level)) continue; // skip during cooldown
       if (this.pendingShortLevels.has(level)) continue;
       const key = this.getOrderKey("SELL", this.formatPrice(levelPrice), false);
       const targetMax = this.isCloseDesiredForSideAtLevel("SELL", level) ? 2 : 1;
@@ -735,6 +782,21 @@ export class GridEngine {
       }
     }
     return null;
+  }
+
+  private blockLevelReopen(level: number): void {
+    const until = this.now() + GridEngine.DISAPPEAR_REOPEN_COOLDOWN_MS;
+    this.levelReopenBlockUntil.set(level, until);
+  }
+
+  private isLevelTemporarilyBlocked(level: number): boolean {
+    const until = this.levelReopenBlockUntil.get(level);
+    if (!Number.isFinite(until ?? NaN)) return false;
+    if (this.now() >= Number(until)) {
+      this.levelReopenBlockUntil.delete(level);
+      return false;
+    }
+    return true;
   }
 
   private buildLevelMeta(referencePrice?: number | null): void {
