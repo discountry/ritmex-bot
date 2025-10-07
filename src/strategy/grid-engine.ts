@@ -141,7 +141,7 @@ export class GridEngine {
   private stopReason: string | null = null;
   private lastUpdated: number | null = null;
   private accountVersion = 0;
-  private awaitingByLevel = new Map<number, { accountVerAtStart: number; absAtStart: number }>();
+  private awaitingByLevel = new Map<number, { accountVerAtStart: number; absAtStart: number; ts: number }>();
 
   constructor(private readonly config: GridConfig, private readonly exchange: ExchangeAdapter, options: EngineOptions = {}) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -619,7 +619,7 @@ export class GridEngine {
         const level = meta.intent === "EXIT"
           ? (meta.sourceLevel ?? this.findSourceForCloseTarget(meta.level, meta.side))
           : meta.level;
-        this.awaitingByLevel.set(level, { accountVerAtStart: this.accountVersion, absAtStart: this.lastAbsPositionAmt });
+        this.awaitingByLevel.set(level, { accountVerAtStart: this.accountVersion, absAtStart: this.lastAbsPositionAmt, ts: this.now() });
         // skip side effects for this disappeared id in this tick
         this.orderIntentById.delete(id);
         continue;
@@ -669,6 +669,11 @@ export class GridEngine {
     // Resolve deferred unknown classifications after a new account snapshot
     if (this.awaitingByLevel.size) {
       for (const [level, info] of Array.from(this.awaitingByLevel.entries())) {
+        // timeout fallback: if no account delta for long time, treat as canceled/no-op
+        if (this.now() - info.ts > 8000) {
+          this.awaitingByLevel.delete(level);
+          continue;
+        }
         if (this.accountVersion <= info.accountVerAtStart) continue;
         const absNow = Math.abs(this.position.positionAmt);
         if (absNow > info.absAtStart + EPSILON) {
@@ -835,9 +840,17 @@ export class GridEngine {
       }
     }
 
-    // Place desired orders
+    // Place desired orders (rate-limited per tick to avoid dedupe race)
     this.desiredOrders = desired;
+    let newOrdersPlaced = 0;
+    const MAX_NEW_ORDERS_PER_TICK = 1;
     for (const d of desired) {
+      if (newOrdersPlaced >= MAX_NEW_ORDERS_PER_TICK) break;
+      // If a LIMIT operation is already pending (coordinator lock), skip issuing more this tick
+      if (this.pendings["LIMIT"]) {
+        this.log("info", "存在未完成的 LIMIT 操作，本轮不再下新单");
+        break;
+      }
       const isClose = d.intent === "EXIT" || (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
       const intent: "ENTRY" | "EXIT" = isClose ? "EXIT" : "ENTRY";
       // Cap quantities: EXIT by remaining position; ENTRY by maxPositionSize guard
@@ -859,7 +872,9 @@ export class GridEngine {
         d.amount = capped;
       }
       const key = this.getOrderKey(d.side, d.price, intent);
-      if ((activeKeyCounts.get(key) ?? 0) >= 1) {
+      // Strong local dedupe: skip if any active LIMIT exists with same side+price
+      const hasSameSidePrice = this.openOrders.some(o => this.isActiveLimitOrder(o) && o.side === d.side && this.normalizePrice(o.price) === d.price);
+      if (hasSameSidePrice || (activeKeyCounts.get(key) ?? 0) >= 1) {
         this.log("info", `已存在挂单，跳过 ${intent} ${d.side} @ ${d.price}`);
         continue;
       }
@@ -880,6 +895,7 @@ export class GridEngine {
           { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
         );
         if (placed) {
+          newOrdersPlaced += 1;
           plannedKeyCounts.set(key, (plannedKeyCounts.get(key) ?? 0) + 1);
           activeKeyCounts.set(key, (activeKeyCounts.get(key) ?? 0) + 1);
           // ensure suppression window persists after success
