@@ -82,6 +82,9 @@ export function BasisApp({ onExit }: BasisAppProps) {
   const lastUpdated = snapshot.lastUpdated ? new Date(snapshot.lastUpdated).toLocaleTimeString() : "-";
   const futuresUpdated = snapshot.futuresLastUpdate ? new Date(snapshot.futuresLastUpdate).toLocaleTimeString() : "-";
   const spotUpdated = snapshot.spotLastUpdate ? new Date(snapshot.spotLastUpdate).toLocaleTimeString() : "-";
+  const fundingRatePct = snapshot.fundingRate != null ? `${(snapshot.fundingRate * 100).toFixed(4)}%` : "-";
+  const fundingUpdated = snapshot.fundingLastUpdate ? new Date(snapshot.fundingLastUpdate).toLocaleTimeString() : "-";
+  const nextFundingTime = snapshot.nextFundingTime ? new Date(snapshot.nextFundingTime).toLocaleTimeString() : "-";
   const feedStatus = snapshot.feedStatus;
   const lastLogs = snapshot.tradeLog.slice(-5);
 
@@ -92,7 +95,7 @@ export function BasisApp({ onExit }: BasisAppProps) {
         <Text>
           交易所: {exchangeName} ｜ 期货合约: {snapshot.futuresSymbol} ｜ 现货交易对: {snapshot.spotSymbol}
         </Text>
-        <Text color="gray">按 Esc 返回策略选择 ｜ 数据状态: 期货({feedStatus.futures ? "OK" : "--"}) 现货({feedStatus.spot ? "OK" : "--"})</Text>
+        <Text color="gray">按 Esc 返回策略选择 ｜ 数据状态: 期货({feedStatus.futures ? "OK" : "--"}) 现货({feedStatus.spot ? "OK" : "--"}) 资金费率({feedStatus.funding ? "OK" : "--"})</Text>
         <Text color="gray">最近更新时间: {lastUpdated}</Text>
       </Box>
 
@@ -107,6 +110,12 @@ export function BasisApp({ onExit }: BasisAppProps) {
           <Text>买一: {spotBid} ｜ 卖一: {spotAsk}</Text>
           <Text color="gray">更新时间: {spotUpdated}</Text>
         </Box>
+      </Box>
+
+      <Box flexDirection="column" marginBottom={1}>
+        <Text color="yellow">资金费率</Text>
+        <Text>当前资金费率: {fundingRatePct}</Text>
+        <Text color="gray">资金费率更新时间: {fundingUpdated} ｜ 下次结算时间: {nextFundingTime}</Text>
       </Box>
 
       <Box flexDirection="column" marginBottom={1}>

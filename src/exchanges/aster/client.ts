@@ -827,6 +827,36 @@ export class AsterRestClient {
     }
   }
 
+  async getPremiumIndex(symbol: string): Promise<{
+    symbol: string;
+    markPrice?: string;
+    indexPrice?: string;
+    lastFundingRate?: string;
+    fundingRate?: string;
+    nextFundingTime?: number;
+    time?: number;
+  }> {
+    const upper = symbol.toUpperCase();
+    const url = `${FUTURES_REST_BASE}/fapi/v1/premiumIndex?symbol=${encodeURIComponent(upper)}`;
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 获取资金费率失败 ${String(error)}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${text}`);
+    }
+    try {
+      const payload = JSON.parse(text) as any;
+      // The response shape mirrors Binance: { symbol, markPrice, indexPrice, lastFundingRate, nextFundingTime, time }
+      return payload;
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 无法解析资金费率响应: ${text.slice(0, 200)}`);
+    }
+  }
+
   async getListenKey(): Promise<string> {
     const response = await this.signedRequest<ListenKeyResponse>({ path: "/fapi/v1/listenKey", method: "POST", params: {} });
     return response.listenKey;

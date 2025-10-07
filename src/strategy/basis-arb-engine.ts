@@ -1,7 +1,7 @@
 import type { BasisArbConfig } from "../config";
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import type { AsterDepth, AsterSpotBookTicker } from "../exchanges/types";
-import { AsterSpotRestClient } from "../exchanges/aster/client";
+import { AsterSpotRestClient, AsterRestClient } from "../exchanges/aster/client";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
@@ -16,6 +16,9 @@ export interface BasisArbSnapshot {
   spotAsk: number | null;
   futuresLastUpdate: number | null;
   spotLastUpdate: number | null;
+  fundingRate: number | null;
+  nextFundingTime: number | null;
+  fundingLastUpdate: number | null;
   spread: number | null;
   spreadBps: number | null;
   netSpread: number | null;
@@ -25,6 +28,7 @@ export interface BasisArbSnapshot {
   feedStatus: {
     futures: boolean;
     spot: boolean;
+    funding: boolean;
   };
   opportunity: boolean;
 }
@@ -34,6 +38,7 @@ type BasisArbListener = (snapshot: BasisArbSnapshot) => void;
 
 interface BasisArbDependencies {
   spotClient?: Pick<AsterSpotRestClient, "getBookTicker">;
+  futuresClient?: Pick<AsterRestClient, "getPremiumIndex">;
   now?: () => number;
 }
 
@@ -49,27 +54,37 @@ interface SpotState {
   updatedAt: number | null;
 }
 
+interface FundingState {
+  rate: number | null;
+  nextFundingTime: number | null;
+  updatedAt: number | null;
+}
+
 export class BasisArbEngine {
   private readonly events = new StrategyEventEmitter<BasisArbEvent, BasisArbSnapshot>();
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly spotClient: Pick<AsterSpotRestClient, "getBookTicker">;
+  private readonly futuresClient: Pick<AsterRestClient, "getPremiumIndex">;
   private readonly now: () => number;
   private readonly config: BasisArbConfig;
   private readonly exchange: ExchangeAdapter;
 
   private readonly futures: DepthState = { bid: null, ask: null, updatedAt: null };
   private readonly spot: SpotState = { bid: null, ask: null, updatedAt: null };
+  private readonly funding: FundingState = { rate: null, nextFundingTime: null, updatedAt: null };
 
-  private readonly feedReady = { futures: false, spot: false };
+  private readonly feedReady = { futures: false, spot: false, funding: false };
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private spotInFlight = false;
+  private fundingInFlight = false;
   private stopped = false;
 
   constructor(config: BasisArbConfig, exchange: ExchangeAdapter, deps: BasisArbDependencies = {}) {
     this.config = config;
     this.exchange = exchange;
     this.spotClient = deps.spotClient ?? new AsterSpotRestClient();
+    this.futuresClient = deps.futuresClient ?? new AsterRestClient();
     this.now = deps.now ?? (() => Date.now());
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
     this.bootstrap();
@@ -79,8 +94,10 @@ export class BasisArbEngine {
     if (this.timer) return;
     this.timer = setInterval(() => {
       void this.pollSpot();
+      void this.pollFunding();
     }, Math.max(this.config.refreshIntervalMs, 200));
     void this.pollSpot();
+    void this.pollFunding();
   }
 
   stop(): void {
@@ -154,6 +171,32 @@ export class BasisArbEngine {
     }
   }
 
+  private async pollFunding(): Promise<void> {
+    if (this.fundingInFlight || this.stopped) return;
+    this.fundingInFlight = true;
+    try {
+      const data = await this.futuresClient.getPremiumIndex(this.config.futuresSymbol);
+      const rateRaw = (data.lastFundingRate ?? data.fundingRate) as string | undefined;
+      const rate = rateRaw !== undefined ? Number(rateRaw) : NaN;
+      const ts = (data.time ?? data.nextFundingTime ?? this.now()) as number | undefined;
+      if (Number.isFinite(rate)) {
+        this.funding.rate = Number(rateRaw);
+        this.funding.nextFundingTime = typeof data.nextFundingTime === "number" ? data.nextFundingTime : null;
+        this.funding.updatedAt = typeof ts === "number" ? ts : this.now();
+        if (!this.feedReady.funding) {
+          this.feedReady.funding = true;
+          this.tradeLog.push("info", `资金费率已就绪 (${this.config.futuresSymbol})`);
+        }
+        this.emitUpdate();
+      }
+    } catch (error) {
+      this.feedReady.funding = false;
+      this.tradeLog.push("error", `获取资金费率失败: ${String(error instanceof Error ? error.message : error)}`);
+    } finally {
+      this.fundingInFlight = false;
+    }
+  }
+
   private applySpotTicker(ticker: AsterSpotBookTicker): void {
     const bid = Number(ticker.bidPrice);
     const ask = Number(ticker.askPrice);
@@ -181,6 +224,8 @@ export class BasisArbEngine {
     const futuresAsk = this.futures.ask;
     const spotBid = this.spot.bid;
     const spotAsk = this.spot.ask;
+    const fundingRate = this.funding.rate;
+    const nextFundingTime = this.funding.nextFundingTime;
     const spread = this.computeSpread(futuresBid, spotAsk);
     const spreadBps = this.computeSpreadBps(spread, spotAsk);
     const netSpread = this.computeNetSpread(futuresBid, spotAsk);
@@ -188,7 +233,8 @@ export class BasisArbEngine {
     const opportunity = netSpread != null && netSpread >= 0;
     const lastUpdated = Math.max(
       futuresBid != null && this.futures.updatedAt ? this.futures.updatedAt : 0,
-      spotBid != null && this.spot.updatedAt ? this.spot.updatedAt : 0
+      spotBid != null && this.spot.updatedAt ? this.spot.updatedAt : 0,
+      fundingRate != null && this.funding.updatedAt ? this.funding.updatedAt : 0
     );
 
     return {
@@ -201,6 +247,9 @@ export class BasisArbEngine {
       spotAsk,
       futuresLastUpdate: this.futures.updatedAt,
       spotLastUpdate: this.spot.updatedAt,
+      fundingRate,
+      nextFundingTime,
+      fundingLastUpdate: this.funding.updatedAt,
       spread,
       spreadBps,
       netSpread,
