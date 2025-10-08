@@ -338,12 +338,16 @@ export async function marketClose(
   if (isOperating(locks, type)) return;
   if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, "市价平仓")) return;
   const qtyStep = opts?.qtyStep ?? 0.001;
+  const roundedQty = roundQtyDownToStep(quantity, qtyStep);
+  const safeQty = roundedQty > 0 ? roundedQty : quantity;
   const params: CreateOrderParams = {
     symbol,
     side,
     type,
-    quantity: roundQtyDownToStep(quantity, qtyStep),
+    quantity: safeQty,
     reduceOnly: "true",
+    // Hint exchanges (like Paradex) to close the whole position and tolerate omitted size
+    closePosition: "true",
   };
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
   lockOperating(locks, timers, pendings, type, log);
