@@ -16,6 +16,7 @@ class StubAdapter implements ExchangeAdapter {
    public createdOrders: CreateOrderParams[] = [];
    public marketOrders: CreateOrderParams[] = [];
    public cancelAllCount = 0;
+   public cancelledOrders: Array<number | string> = [];
 
    supportsTrailingStops(): boolean {
       return false;
@@ -85,12 +86,12 @@ class StubAdapter implements ExchangeAdapter {
       return order;
    }
 
-   async cancelOrder(): Promise<void> {
-      // no-op
+   async cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void> {
+      this.cancelledOrders.push(params.orderId);
    }
 
-   async cancelOrders(): Promise<void> {
-      // no-op
+   async cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void> {
+      this.cancelledOrders.push(...params.orderIdList);
    }
 
    async cancelAllOrders(): Promise<void> {
@@ -130,6 +131,7 @@ describe('GridEngine', () => {
       restartTriggerPct: 0.01,
       autoRestart: true,
       gridMode: 'geometric',
+      maxCloseSlippagePct: 0.05,
    };
 
    it('creates geometric desired orders when running in both directions', async () => {
@@ -167,6 +169,141 @@ describe('GridEngine', () => {
 
       expect(buys.length).toBeGreaterThan(0);
       expect(sells).toHaveLength(0);
+
+      engine.stop();
+   });
+
+   it('does not repopulate the same buy level until exposure is released', () => {
+      const adapter = new StubAdapter();
+      const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+      adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+      adapter.emitOrders([]);
+
+      const desiredInitial = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+      const nearestBuy = desiredInitial.find((order) => order.side === 'BUY');
+      expect(nearestBuy).toBeTruthy();
+      const targetLevel = nearestBuy!.level;
+
+      (engine as any).longExposure.set(targetLevel, baseConfig.orderSize);
+      adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
+
+      const desiredAfterFill = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+      expect(desiredAfterFill.some((order) => order.level === targetLevel && order.side === 'BUY')).toBe(false);
+
+      adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+      const desiredAfterExit = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+      expect(desiredAfterExit.some((order) => order.level === targetLevel && order.side === 'BUY')).toBe(true);
+
+      engine.stop();
+   });
+
+   it('keeps level side assignments stable regardless of price', () => {
+      const adapter = new StubAdapter();
+      const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+      adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+      adapter.emitOrders([]);
+
+      const desiredHigh = (engine as any).computeDesiredOrders(2.45) as Array<{ level: number; side: string }>;
+      expect(desiredHigh.every((order) => {
+         const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
+         return isBuyLevel ? order.side === 'BUY' : order.side === 'SELL';
+      })).toBe(true);
+
+      const desiredLow = (engine as any).computeDesiredOrders(1.55) as Array<{ level: number; side: string }>;
+      expect(desiredLow.every((order) => {
+         const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
+         return isBuyLevel ? order.side === 'BUY' : order.side === 'SELL';
+      })).toBe(true);
+
+      engine.stop();
+   });
+
+   it('limits active sell orders by remaining short headroom', () => {
+      const adapter = new StubAdapter();
+      const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+      adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
+      adapter.emitOrders([]);
+
+      const desiredFull = (engine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
+      const sellCountFull = desiredFull.filter((order) => order.side === 'SELL').length;
+      expect(sellCountFull).toBeGreaterThan(0);
+
+      const limitedHeadroomConfig = { ...baseConfig, maxPositionSize: baseConfig.orderSize * 2 };
+      const limitedEngine = new GridEngine(limitedHeadroomConfig, adapter as any, { now: () => 0 });
+      (limitedEngine as any).shortExposure.set(12, baseConfig.orderSize * 2);
+
+      const desiredLimited = (limitedEngine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
+      const sellCountLimited = desiredLimited.filter((order) => order.side === 'SELL').length;
+      expect(sellCountLimited).toBeLessThanOrEqual(1);
+
+      engine.stop();
+      limitedEngine.stop();
+   });
+
+   it('places reduce-only orders to close existing exposures', () => {
+      const adapter = new StubAdapter();
+      const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+      adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
+      adapter.emitOrders([]);
+
+      const buyLevel = (engine as any).buyLevelIndices.slice(-1)[0];
+      (engine as any).longExposure.set(buyLevel, baseConfig.orderSize);
+
+      const desired = (engine as any).computeDesiredOrders(2.05) as Array<{ level: number; side: string; reduceOnly: boolean; amount: number }>;
+
+      const closeOrder = desired.find((order) => order.reduceOnly && order.side === 'SELL');
+      expect(closeOrder).toBeTruthy();
+      expect(closeOrder!.amount).toBeCloseTo(baseConfig.orderSize);
+
+      engine.stop();
+   });
+
+   it('restores exposures from existing reduce-only orders on restart', async () => {
+      const adapter = new StubAdapter();
+      const engine = new GridEngine(baseConfig, adapter, { now: () => 0 });
+
+      adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize * 2));
+
+      const reduceOrder: AsterOrder = {
+         orderId: 'existing-reduce',
+         clientOrderId: 'existing-reduce',
+         symbol: baseConfig.symbol,
+         side: 'SELL',
+         type: 'LIMIT',
+         status: 'NEW',
+         price: baseConfig.upperPrice.toFixed(1),
+         origQty: (baseConfig.orderSize * 2).toString(),
+         executedQty: '0',
+         stopPrice: '0',
+         time: Date.now(),
+         updateTime: Date.now(),
+         reduceOnly: true,
+         closePosition: false,
+      };
+
+      adapter.emitOrders([reduceOrder]);
+      adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
+
+      await (engine as any).syncGrid(150);
+
+      const longExposure: Map<number, number> = (engine as any).longExposure;
+      const buyIndices: number[] = (engine as any).buyLevelIndices;
+
+      const totalExposure = [...longExposure.values()].reduce((acc, qty) => acc + qty, 0);
+      expect(totalExposure).toBeCloseTo(baseConfig.orderSize * 2, 6);
+      expect(longExposure.get(buyIndices.slice(-1)[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
+      expect(longExposure.get(buyIndices[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
+
+      const snapshot = engine.getSnapshot();
+      const reduceDesired = snapshot.desiredOrders.find((order) => order.side === 'SELL');
+      expect(reduceDesired).toBeTruthy();
+      expect(reduceDesired!.amount).toBeCloseTo(baseConfig.orderSize * 2, 6);
+      expect(Number(reduceDesired!.price)).toBeCloseTo(baseConfig.upperPrice, 6);
+      expect(adapter.cancelledOrders).toHaveLength(0);
 
       engine.stop();
    });

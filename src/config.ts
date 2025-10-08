@@ -107,6 +107,7 @@ export interface BasisArbConfig {
    refreshIntervalMs: number;
    maxLogEntries: number;
    takerFeeRate: number;
+   arbAmount: number; // base asset amount to arb (e.g., ASTER amount when ASTERUSDT)
 }
 
 export type GridDirection = 'both' | 'long' | 'short';
@@ -127,6 +128,7 @@ export interface GridConfig {
    restartTriggerPct: number;
    autoRestart: boolean;
    gridMode: 'geometric';
+   maxCloseSlippagePct: number;
 }
 
 const resolveBasisSymbol = (envKeys: string[], fallback: string): string => {
@@ -145,6 +147,7 @@ export const basisConfig: BasisArbConfig = {
    refreshIntervalMs: parseNumber(process.env.BASIS_REFRESH_INTERVAL_MS, 1000),
    maxLogEntries: parseNumber(process.env.BASIS_MAX_LOG_ENTRIES, 200),
    takerFeeRate: parseNumber(process.env.BASIS_TAKER_FEE_RATE, 0.0004),
+   arbAmount: parseNumber(process.env.ARB_AMOUNT, parseNumber(process.env.TRADE_AMOUNT, 0)),
 };
 
 const resolveGridDirection = (raw: string | undefined, fallback: GridDirection): GridDirection => {
@@ -179,6 +182,7 @@ export const gridConfig: GridConfig = {
    restartTriggerPct: Math.max(0, parseNumber(process.env.GRID_RESTART_TRIGGER_PCT, 0.01)),
    autoRestart: parseBoolean(process.env.GRID_AUTO_RESTART_ENABLED ?? process.env.GRID_ENABLE_AUTO_RESTART, true),
    gridMode: 'geometric',
+   maxCloseSlippagePct: Math.max(0, parseNumber(process.env.GRID_MAX_CLOSE_SLIPPAGE_PCT ?? process.env.MAX_CLOSE_SLIPPAGE_PCT, 0.05)),
 };
 
 gridConfig.maxPositionSize = resolveGridMaxPosition(gridConfig.orderSize, gridConfig.gridLevels);

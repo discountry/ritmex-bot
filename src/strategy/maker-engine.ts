@@ -7,7 +7,6 @@ import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from '../core/order
 import type { ExchangeAdapter } from '../exchanges/adapter';
 import type { AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker } from '../exchanges/types';
 import { createTradeLog, type TradeLogEntry } from '../logging/trade-log';
-import type { EngineListener, EngineUpdateEvent, IEngineSnapshot, IStrategyEngine } from '../types';
 import { extractMessage, isInsufficientBalanceError, isRateLimitError, isUnknownOrderError } from '../utils/errors';
 import { formatPriceToString } from '../utils/math';
 import { computePositionPnl } from '../utils/pnl';
@@ -26,20 +25,30 @@ interface DesiredOrder {
    reduceOnly: boolean;
 }
 
-export interface MakerEngineSnapshot extends IEngineSnapshot {
+export interface MakerEngineSnapshot {
+   ready: boolean;
+   symbol: string;
    topBid: number | null;
    topAsk: number | null;
    spread: number | null;
+   position: PositionSnapshot;
+   pnl: number;
+   accountUnrealized: number;
+   sessionVolume: number;
    openOrders: AsterOrder[];
    desiredOrders: DesiredOrder[];
    tradeLog: TradeLogEntry[];
+   lastUpdated: number | null;
    feedStatus: { account: boolean; orders: boolean; depth: boolean; ticker: boolean };
 }
+
+type MakerEvent = 'update';
+type MakerListener = (snapshot: MakerEngineSnapshot) => void;
 
 const EPS = 1e-5;
 const INSUFFICIENT_BALANCE_COOLDOWN_MS = 15_000;
 
-export class MakerEngine implements IStrategyEngine<MakerEngineSnapshot> {
+export class MakerEngine {
    private accountSnapshot: AsterAccountSnapshot | null = null;
    private depthSnapshot: AsterDepth | null = null;
    private tickerSnapshot: AsterTicker | null = null;
@@ -51,7 +60,7 @@ export class MakerEngine implements IStrategyEngine<MakerEngineSnapshot> {
    private readonly pendingCancelOrders = new Set<string>();
 
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
-   private readonly events = new StrategyEventEmitter<EngineUpdateEvent, MakerEngineSnapshot>();
+   private readonly events = new StrategyEventEmitter<MakerEvent, MakerEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
 
    private timer: ReturnType<typeof setInterval> | null = null;
@@ -90,11 +99,11 @@ export class MakerEngine implements IStrategyEngine<MakerEngineSnapshot> {
       }
    }
 
-   on(event: EngineUpdateEvent, handler: EngineListener<MakerEngineSnapshot>): void {
+   on(event: MakerEvent, handler: MakerListener): void {
       this.events.on(event, handler);
    }
 
-   off(event: EngineUpdateEvent, handler: EngineListener<MakerEngineSnapshot>): void {
+   off(event: MakerEvent, handler: MakerListener): void {
       this.events.off(event, handler);
    }
 
@@ -102,7 +111,7 @@ export class MakerEngine implements IStrategyEngine<MakerEngineSnapshot> {
       return this.buildSnapshot();
    }
 
-   bootstrap(): void {
+   private bootstrap(): void {
       const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
 
       safeSubscribe<AsterAccountSnapshot>(

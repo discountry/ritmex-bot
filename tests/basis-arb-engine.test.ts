@@ -57,7 +57,18 @@ describe('BasisArbEngine', () => {
       const adapter = new StubAdapter();
       const spotClient = { getBookTicker: vi.fn().mockResolvedValue({ symbol: 'ASTERUSDT', bidPrice: '1.0000', bidQty: '1', askPrice: '1.0500', askQty: '1', time: 2_000 }) };
 
-      const engine = new BasisArbEngine({ futuresSymbol: 'ASTERUSDT', spotSymbol: 'ASTERUSDT', refreshIntervalMs: 1_000, maxLogEntries: 10, takerFeeRate: 0.0004 }, adapter, { spotClient, now: () => 1_000 });
+      const engine = new BasisArbEngine(
+         {
+            futuresSymbol: 'ASTERUSDT', //
+            spotSymbol: 'ASTERUSDT',
+            refreshIntervalMs: 1_000,
+            maxLogEntries: 10,
+            takerFeeRate: 0.0004,
+            arbAmount: 0.2,
+         },
+         adapter,
+         { spotClient, now: () => 1_000 },
+      );
 
       engine.start();
 

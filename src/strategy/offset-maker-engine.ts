@@ -6,8 +6,7 @@ import { marketClose, placeOrder, unlockOperating } from '../core/order-coordina
 import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from '../core/order-coordinator';
 import type { ExchangeAdapter } from '../exchanges/adapter';
 import type { AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker } from '../exchanges/types';
-import { createTradeLog, type TradeLogEntry } from '../logging/trade-log';
-import type { EngineListener, EngineUpdateEvent, IEngineSnapshot, IStrategyEngine } from '../types';
+import { createTradeLog } from '../logging/trade-log';
 import { computeDepthStats } from '../utils/depth';
 import { isRateLimitError, isUnknownOrderError } from '../utils/errors';
 import { formatPriceToString } from '../utils/math';
@@ -28,13 +27,7 @@ interface DesiredOrder {
    reduceOnly: boolean;
 }
 
-export interface OffsetMakerEngineSnapshot extends IEngineSnapshot {
-   topBid: number | null;
-   topAsk: number | null;
-   spread: number | null;
-   openOrders: AsterOrder[];
-   desiredOrders: DesiredOrder[];
-   tradeLog: TradeLogEntry[];
+export interface OffsetMakerEngineSnapshot extends MakerEngineSnapshot {
    buyDepthSum10: number;
    sellDepthSum10: number;
    depthImbalance: 'balanced' | 'buy_dominant' | 'sell_dominant';
@@ -42,9 +35,11 @@ export interface OffsetMakerEngineSnapshot extends IEngineSnapshot {
    skipSellSide: boolean;
 }
 
+type MakerEvent = 'update';
+type MakerListener = (snapshot: OffsetMakerEngineSnapshot) => void;
 const EPS = 1e-5;
 
-export class OffsetMakerEngine implements IStrategyEngine<OffsetMakerEngineSnapshot> {
+export class OffsetMakerEngine {
    private accountSnapshot: AsterAccountSnapshot | null = null;
    private depthSnapshot: AsterDepth | null = null;
    private tickerSnapshot: AsterTicker | null = null;
@@ -56,7 +51,7 @@ export class OffsetMakerEngine implements IStrategyEngine<OffsetMakerEngineSnaps
    private readonly pendingCancelOrders = new Set<string>();
 
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
-   private readonly events = new StrategyEventEmitter<EngineUpdateEvent, OffsetMakerEngineSnapshot>();
+   private readonly events = new StrategyEventEmitter<MakerEvent, OffsetMakerEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
 
    private timer: ReturnType<typeof setInterval> | null = null;
@@ -101,11 +96,11 @@ export class OffsetMakerEngine implements IStrategyEngine<OffsetMakerEngineSnaps
       }
    }
 
-   on(event: EngineUpdateEvent, handler: EngineListener<OffsetMakerEngineSnapshot>): void {
+   on(event: MakerEvent, handler: MakerListener): void {
       this.events.on(event, handler);
    }
 
-   off(event: EngineUpdateEvent, handler: EngineListener<OffsetMakerEngineSnapshot>): void {
+   off(event: MakerEvent, handler: MakerListener): void {
       this.events.off(event, handler);
    }
 
@@ -113,7 +108,7 @@ export class OffsetMakerEngine implements IStrategyEngine<OffsetMakerEngineSnaps
       return this.buildSnapshot();
    }
 
-   bootstrap(): void {
+   private bootstrap(): void {
       const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
 
       safeSubscribe<AsterAccountSnapshot>(
@@ -553,6 +548,7 @@ export class OffsetMakerEngine implements IStrategyEngine<OffsetMakerEngineSnaps
          depthImbalance: this.lastImbalance,
          skipBuySide: this.lastSkipBuy,
          skipSellSide: this.lastSkipSell,
+         feedStatus: {} as any,
       };
    }
 

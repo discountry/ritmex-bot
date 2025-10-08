@@ -12,8 +12,8 @@ export type LogHandler = (type: string, detail: string) => void;
 type OrderGuardOptions = { markPrice?: number | null; expectedPrice?: number | null; maxPct?: number };
 
 function enforceMarkPriceGuard(side: 'BUY' | 'SELL', toCheckPrice: number | null | undefined, guard: OrderGuardOptions | undefined, log: LogHandler, context: string): boolean {
-   if (!guard || guard.maxPct === null) { return true; }
-   const allowed = isOrderPriceAllowedByMark({ side, orderPrice: toCheckPrice, markPrice: guard.markPrice, maxPct: guard.maxPct ?? 0 });
+   if (!guard || !guard.maxPct || guard.maxPct === null) { return true; }
+   const allowed = isOrderPriceAllowedByMark({ side, orderPrice: toCheckPrice, markPrice: guard.markPrice, maxPct: guard.maxPct });
    if (!allowed) {
       const priceStr = Number.isFinite(Number(toCheckPrice)) ? Number(toCheckPrice).toFixed(2) : String(toCheckPrice);
       const markStr = Number.isFinite(Number(guard.markPrice)) ? Number(guard.markPrice).toFixed(2) : String(guard.markPrice);
@@ -192,7 +192,18 @@ export async function placeStopLossOrder(
    }
    const priceTick = opts?.priceTick ?? 0.1;
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = { symbol, side, type, stopPrice: roundDownToTick(stopPrice, priceTick), reduceOnly: 'true', closePosition: 'true', timeInForce: 'GTC', quantity: roundQtyDownToStep(quantity, qtyStep), triggerType: 'STOP_LOSS' };
+   const params: CreateOrderParams = {
+      symbol,
+      side,
+      type,
+      stopPrice: roundDownToTick(stopPrice, priceTick),
+      reduceOnly: 'true',
+      closePosition: 'true',
+      timeInForce: 'GTC',
+      // Do not round down stop quantity here to avoid underflow to exchange min; gateway will quantize precisely
+      quantity,
+      triggerType: 'STOP_LOSS',
+   };
    // 部分交易所（例如 Paradex）要求 STOP_MARKET 同时提供 price 字段
    params.price = params.stopPrice;
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
@@ -267,7 +278,17 @@ export async function marketClose(
    if (isOperating(locks, type)) { return; }
    if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, '市价平仓')) { return; }
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = { symbol, side, type, quantity: roundQtyDownToStep(quantity, qtyStep), reduceOnly: 'true' };
+   const roundedQty = roundQtyDownToStep(quantity, qtyStep);
+   const safeQty = roundedQty > 0 ? roundedQty : quantity;
+   const params: CreateOrderParams = {
+      symbol,
+      side,
+      type,
+      quantity: safeQty,
+      reduceOnly: 'true',
+      // Hint exchanges (like Paradex) to close the whole position and tolerate omitted size
+      closePosition: 'true',
+   };
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {

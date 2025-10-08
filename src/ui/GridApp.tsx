@@ -72,23 +72,20 @@ export function GridApp({ onExit }: GridAppProps) {
    const position = snapshot.position;
    const hasPosition = Math.abs(position.positionAmt) > 1e-5;
 
-   const gridColumns: TableColumn[] = [
-      { key: 'level', header: '#', align: 'right', minWidth: 3 },
-      { key: 'price', header: 'Price', align: 'right', minWidth: 10 },
-      { key: 'side', header: 'Side', minWidth: 4 },
-      { key: 'active', header: 'Active', minWidth: 6 },
-      { key: 'hasOrder', header: 'Order', minWidth: 5 },
-      { key: 'reduceOnly', header: 'RO', minWidth: 4 },
-   ];
-   const gridRows = snapshot.gridLines.map((line) => ({ level: line.level, price: formatNumber(line.price, 4), side: line.side, active: line.active ? 'yes' : 'no', hasOrder: line.hasOrder ? 'yes' : 'no', reduceOnly: line.reduceOnly ? 'yes' : 'no' }));
+   const gridColumns: TableColumn[] = [{ key: 'level', header: '#', align: 'right', minWidth: 3 }, { key: 'price', header: 'Price', align: 'right', minWidth: 10 }, { key: 'side', header: 'Side', minWidth: 4 }, {
+      key: 'active',
+      header: 'Active',
+      minWidth: 6,
+   }, { key: 'hasOrder', header: 'Order', minWidth: 5 }];
+   const gridRows = snapshot.gridLines.map((line) => ({ level: line.level, price: formatNumber(line.price, 4), side: line.side, active: line.active ? 'yes' : 'no', hasOrder: line.hasOrder ? 'yes' : 'no' }));
 
    const desiredColumns: TableColumn[] = [{ key: 'level', header: '#', align: 'right', minWidth: 3 }, { key: 'side', header: 'Side', minWidth: 4 }, { key: 'price', header: 'Price', align: 'right', minWidth: 10 }, {
       key: 'amount',
       header: 'Qty',
       align: 'right',
       minWidth: 8,
-   }, { key: 'reduceOnly', header: 'RO', minWidth: 4 }];
-   const desiredRows = snapshot.desiredOrders.map((order) => ({ level: order.level, side: order.side, price: order.price, amount: formatNumber(order.amount, 4), reduceOnly: order.reduceOnly ? 'yes' : 'no' }));
+   }];
+   const desiredRows = snapshot.desiredOrders.map((order) => ({ level: order.level, side: order.side, price: order.price, amount: formatNumber(order.amount, 4) }));
 
    return (
       <Box flexDirection='column' paddingX={1}>

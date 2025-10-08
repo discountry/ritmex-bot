@@ -97,7 +97,7 @@ export function TrendApp({ onExit }: TrendAppProps) {
                   ? (
                      <>
                         <Text>方向: {position.positionAmt > 0 ? '多' : '空'} ｜ 数量: {formatNumber(Math.abs(position.positionAmt), 4)} ｜ 开仓价: {formatNumber(position.entryPrice, 2)}</Text>
-                        <Text>浮动盈亏: {formatNumber(snapshot.pnl, 4)} USDT ｜ 账户未实现盈亏: {formatNumber(snapshot.accountUnrealized, 4)} USDT</Text>
+                        <Text>浮动盈亏: {formatNumber(snapshot.pnl, 4)} USDT ｜ 账户未实现盈亏: {formatNumber(snapshot.unrealized, 4)} USDT</Text>
                      </>
                   )
                   : <Text color='gray'>当前无持仓</Text>}

@@ -500,7 +500,7 @@ export class ParadexGateway {
       const symbol = this.marketSymbol;
       const type = this.mapOrderTypeToCcxt(params.type);
       const side = params.side.toLowerCase();
-      const amount = params.quantity;
+      let amount = params.quantity;
       const price = params.price;
 
       const extraParams: Record<string, unknown> = {};
@@ -509,15 +509,63 @@ export class ParadexGateway {
       if (params.reduceOnly !== undefined) {
          extraParams.reduceOnly = params.reduceOnly === 'true';
       }
+      if (params.closePosition !== undefined) {
+         // propagate closePosition flag to the exchange params when provided
+         (extraParams as any).closePosition = params.closePosition === 'true';
+      }
+
+      // Normalize amount for Paradex according to market precision/limits.
+      // For STOP_MARKET closePosition orders, prefer using the current position size.
+      try {
+         const market = typeof (this.exchange as any).market === 'function' ? (this.exchange as any).market(symbol) : (this.exchange.markets ?? {})[symbol];
+         const precisionDigits = Number(market?.precision?.amount ?? market?.amountPrecision);
+         const limitMin = Number(market?.limits?.amount?.min);
+         // Only trust explicit exchange min limit; do NOT infer 1 from precision=0
+         const minAmount = Number.isFinite(limitMin) && limitMin > 0 ? limitMin : undefined;
+
+         // If closePosition is requested and amount is missing or too small, prefer using current position size
+         const isClosePosition = (extraParams as any).closePosition === true;
+         if (isClosePosition) {
+            const posAbs = this.getCurrentPositionAbs();
+            if (posAbs && Number.isFinite(posAbs) && posAbs > 0) {
+               amount = posAbs;
+            }
+            const current = Number(amount);
+            if (!Number.isFinite(current) || current <= 0 || (minAmount !== undefined && current < minAmount)) {
+               amount = (minAmount as number) ?? 1e-5; // fallback if market data is missing
+            }
+         }
+
+         // Quantize to exchange precision if helper is available (safe for STOP orders)
+         if (typeof (this.exchange as any).amountToPrecision === 'function' && Number.isFinite(Number(amount))) {
+            amount = Number((this.exchange as any).amountToPrecision(symbol, amount));
+         }
+      } catch (_normalizeError) {
+         // Swallow precision normalization errors and let exchange validation surface if any
+      }
 
       try {
-         const order = (await this.exchange.createOrder(symbol, type, side, amount, price, extraParams)) as CcxtOrder;
+         const isClosePosition = (extraParams as any).closePosition === true;
+         // Only omit amount for MARKET close-position orders; STOP requires explicit size
+         const shouldOmitAmount = isClosePosition && type === 'market';
+         const amountArg: any = shouldOmitAmount ? undefined : amount;
+         const order = (await this.exchange.createOrder(symbol, type, side, amountArg, price, extraParams)) as CcxtOrder;
          const mapped = this.mapOrderToAsterOrder(order);
          this.upsertLocalOrder(mapped);
          return mapped;
       } catch (error) {
          throw new Error(`Paradex createOrder failed: ${extractMessage(error)}`);
       }
+   }
+
+   private getCurrentPositionAbs(): number | undefined {
+      const snapshot = this.lastBalanceSnapshot;
+      if (!snapshot) { return undefined; }
+      const pos = (snapshot.positions || []).find((p) => p.symbol === this.displaySymbol);
+      if (!pos) { return undefined; }
+      const amt = Number(pos.positionAmt);
+      if (!Number.isFinite(amt)) { return undefined; }
+      return Math.abs(amt);
    }
 
    async cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void> {

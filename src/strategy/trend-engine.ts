@@ -6,7 +6,6 @@ import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from '../core/order
 import type { ExchangeAdapter } from '../exchanges/adapter';
 import type { AsterAccountSnapshot, AsterDepth, AsterKline, AsterOrder, AsterTicker } from '../exchanges/types';
 import { createTradeLog, type TradeLogEntry } from '../logging/trade-log';
-import type { EngineListener, EngineUpdateEvent, IEngineSnapshot, IStrategyEngine } from '../types';
 import { decryptCopyright } from '../utils/copyright';
 import { extractMessage, isUnknownOrderError } from '../utils/errors';
 import { isRateLimitError } from '../utils/errors';
@@ -18,17 +17,24 @@ import { StrategyEventEmitter } from './common/event-emitter';
 import { SessionVolumeTracker } from './common/session-volume';
 import { type LogHandler, safeSubscribe } from './common/subscriptions';
 
-export interface TrendEngineSnapshot extends IEngineSnapshot {
+export interface TrendEngineSnapshot {
+   ready: boolean;
+   symbol: string;
    lastPrice: number | null;
    sma30: number | null;
    bollingerBandwidth: number | null;
    trend: '做多' | '做空' | '无信号';
+   position: PositionSnapshot;
+   pnl: number;
+   unrealized: number;
    totalProfit: number;
    totalTrades: number;
+   sessionVolume: number;
    tradeLog: TradeLogEntry[];
    openOrders: AsterOrder[];
    depth: AsterDepth | null;
    ticker: AsterTicker | null;
+   lastUpdated: number | null;
    lastOpenSignal: OpenOrderPlan;
 }
 
@@ -37,7 +43,11 @@ export interface OpenOrderPlan {
    price: number | null;
 }
 
-export class TrendEngine implements IStrategyEngine<TrendEngineSnapshot> {
+type TrendEngineEvent = 'update';
+
+type TrendEngineListener = (snapshot: TrendEngineSnapshot) => void;
+
+export class TrendEngine {
    private accountSnapshot: AsterAccountSnapshot | null = null;
    private openOrders: AsterOrder[] = [];
    private depthSnapshot: AsterDepth | null = null;
@@ -49,7 +59,7 @@ export class TrendEngine implements IStrategyEngine<TrendEngineSnapshot> {
    private readonly pending: OrderPendingMap = {};
 
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
-   private readonly events = new StrategyEventEmitter<EngineUpdateEvent, TrendEngineSnapshot>();
+   private readonly events = new StrategyEventEmitter<TrendEngineEvent, TrendEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
 
    private timer: ReturnType<typeof setInterval> | null = null;
@@ -81,7 +91,7 @@ export class TrendEngine implements IStrategyEngine<TrendEngineSnapshot> {
    private lastStopAttempt: { side: 'BUY' | 'SELL' | null; price: number | null; at: number } = { side: null, price: null, at: 0 };
    private readonly copyrightFingerprint = crypto.createHash('sha256').update(decryptCopyright()).digest('hex');
 
-   private readonly listeners = new Map<EngineUpdateEvent, Set<EngineListener<TrendEngineSnapshot>>>();
+   private readonly listeners = new Map<TrendEngineEvent, Set<TrendEngineListener>>();
 
    constructor(private readonly config: TradingConfig, private readonly exchange: ExchangeAdapter) {
       this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -103,11 +113,11 @@ export class TrendEngine implements IStrategyEngine<TrendEngineSnapshot> {
       }
    }
 
-   on(event: EngineUpdateEvent, handler: EngineListener<TrendEngineSnapshot>): void {
+   on(event: TrendEngineEvent, handler: TrendEngineListener): void {
       this.events.on(event, handler);
    }
 
-   off(event: EngineUpdateEvent, handler: EngineListener<TrendEngineSnapshot>): void {
+   off(event: TrendEngineEvent, handler: TrendEngineListener): void {
       this.events.off(event, handler);
    }
 
@@ -115,7 +125,7 @@ export class TrendEngine implements IStrategyEngine<TrendEngineSnapshot> {
       return this.buildSnapshot();
    }
 
-   bootstrap(): void {
+   private bootstrap(): void {
       const log: LogHandler = (type, detail) => this.tradeLog.push(type, detail);
 
       safeSubscribe<AsterAccountSnapshot>(
@@ -700,7 +710,7 @@ export class TrendEngine implements IStrategyEngine<TrendEngineSnapshot> {
          trend,
          position,
          pnl,
-         accountUnrealized: position.unrealizedProfit,
+         unrealized: position.unrealizedProfit,
          totalProfit: this.totalProfit,
          totalTrades: this.totalTrades,
          sessionVolume: this.sessionVolume.value,
