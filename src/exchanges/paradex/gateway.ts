@@ -551,7 +551,7 @@ export class ParadexGateway {
     const symbol = this.marketSymbol;
     const type = this.mapOrderTypeToCcxt(params.type);
     const side = params.side.toLowerCase();
-    const amount = params.quantity;
+    let amount = params.quantity;
     const price = params.price;
 
     const extraParams: Record<string, unknown> = {};
@@ -559,6 +559,43 @@ export class ParadexGateway {
     if (params.timeInForce) extraParams.timeInForce = params.timeInForce;
     if (params.reduceOnly !== undefined) {
       extraParams.reduceOnly = params.reduceOnly === "true";
+    }
+    if (params.closePosition !== undefined) {
+      // propagate closePosition flag to the exchange params when provided
+      (extraParams as any).closePosition = params.closePosition === "true";
+    }
+
+    // Normalize amount for Paradex according to market precision/limits.
+    // Particularly important for STOP_MARKET closePosition orders where rounding
+    // upstream may result in 0 due to larger strategy qtyStep.
+    try {
+      const market = typeof (this.exchange as any).market === "function"
+        ? (this.exchange as any).market(symbol)
+        : (this.exchange.markets ?? {})[symbol];
+      const precisionDigits = Number((market?.precision?.amount ?? market?.amountPrecision));
+      const limitMin = Number(market?.limits?.amount?.min);
+      const minByPrecision = Number.isFinite(precisionDigits) && precisionDigits > 0
+        ? Number(Math.pow(10, -precisionDigits).toFixed(Math.max(0, precisionDigits)))
+        : undefined;
+      const minAmount = Number.isFinite(limitMin) && limitMin > 0
+        ? limitMin
+        : (minByPrecision ?? undefined);
+
+      // If closePosition is requested and amount is missing or too small, bump to minimum allowed
+      const isClosePosition = (extraParams as any).closePosition === true;
+      if (isClosePosition) {
+        const current = Number(amount);
+        if (!Number.isFinite(current) || current <= 0 || (Number.isFinite(minAmount) && current < (minAmount as number))) {
+          amount = (minAmount as number) ?? 1e-5; // sensible fallback if market data is missing
+        }
+      }
+
+      // Quantize to exchange precision if helper is available
+      if (typeof (this.exchange as any).amountToPrecision === "function" && Number.isFinite(Number(amount))) {
+        amount = Number((this.exchange as any).amountToPrecision(symbol, amount));
+      }
+    } catch (_normalizeError) {
+      // Swallow precision normalization errors and let exchange validation surface if any
     }
 
     try {
