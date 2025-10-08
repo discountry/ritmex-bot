@@ -586,8 +586,8 @@ export class ParadexGateway {
         }
       }
 
-      // Quantize to exchange precision if helper is available
-      if (!isClosePosition && typeof (this.exchange as any).amountToPrecision === "function" && Number.isFinite(Number(amount))) {
+      // Quantize to exchange precision if helper is available (safe for STOP orders)
+      if (typeof (this.exchange as any).amountToPrecision === "function" && Number.isFinite(Number(amount))) {
         amount = Number((this.exchange as any).amountToPrecision(symbol, amount));
       }
     } catch (_normalizeError) {
@@ -596,9 +596,9 @@ export class ParadexGateway {
 
     try {
       const isClosePosition = (extraParams as any).closePosition === true;
-      // When closePosition is true, many exchanges (incl. Paradex) accept omitting amount
-      // and will close the entire position. Passing a larger min amount may violate reduceOnly.
-      const amountArg: any = isClosePosition ? undefined : amount;
+      // Only omit amount for MARKET close-position orders; STOP requires explicit size
+      const shouldOmitAmount = isClosePosition && type === "market";
+      const amountArg: any = shouldOmitAmount ? undefined : amount;
       const order = (await this.exchange.createOrder(
         symbol,
         type,
