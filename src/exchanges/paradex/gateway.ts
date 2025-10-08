@@ -574,24 +574,20 @@ export class ParadexGateway {
         : (this.exchange.markets ?? {})[symbol];
       const precisionDigits = Number((market?.precision?.amount ?? market?.amountPrecision));
       const limitMin = Number(market?.limits?.amount?.min);
-      const minByPrecision = Number.isFinite(precisionDigits) && precisionDigits > 0
-        ? Number(Math.pow(10, -precisionDigits).toFixed(Math.max(0, precisionDigits)))
-        : undefined;
-      const minAmount = Number.isFinite(limitMin) && limitMin > 0
-        ? limitMin
-        : (minByPrecision ?? undefined);
+      // Only trust explicit exchange min limit; do NOT infer 1 from precision=0
+      const minAmount = Number.isFinite(limitMin) && limitMin > 0 ? limitMin : undefined;
 
       // If closePosition is requested and amount is missing or too small, bump to minimum allowed
       const isClosePosition = (extraParams as any).closePosition === true;
       if (isClosePosition) {
         const current = Number(amount);
-        if (!Number.isFinite(current) || current <= 0 || (Number.isFinite(minAmount) && current < (minAmount as number))) {
-          amount = (minAmount as number) ?? 1e-5; // sensible fallback if market data is missing
+        if (!Number.isFinite(current) || current <= 0 || (minAmount !== undefined && current < minAmount)) {
+          amount = (minAmount as number) ?? 1e-5; // fallback if market data is missing
         }
       }
 
       // Quantize to exchange precision if helper is available
-      if (typeof (this.exchange as any).amountToPrecision === "function" && Number.isFinite(Number(amount))) {
+      if (!isClosePosition && typeof (this.exchange as any).amountToPrecision === "function" && Number.isFinite(Number(amount))) {
         amount = Number((this.exchange as any).amountToPrecision(symbol, amount));
       }
     } catch (_normalizeError) {
@@ -599,11 +595,15 @@ export class ParadexGateway {
     }
 
     try {
+      const isClosePosition = (extraParams as any).closePosition === true;
+      // When closePosition is true, many exchanges (incl. Paradex) accept omitting amount
+      // and will close the entire position. Passing a larger min amount may violate reduceOnly.
+      const amountArg: any = isClosePosition ? undefined : amount;
       const order = (await this.exchange.createOrder(
         symbol,
         type,
         side,
-        amount,
+        amountArg,
         price,
         extraParams
       )) as CcxtOrder;
