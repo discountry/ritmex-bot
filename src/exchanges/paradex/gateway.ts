@@ -566,8 +566,7 @@ export class ParadexGateway {
     }
 
     // Normalize amount for Paradex according to market precision/limits.
-    // Particularly important for STOP_MARKET closePosition orders where rounding
-    // upstream may result in 0 due to larger strategy qtyStep.
+    // For STOP_MARKET closePosition orders, prefer using the current position size.
     try {
       const market = typeof (this.exchange as any).market === "function"
         ? (this.exchange as any).market(symbol)
@@ -577,9 +576,13 @@ export class ParadexGateway {
       // Only trust explicit exchange min limit; do NOT infer 1 from precision=0
       const minAmount = Number.isFinite(limitMin) && limitMin > 0 ? limitMin : undefined;
 
-      // If closePosition is requested and amount is missing or too small, bump to minimum allowed
+      // If closePosition is requested and amount is missing or too small, prefer using current position size
       const isClosePosition = (extraParams as any).closePosition === true;
       if (isClosePosition) {
+        const posAbs = this.getCurrentPositionAbs();
+        if (Number.isFinite(posAbs) && posAbs > 0) {
+          amount = posAbs;
+        }
         const current = Number(amount);
         if (!Number.isFinite(current) || current <= 0 || (minAmount !== undefined && current < minAmount)) {
           amount = (minAmount as number) ?? 1e-5; // fallback if market data is missing
@@ -613,6 +616,16 @@ export class ParadexGateway {
     } catch (error) {
       throw new Error(`Paradex createOrder failed: ${extractMessage(error)}`);
     }
+  }
+
+  private getCurrentPositionAbs(): number | undefined {
+    const snapshot = this.lastBalanceSnapshot;
+    if (!snapshot) return undefined;
+    const pos = (snapshot.positions || []).find((p) => p.symbol === this.displaySymbol);
+    if (!pos) return undefined;
+    const amt = Number(pos.positionAmt);
+    if (!Number.isFinite(amt)) return undefined;
+    return Math.abs(amt);
   }
 
   async cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void> {

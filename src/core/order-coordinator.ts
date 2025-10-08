@@ -249,7 +249,8 @@ export async function placeStopLossOrder(
     reduceOnly: "true",
     closePosition: "true",
     timeInForce: "GTC",
-    quantity: roundQtyDownToStep(quantity, qtyStep),
+    // Do not round down stop quantity here to avoid underflow to exchange min; gateway will quantize precisely
+    quantity,
     triggerType: "STOP_LOSS",
   };
   // 部分交易所（例如 Paradex）要求 STOP_MARKET 同时提供 price 字段
