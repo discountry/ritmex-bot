@@ -1,0 +1,37 @@
+# Grid Strategy Data Template (CSV)
+# Note: Remove comment lines (#) if your pipeline requires pure CSV.
+# Encoding: UTF-8, Separator: comma (,)
+
+timestamp,side,price,qty,fee,slippage_bps,pnl,order_type,grid_level,portfolio_avg_cost,exposure_after,spread_bps,depth_top_quote,maker_taker,roi_pct,drawdown_pct,range_mid,range_lower_pct,range_upper_pct,step_type,step_value,grids,post_only,retry_count,cooldown_sec
+# 2025-01-01T00:00:01Z,buy,42000.5,0.01,0.08,6,1.8,limit,12,41950.0,0.05,10,25000,maker,0.12,0.5,42000,-3,3,fixed_pct,0.7,24,true,1,60
+# 2025-01-01T00:02:14Z,sell,42295.0,0.01,0.08,5,1.6,limit,13,41960.0,0.04,9,24000,maker,0.14,0.5,42000,-3,3,fixed_pct,0.7,24,true,0,60
+
+# Field definitions:
+# timestamp: ISO8601 time (UTC recommended)
+# side: buy|sell
+# price: execution price
+# qty: executed quantity (base or contract units)
+# fee: absolute fee amount in quote currency
+# slippage_bps: slippage vs quote/mid in basis points
+# pnl: realized PnL for the fill (quote currency). Use per-fill or per-cycle; be consistent
+# order_type: limit|market|ioc|fok
+# grid_level: integer level index of the grid at execution time
+# portfolio_avg_cost: current portfolio weighted average cost (quote per unit) after the trade
+# exposure_after: absolute net exposure after the trade (quote or contracts)
+# spread_bps: best bid/ask spread in bps at execution time
+# depth_top_quote: top-of-book depth (quote currency) at execution time
+# maker_taker: maker|taker (post-only fills should be maker)
+# roi_pct: portfolio ROI percentage at the time window checkpoint (optional per fill or sampled)
+# drawdown_pct: portfolio drawdown percentage (optional)
+# range_mid: range mid reference price (e.g., EMA or mid), at execution time
+# range_lower_pct: lower bound relative to mid, as percent (negative)
+# range_upper_pct: upper bound relative to mid, as percent (positive)
+# step_type: fixed_pct|fixed_price|atr_ratio
+# step_value: step distance value (% / price / ATR ratio), align to step_type
+# grids: total number of grids configured
+# post_only: true|false
+# retry_count: number of post-only retries attempted for this order
+# cooldown_sec: cooldown duration for same-level re-triggers
+
+# Optional extension fields (append if needed):
+# bucket_id, funding_rate, mark_price, index_price, liquidation_buffer_pct, risk_score, event_type

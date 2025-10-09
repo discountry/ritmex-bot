@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="720" height="480" viewBox="0 0 720 480" xmlns="http://www.w3.org/2000/svg">
+  <title>PnL Distribution Histogram (Example)</title>
+  <desc>Illustrative PnL distribution based on example grid parameters. Replace heights with actual backtest/live data later.</desc>
+  <style>
+    .axis { stroke:#333; stroke-width:1 }
+    .grid { stroke:#eee; stroke-width:1 }
+    .bar  { fill:#4caf50 }
+    .bar.neg { fill:#e53935 }
+    .label { font: 12px sans-serif; fill:#333 }
+  </style>
+
+  <!-- margins -->
+  <rect x="0" y="0" width="720" height="480" fill="#fff"/>
+
+  <!-- axes -->
+  <line x1="80" y1="420" x2="680" y2="420" class="axis"/>
+  <line x1="80" y1="80"  x2="80"  y2="420" class="axis"/>
+
+  <!-- grid lines -->
+  <line x1="80" y1="360" x2="680" y2="360" class="grid"/>
+  <line x1="80" y1="300" x2="680" y2="300" class="grid"/>
+  <line x1="80" y1="240" x2="680" y2="240" class="grid"/>
+  <line x1="80" y1="180" x2="680" y2="180" class="grid"/>
+  <line x1="80" y1="120" x2="680" y2="120" class="grid"/>
+
+  <!-- labels -->
+  <text x="360" y="460" class="label">PnL (normalized bins)</text>
+  <text x="20"  y="60"  class="label">Count</text>
+
+  <!-- example bars (10 bins) -->
+  <!-- bin width 54px, gap 12px -->
+  <!-- positive bins -->
+  <rect x="92" y="320" width="54" height="100" class="bar"/>
+  <rect x="158" y="300" width="54" height="120" class="bar"/>
+  <rect x="224" y="250" width="54" height="170" class="bar"/>
+  <rect x="290" y="210" width="54" height="210" class="bar"/>
+  <rect x="356" y="260" width="54" height="160" class="bar"/>
+
+  <!-- negative bins -->
+  <rect x="422" y="330" width="54" height="90"  class="bar neg"/>
+  <rect x="488" y="360" width="54" height="60"  class="bar neg"/>
+  <rect x="554" y="380" width="54" height="40"  class="bar neg"/>
+  <rect x="620" y="400" width="54" height="20"  class="bar neg"/>
+
+  <!-- axis tick labels -->
+  <text x="95"  y="440" class="label">-3%</text>
+  <text x="161" y="440" class="label">-2%</text>
+  <text x="227" y="440" class="label">-1%</text>
+  <text x="293" y="440" class="label">0%</text>
+  <text x="359" y="440" class="label">+1%</text>
+  <text x="425" y="440" class="label">+2%</text>
+  <text x="491" y="440" class="label">+3%</text>
+  <text x="557" y="440" class="label">+4%</text>
+  <text x="623" y="440" class="label">+5%</text>
+
+  <!-- legend -->
+  <rect x="520" y="90" width="170" height="60" fill="#fff" stroke="#ccc"/>
+  <rect x="530" y="105" width="16" height="16" fill="#4caf50"/>
+  <text x="555" y="118" class="label">Positive bins</text>
+  <rect x="530" y="125" width="16" height="16" fill="#e53935"/>
+  <text x="555" y="138" class="label">Negative bins</text>
+</svg>

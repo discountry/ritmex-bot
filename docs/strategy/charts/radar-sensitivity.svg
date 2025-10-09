@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="600" height="600" viewBox="0 0 600 600" xmlns="http://www.w3.org/2000/svg">
+  <title>Grid Strategy Sensitivity Radar (Example)</title>
+  <desc>Dimensions: Step, Fee, Slippage, Grids, Exposure, ROI Target. Values are example normalized sensitivities.</desc>
+  <style>
+    .axis { stroke:#888; stroke-width:1 }
+    .grid { stroke:#ccc; stroke-width:0.5; fill:none }
+    .label { font: 12px sans-serif; fill:#333 }
+    .poly { fill: rgba(0,128,255,0.25); stroke:#0078ff; stroke-width:2 }
+    .point { fill:#0078ff; stroke:#fff; stroke-width:1.5 }
+  </style>
+
+  <!-- center and radius -->
+  <circle cx="300" cy="300" r="250" class="grid"/>
+  <circle cx="300" cy="300" r="200" class="grid"/>
+  <circle cx="300" cy="300" r="150" class="grid"/>
+  <circle cx="300" cy="300" r="100" class="grid"/>
+  <circle cx="300" cy="300" r="50" class="grid"/>
+
+  <!-- axes (0,60,120,180,240,300 deg) -->
+  <line x1="300" y1="300" x2="550" y2="300" class="axis"/>
+  <line x1="300" y1="300" x2="375" y2="70" class="axis"/>
+  <line x1="300" y1="300" x2="225" y2="70" class="axis"/>
+  <line x1="300" y1="300" x2="50"  y2="300" class="axis"/>
+  <line x1="300" y1="300" x2="225" y2="530" class="axis"/>
+  <line x1="300" y1="300" x2="375" y2="530" class="axis"/>
+
+  <!-- axis labels -->
+  <text x="560" y="305" class="label">Step</text>
+  <text x="385" y="65"  class="label">Fee</text>
+  <text x="180" y="65"  class="label">Slippage</text>
+  <text x="20"  y="305" class="label">Grids</text>
+  <text x="170" y="545" class="label">Exposure</text>
+  <text x="385" y="545" class="label">ROI Target</text>
+
+  <!-- example values (normalized 0-100 mapped to radius 0-250) -->
+  <!-- Step: 70% @ 0° → (475,300) -->
+  <!-- Fee:  60% @ 60° → (375,170) -->
+  <!-- Slippage: 50% @ 120° → (237.5,191.75) -->
+  <!-- Grids: 65% @ 180° → (137.5,300) -->
+  <!-- Exposure:55% @ 240° → (231.25,419.2) -->
+  <!-- ROI: 60% @ 300° → (375,429.9) -->
+
+  <polygon class="poly"
+    points="475,300 375,170 237.5,191.75 137.5,300 231.25,419.2 375,429.9"/>
+
+  <!-- points -->
+  <circle cx="475" cy="300" r="4" class="point"/>
+  <circle cx="375" cy="170" r="4" class="point"/>
+  <circle cx="237.5" cy="191.75" r="4" class="point"/>
+  <circle cx="137.5" cy="300" r="4" class="point"/>
+  <circle cx="231.25" cy="419.2" r="4" class="point"/>
+  <circle cx="375" cy="429.9" r="4" class="point"/>
+
+  <!-- legend -->
+  <rect x="420" y="30" width="160" height="60" fill="#fff" stroke="#ccc"/>
+  <rect x="430" y="45" width="16" height="16" fill="rgba(0,128,255,0.25)" stroke="#0078ff"/>
+  <text x="455" y="58" class="label">Example Sensitivity</text>
+</svg>

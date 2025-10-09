@@ -1,0 +1,115 @@
+# 网格交易策略参数模板（示例）
+# 注意：请按交易所规则与品种风险自定义，示例值仅用于参考。
+
+strategy:
+  name: grid-harvester
+  mode: dual # dual|long_only|short_only
+  dynamic_range:
+    enabled: true
+    mid_basis: ema # mid price basis: mid|wap|ema
+    shift_threshold_pct: 0.8 # 当中枢偏移超过阈值触发区间滚动
+    cooldown_sec: 300 # 动态更新冷却时间
+
+range:
+  lower_pct: -3.0     # 下边界相对中枢百分比
+  upper_pct: 3.0      # 上边界相对中枢百分比
+  step:
+    type: atr_ratio   # fixed_pct|fixed_price|atr_ratio
+    value: 0.7        # 若 atr_ratio 则为 ATR 的比例
+  grids: 24           # 格子数量（买卖各自或对称合并）
+  boundary_protection:
+    enabled: true
+    dwell_sec: 180    # 越界滞留超过该时长触发保护动作
+
+orders:
+  execution:
+    prefer_post_only: true
+    post_only_retry:
+      max_attempts: 3
+      retry_interval_ms: 800
+    aggressive_exit_on_stop: true # 止损/紧急退出使用市价/接近盘口的限价
+  ioc_fok_cleanup:
+    enabled: false # 仅在异常清理时启用
+  slippage:
+    max_bps: 8      # 允许的滑点上限（基点）
+  depth_guard:
+    min_top_depth_quote: 500 # 最优盘口的最小深度（名义金额）
+
+cooldown_limits:
+  same_level_cooldown_sec: 60
+  max_active_orders: 40
+  max_trades_per_day: 300
+
+position:
+  per_grid_qty_mode: fixed # fixed|percent_of_equity
+  per_grid_qty: 100        # 固定张数或名义金额（视交易所单位）
+  net_exposure_limit:
+    long_abs: 5000
+    short_abs: 5000
+  leverage:
+    max_leverage: 3
+    min_maintenance_buffer_pct: 20 # 预留保证金缓冲
+
+take_profit_stop:
+  per_grid_take_profit:
+    distance_mode: percent # percent|price|atr_ratio
+    value: 0.6
+  portfolio_take_profit:
+    enabled: true
+    target_roi_pct: 1.5
+    partial_ratio: 0.5   # 组合止盈时的部分平仓比例
+  boundary_stop:
+    enabled: true
+    dwell_sec: 180
+    mode: gradual # gradual|all_out
+  time_stop:
+    enabled: true
+    max_holding_minutes: 240
+  liquidation_protection:
+    enabled: true
+    reduce_on_risk_pct: 75 # 保证金风险占比达到该值时启动降仓
+
+funds:
+  buckets: 24
+  allocation_mode: equal # equal|martingale|anti_martingale
+  max_scale_multiplier: 2.0 # 若使用（反）马丁，递增/递减上限
+  fee_budget:
+    consider_maker_rebate: true
+    expand_step_if_fee_high: true
+
+risk:
+  max_daily_loss_pct: 3.0
+  max_strategy_drawdown_pct: 8.0
+  volatility_event_protection:
+    enabled: true
+    relax_tp_or_pause: pause # relax_tp|pause
+  spread_guard:
+    max_spread_bps: 20
+
+exceptions:
+  ws_failover_to_rest: true
+  reconcile_on_reconnect: true
+  data_source_failover: true
+  consistency_check_interval_sec: 60
+  graceful_shutdown:
+    enabled: true
+    preserve_protective_orders: true
+
+monitoring:
+  alerts:
+    slippage_bps: 10
+    net_exposure_abs: 4000
+    drawdown_pct: 5.0
+  metrics:
+    track: [fills, slippage, fees, pnl, exposure, roi, drawdown]
+
+logging:
+  level: info
+  rotate_daily: true
+  archive_path: logs/strategy/grid
+
+# 使用说明：
+# 1) 启动前将 mode、range、step、grids 与 funds.buckets 对齐。
+# 2) 优先使用 prefer_post_only，post_only_retry 控制重试节奏。
+# 3) 组合止盈与边界止损共同约束净敞口；time_stop 防止持仓过久。
+# 4) 风控与异常处理项建议保持开启，确保一致性与兜底查询。

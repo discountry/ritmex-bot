@@ -598,7 +598,28 @@ export class AsterRestClient {
    }
 
    async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
-      const payload: Record<string, unknown> = { ...params };
+      // Sanitize and normalize params for Aster futures API. Paradex-specific flags
+      // like reduceOnly/closePosition on STOP/TRAILING should not leak here.
+      const payload: Record<string, unknown> = {};
+      payload.symbol = String(params.symbol).toUpperCase();
+      payload.side = params.side;
+      payload.type = params.type;
+      if (params.timeInForce !== undefined) { payload.timeInForce = params.timeInForce; }
+      if (params.price !== undefined) { payload.price = params.price; }
+      if (params.stopPrice !== undefined) { payload.stopPrice = params.stopPrice; }
+      if (params.activationPrice !== undefined) { payload.activationPrice = params.activationPrice; }
+      if (params.callbackRate !== undefined) { payload.callbackRate = params.callbackRate; }
+      if (params.quantity !== undefined) { payload.quantity = Math.abs(params.quantity); }
+
+      // Aster rejects reduceOnly/closePosition for certain order types (e.g. STOP/TRAILING).
+      // Keep the behavior exchange-specific by stripping them here for Aster.
+      const type = String(params.type).toUpperCase();
+      const isStopOrTrailing = type === 'STOP_MARKET' || type === 'TRAILING_STOP_MARKET';
+      if (!isStopOrTrailing) {
+         if (params.reduceOnly !== undefined) { payload.reduceOnly = params.reduceOnly; }
+         if (params.closePosition !== undefined) { payload.closePosition = params.closePosition; }
+      }
+
       const response = await this.signedRequest<any>({ path: '/fapi/v1/order', method: 'POST', params: payload });
       return toOrderFromRest(response);
    }

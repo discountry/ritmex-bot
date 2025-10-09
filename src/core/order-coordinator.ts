@@ -204,8 +204,7 @@ export async function placeStopLossOrder(
       quantity,
       triggerType: 'STOP_LOSS',
    };
-   // 部分交易所（例如 Paradex）要求 STOP_MARKET 同时提供 price 字段
-   params.price = params.stopPrice;
+   // Avoid forcing price for STOP_MARKET globally; keep this exchange-specific in gateways
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {
@@ -243,7 +242,18 @@ export async function placeTrailingStopOrder(
    if (!enforceMarkPriceGuard(side, activationPrice, guard, log, '动态止盈单')) { return; }
    const priceTick = opts?.priceTick ?? 0.1;
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = { symbol, side, type, quantity: roundQtyDownToStep(quantity, qtyStep), reduceOnly: 'true', activationPrice: roundDownToTick(activationPrice, priceTick), callbackRate, timeInForce: 'GTC' };
+   const params: CreateOrderParams = {
+      symbol,
+      side,
+      type,
+      // Do not round down trailing-stop quantity to avoid underflowing small positions to zero;
+      // let the exchange adapter handle precise quantization.
+      quantity,
+      reduceOnly: 'true',
+      activationPrice: roundDownToTick(activationPrice, priceTick),
+      callbackRate,
+      timeInForce: 'GTC',
+   };
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {
