@@ -304,7 +304,7 @@ class PortfolioViewer {
             { alignment: 'right', width: 15 },
             { alignment: 'right', width: 12 },
             { alignment: 'right', width: 15 },
-            { alignment: 'right', width: 12 },
+            { alignment: 'right', width: 15 },
          ],
          drawHorizontalLine: () => false, // 只显示表头和表尾的分隔线
       };
@@ -318,9 +318,8 @@ class PortfolioViewer {
       } else {
          // 构建表格数据
          const positionData = [
-            ['交易所', '交易对', '开仓价格', '持仓数量', '当前价格', '未实现盈亏'],
+            ['交易所', '交易对', '持仓数量', '开仓价格', '当前价格', '未实现盈亏'],
             ...this.positions.map(position => {
-               console.log(position);
                let symbol = position.symbol;
                if (position.size > 0) {
                   symbol = chalk.green(symbol);
@@ -328,17 +327,17 @@ class PortfolioViewer {
                   symbol = chalk.red(symbol);
                }
                // 格式化显示数值
-               const sizeDisplay = position.size >= 0 ? position.size.toFixed(6) : position.size.toFixed(6);
+               const sizeDisplay = position.size >= 0 ? chalk.green(position.size.toFixed(6)) : chalk.red(position.size.toFixed(6));
 
                let pnlDisplay = position.unrealizedPnl.toFixed(4);
                let pnlPctDisplay = position.unrealizedPnlPct.toFixed(2);
                if (position.unrealizedPnl > 0) {
-                  pnlDisplay = chalk.green(`${pnlDisplay}(${pnlPctDisplay})`);
+                  pnlDisplay = chalk.green(`${pnlDisplay}(${pnlPctDisplay}%)`);
                } else if (position.unrealizedPnl < 0) {
-                  pnlDisplay = chalk.red(`${pnlDisplay}(${pnlPctDisplay})`);
+                  pnlDisplay = chalk.red(`${pnlDisplay}(${pnlPctDisplay}%)`);
                }
 
-               return [position.exchange, symbol, position.entryPrice.toFixed(2), sizeDisplay, position.currentPrice.toFixed(2), pnlDisplay];
+               return [position.exchange, symbol, sizeDisplay, position.entryPrice.toFixed(2), position.currentPrice.toFixed(2), pnlDisplay];
             }),
          ];
 
