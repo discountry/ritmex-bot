@@ -348,11 +348,14 @@ describe('GridEngine Backtest with Historical Data', () => {
 
 describe('CSV Data Utils', () => {
    it('should validate correct kline data', () => {
-      const klines = [
-         { timestamp: 1000, open: 100, high: 110, low: 95, close: 105, volume: 1000 },
-         { timestamp: 2000, open: 105, high: 115, low: 100, close: 110, volume: 1500 },
-         { timestamp: 3000, open: 110, high: 120, low: 105, close: 115, volume: 2000 },
-      ];
+      const klines = [{ timestamp: 1000, open: 100, high: 110, low: 95, close: 105, volume: 1000 }, { timestamp: 2000, open: 105, high: 115, low: 100, close: 110, volume: 1500 }, {
+         timestamp: 3000,
+         open: 110,
+         high: 120,
+         low: 105,
+         close: 115,
+         volume: 2000,
+      }];
 
       const result = validateKlines(klines);
       expect(result.valid).toBe(true);
@@ -371,11 +374,14 @@ describe('CSV Data Utils', () => {
    });
 
    it('should calculate price range correctly', () => {
-      const klines = [
-         { timestamp: 1000, open: 100, high: 110, low: 95, close: 105, volume: 1000 },
-         { timestamp: 2000, open: 105, high: 115, low: 100, close: 110, volume: 1500 },
-         { timestamp: 3000, open: 110, high: 120, low: 105, close: 115, volume: 2000 },
-      ];
+      const klines = [{ timestamp: 1000, open: 100, high: 110, low: 95, close: 105, volume: 1000 }, { timestamp: 2000, open: 105, high: 115, low: 100, close: 110, volume: 1500 }, {
+         timestamp: 3000,
+         open: 110,
+         high: 120,
+         low: 105,
+         close: 115,
+         volume: 2000,
+      }];
 
       const range = calculatePriceRange(klines);
 
@@ -396,11 +402,14 @@ describe('CSV Data Utils', () => {
    });
 
    it('should detect ranging market', () => {
-      const rangingKlines = [
-         { timestamp: 1000, open: 100, high: 105, low: 95, close: 102, volume: 1000 },
-         { timestamp: 2000, open: 102, high: 107, low: 97, close: 100, volume: 1500 },
-         { timestamp: 3000, open: 100, high: 105, low: 95, close: 101, volume: 2000 },
-      ];
+      const rangingKlines = [{ timestamp: 1000, open: 100, high: 105, low: 95, close: 102, volume: 1000 }, { timestamp: 2000, open: 102, high: 107, low: 97, close: 100, volume: 1500 }, {
+         timestamp: 3000,
+         open: 100,
+         high: 105,
+         low: 95,
+         close: 101,
+         volume: 2000,
+      }];
 
       const state = detectMarketState(rangingKlines);
       expect(state).toBe('ranging');

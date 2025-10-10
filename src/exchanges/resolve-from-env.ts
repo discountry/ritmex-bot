@@ -33,7 +33,7 @@ export function buildAdapterFromEnv(options: BuildAdapterOptions): ExchangeAdapt
       const credentials = resolveParadexCredentials();
       return createExchangeAdapter({ exchange: id, symbol, paradex: credentials });
    }
-
+   // grvt
    return createExchangeAdapter({ exchange: id, symbol, grvt: { symbol } });
 }
 

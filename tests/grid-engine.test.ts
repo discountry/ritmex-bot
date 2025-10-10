@@ -144,10 +144,10 @@ describe('GridEngine', () => {
 
       // Start the engine to begin processing
       engine.start();
-      
+
       // Wait for engine to process and generate orders
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       const snapshot = engine.getSnapshot();
       const gridLines = snapshot.gridLines;
       expect(gridLines).toHaveLength(3);
@@ -165,10 +165,10 @@ describe('GridEngine', () => {
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
       engine.start();
-      
+
       // Wait for engine to process
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       const snapshot = engine.getSnapshot();
       expect(snapshot.direction).toBe('long');
       expect(snapshot.running).toBe(true);
@@ -185,7 +185,7 @@ describe('GridEngine', () => {
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
       engine.start();
-      
+
       // Wait for initial setup
       await new Promise(resolve => setTimeout(resolve, 100));
 
@@ -215,13 +215,13 @@ describe('GridEngine', () => {
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
       engine.start();
-      
+
       await new Promise(resolve => setTimeout(resolve, 100));
 
       const snapshot = engine.getSnapshot();
       const gridLines = snapshot.gridLines;
       expect(gridLines).toHaveLength(3);
-      
+
       // Verify grid structure is consistent
       expect(gridLines[0]!.price).toBe(baseConfig.lowerPrice);
       expect(gridLines[gridLines.length - 1]!.price).toBe(baseConfig.upperPrice);
@@ -238,7 +238,7 @@ describe('GridEngine', () => {
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
       engine.start();
-      
+
       await new Promise(resolve => setTimeout(resolve, 100));
 
       const snapshot = engine.getSnapshot();
@@ -257,7 +257,7 @@ describe('GridEngine', () => {
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
       engine.start();
-      
+
       await new Promise(resolve => setTimeout(resolve, 100));
 
       const snapshot = engine.getSnapshot();
@@ -293,7 +293,7 @@ describe('GridEngine', () => {
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
       engine.start();
-      
+
       await new Promise(resolve => setTimeout(resolve, 150));
 
       const snapshot = engine.getSnapshot();
@@ -314,7 +314,7 @@ describe('GridEngine', () => {
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
       engine.start();
-      
+
       await new Promise(resolve => setTimeout(resolve, 100));
 
       // Trigger halt

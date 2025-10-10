@@ -39,7 +39,7 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
       return wrapped;
    }
 
-   private ensureInitialized(context?: string): Promise<void> {
+   private async ensureInitialized(context?: string): Promise<void> {
       if (!this.initPromise) {
          this.initContexts.clear();
          this.initPromise = this.gateway.ensureInitialized(this.symbol).then((value) => {
@@ -64,11 +64,11 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
 
    private scheduleRetry(): void {
       if (this.retryTimer) { return; }
-      this.retryTimer = setTimeout(() => {
+      this.retryTimer = setTimeout(async () => {
          this.retryTimer = null;
          if (this.initPromise) { return; }
          this.retryDelayMs = Math.min(this.retryDelayMs * 2, 60_000);
-         void this.ensureInitialized('retry');
+         await this.ensureInitialized('retry');
       }, this.retryDelayMs);
    }
 
@@ -87,21 +87,26 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
       console.error(`[AsterExchangeAdapter] ${context} failed`, error);
    }
 
-   watchAccount(cb: AccountListener): void {
+   async watchAccount(cb: AccountListener): Promise<void> {
       void this.ensureInitialized('watchAccount');
       this.gateway.onAccount(this.safeInvoke('watchAccount', (snapshot) => {
          cb(snapshot);
       }));
    }
 
-   watchOrders(cb: OrderListener): void {
+   async watchOrders(cb: OrderListener): Promise<void> {
       void this.ensureInitialized('watchOrders');
       this.gateway.onOrders(this.safeInvoke('watchOrders', (orders) => {
          cb(orders);
       }));
    }
 
-   watchDepth(symbol: string, cb: DepthListener): void {
+   async getOpenOrdersSnapshot(): Promise<AsterOrder[]> {
+      await this.ensureInitialized('getOpenOrdersSnapshot');
+      return this.gateway.getOpenOrdersSnapshot();
+   }
+
+   async watchDepth(symbol: string, cb: DepthListener): Promise<void> {
       void this.ensureInitialized('watchDepth');
       this.gateway.onDepth(
          symbol,
@@ -111,7 +116,7 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
       );
    }
 
-   watchTicker(symbol: string, cb: TickerListener): void {
+   async watchTicker(symbol: string, cb: TickerListener): Promise<void> {
       void this.ensureInitialized('watchTicker');
       this.gateway.onTicker(
          symbol,
@@ -121,7 +126,7 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
       );
    }
 
-   watchKlines(symbol: string, interval: string, cb: KlineListener): void {
+   async watchKlines(symbol: string, interval: string, cb: KlineListener): Promise<void> {
       void this.ensureInitialized('watchKlines');
       this.gateway.onKlines(
          symbol,

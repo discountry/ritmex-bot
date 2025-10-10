@@ -8,6 +8,8 @@
       "start": "bun run index.ts",
       "test": "bun x vitest run",
       "test:watch": "bun x vitest",
+      "portfolio": "bun run src/cli/portfolio-viewer.ts",
+      "portfolio:setup": "bun run src/cli/portfolio-setup.ts",
       "start:trend:silent": "bun run index.ts --strategy trend --silent",
       "start:maker:silent": "bun run index.ts --strategy maker --silent",
       "start:offset:silent": "bun run index.ts --strategy offset-maker --silent",
@@ -34,6 +36,7 @@
       "ethereum-cryptography": "^3.2.0",
       "ink": "^6.3.1",
       "react": "^19.2.0",
+      "table": "^6.9.0",
       "ws": "^8.18.3"
    }
 }
