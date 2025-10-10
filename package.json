@@ -32,6 +32,7 @@
       "@grvt/client": "^1.6.5",
       "axios": "^1.12.2",
       "ccxt": "^4.5.7",
+      "chalk": "^5.6.2",
       "dotenv": "^17.2.3",
       "ethereum-cryptography": "^3.2.0",
       "ink": "^6.3.1",

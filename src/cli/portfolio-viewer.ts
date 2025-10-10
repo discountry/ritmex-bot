@@ -1,3 +1,5 @@
+import chalk from 'chalk';
+import { table, type TableUserConfig } from 'table';
 import { resolveSymbolFromEnv } from '../config';
 import type { SupportedExchangeId } from '../exchanges/create-adapter';
 import { buildAdapterFromEnv } from '../exchanges/resolve-from-env';
@@ -294,6 +296,19 @@ class PortfolioViewer {
    }
 
    displayResults(): void {
+      const positionConfig: TableUserConfig = {
+         columns: [
+            { alignment: 'left', width: 12 }, //
+            { alignment: 'left', width: 15 },
+            { alignment: 'right', width: 12 },
+            { alignment: 'right', width: 15 },
+            { alignment: 'right', width: 12 },
+            { alignment: 'right', width: 15 },
+            { alignment: 'right', width: 12 },
+         ],
+         drawHorizontalLine: () => false, // 只显示表头和表尾的分隔线
+      };
+
       console.log('\n' + '='.repeat(80));
       console.log('📊 持仓信息汇总');
       console.log('='.repeat(80));
@@ -301,50 +316,70 @@ class PortfolioViewer {
       if (this.positions.length === 0) {
          console.log('📭 暂无持仓');
       } else {
-         // 表头
-         console.log('交易所'.padEnd(12) + '交易对'.padEnd(15) + '开仓价格'.padEnd(12) + '持仓数量'.padEnd(15) + '当前价格'.padEnd(12) + '未实现盈亏'.padEnd(15) + '收益率(%)');
-         console.log('-'.repeat(80));
+         // 构建表格数据
+         const positionData = [
+            ['交易所', '交易对', '开仓价格', '持仓数量', '当前价格', '未实现盈亏'],
+            ...this.positions.map(position => {
+               console.log(position);
+               let symbol = position.symbol;
+               if (position.size > 0) {
+                  symbol = chalk.green(symbol);
+               } else {
+                  symbol = chalk.red(symbol);
+               }
+               // 格式化显示数值
+               const sizeDisplay = position.size >= 0 ? position.size.toFixed(6) : position.size.toFixed(6);
 
-         // 数据行
-         for (const position of this.positions) {
-            const pnlColor = position.unrealizedPnl >= 0 ? '\x1b[32m' : '\x1b[31m'; // 绿色/红色
-            const resetColor = '\x1b[0m';
+               let pnlDisplay = position.unrealizedPnl.toFixed(4);
+               let pnlPctDisplay = position.unrealizedPnlPct.toFixed(2);
+               if (position.unrealizedPnl > 0) {
+                  pnlDisplay = chalk.green(`${pnlDisplay}(${pnlPctDisplay})`);
+               } else if (position.unrealizedPnl < 0) {
+                  pnlDisplay = chalk.red(`${pnlDisplay}(${pnlPctDisplay})`);
+               }
 
-            // 格式化显示数值
-            const sizeDisplay = position.size >= 0 ? `+${position.size.toFixed(6)}` : position.size.toFixed(6);
-            const pnlDisplay = position.unrealizedPnl >= 0 ? `+${position.unrealizedPnl.toFixed(4)}` : position.unrealizedPnl.toFixed(4);
-            const pnlPctDisplay = position.unrealizedPnlPct >= 0 ? `+${position.unrealizedPnlPct.toFixed(2)}%` : `${position.unrealizedPnlPct.toFixed(2)}%`;
+               return [position.exchange, symbol, position.entryPrice.toFixed(2), sizeDisplay, position.currentPrice.toFixed(2), pnlDisplay];
+            }),
+         ];
 
-            console.log(
-               position.exchange.padEnd(12) +
-                  position.symbol.padEnd(15) +
-                  position.entryPrice.toFixed(2).padEnd(12) +
-                  sizeDisplay.padEnd(15) +
-                  position.currentPrice.toFixed(2).padEnd(12) +
-                  `${pnlColor}${pnlDisplay}${resetColor}`.padEnd(25) +
-                  `${pnlColor}${pnlPctDisplay}${resetColor}`,
-            );
-         }
+         console.log(table(positionData, positionConfig));
       }
 
-      console.log('\n' + '='.repeat(80));
+      console.log('\n' + '='.repeat(100));
       console.log('📋 委托订单汇总');
       console.log('='.repeat(80));
 
       if (this.orders.length === 0) {
          console.log('📭 暂无委托订单');
       } else {
-         // 表头
-         console.log('交易所'.padEnd(12) + '交易对'.padEnd(15) + '价格'.padEnd(12) + '数量'.padEnd(15) + '方向'.padEnd(8) + '类型'.padEnd(10) + '状态');
-         console.log('-'.repeat(80));
+         const orderConfig: TableUserConfig = {
+            columns: [
+               { alignment: 'left', width: 12 }, //
+               { alignment: 'left', width: 15 },
+               { alignment: 'right', width: 12 },
+               { alignment: 'right', width: 15 },
+               { alignment: 'left', width: 8 },
+               { alignment: 'left', width: 12 },
+               { alignment: 'left', width: 12 },
+            ],
+            drawHorizontalLine: () => false, // 只显示表头和表尾的分隔线
+         };
 
-         // 数据行
-         for (const order of this.orders) {
-            const sideColor = order.side === 'BUY' ? '\x1b[32m' : '\x1b[31m'; // 绿色买入/红色卖出
-            const resetColor = '\x1b[0m';
+         // 构建订单表格数据
+         const orderData = [
+            ['交易所', '交易对', '价格', '数量', '方向', '类型', '状态'],
+            ...this.orders.map(order => {
+               let sideCode = '';
+               if (order.side === 'BUY') {
+                  sideCode = chalk.green('BUY');
+               } else {
+                  sideCode = chalk.red('SELL');
+               }
+               return [order.exchange, order.symbol, order.price.toFixed(2), order.size.toFixed(6), sideCode, order.type, order.status];
+            }),
+         ];
 
-            console.log(order.exchange.padEnd(12) + order.symbol.padEnd(15) + order.price.toFixed(2).padEnd(12) + order.size.toFixed(6).padEnd(15) + `${sideColor}${order.side}${resetColor}`.padEnd(16) + order.type.padEnd(10) + order.status);
-         }
+         console.log(table(orderData, orderConfig));
       }
 
       console.log('\n' + '='.repeat(80));
@@ -353,11 +388,9 @@ class PortfolioViewer {
 
       // 计算总盈亏
       const totalPnl = this.positions.reduce((sum, pos) => sum + pos.unrealizedPnl, 0);
-      const totalPnlColor = totalPnl >= 0 ? '\x1b[32m' : '\x1b[31m';
-      const resetColor = '\x1b[0m';
-      const totalPnlDisplay = totalPnl >= 0 ? `+${totalPnl.toFixed(4)}` : totalPnl.toFixed(4);
+      const totalPnlDisplay = totalPnl >= 0 ? chalk.green(totalPnl.toFixed(4)) : chalk.red(totalPnl.toFixed(4));
 
-      console.log(`💰 总未实现盈亏: ${totalPnlColor}${totalPnlDisplay} USDT${resetColor}`);
+      console.log(`💰 总未实现盈亏: ${totalPnlDisplay} USDT`);
    }
 }
 
