@@ -241,18 +241,22 @@ export async function placeStopLossOrder(
   }
   const priceTick = opts?.priceTick ?? 0.1;
   const qtyStep = opts?.qtyStep ?? 0.001;
+  const isAster = String((adapter as any).id ?? "").toLowerCase() === "aster";
   const params: CreateOrderParams = {
     symbol,
     side,
     type,
     stopPrice: roundDownToTick(stopPrice, priceTick),
-    reduceOnly: "true",
     closePosition: "true",
     timeInForce: "GTC",
     // Do not round down stop quantity here to avoid underflow to exchange min; gateway will quantize precisely
     quantity,
     triggerType: "STOP_LOSS",
   };
+  // For Aster futures, STOP orders must not include reduceOnly; omit it specifically.
+  if (!isAster) {
+    params.reduceOnly = "true";
+  }
   // Avoid forcing price for STOP_MARKET globally; keep this exchange-specific in gateways
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
   lockOperating(locks, timers, pendings, type, log);
