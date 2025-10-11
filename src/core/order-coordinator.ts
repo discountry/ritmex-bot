@@ -247,15 +247,21 @@ export async function placeStopLossOrder(
     }
   }
   const priceTick = opts?.priceTick ?? 0.1;
+  const qtyStep = opts?.qtyStep ?? 0.001;
 
   const params: CreateOrderParams = {
     symbol,
     side,
     type,
+    quantity: roundQtyDownToStep(quantity, qtyStep),
     stopPrice: roundDownToTick(stopPrice, priceTick),
+    // Always mark reduce-only semantics; some exchanges (e.g. Aster) ignore this on STOP
+    reduceOnly: "true",
+    // Some exchanges prefer explicit close-position semantics; gateways will normalize
     closePosition: "true",
     timeInForce: "GTC",
-    triggerType: "STOP_LOSS",
+    // GRVT requires triggerType to match side semantics: BUY -> TAKE_PROFIT, SELL -> STOP_LOSS
+    triggerType: side === "BUY" ? "TAKE_PROFIT" : "STOP_LOSS",
   };
 
   // Avoid forcing price for STOP_MARKET globally; keep this exchange-specific in gateways
