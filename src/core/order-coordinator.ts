@@ -247,7 +247,7 @@ export async function placeStopLossOrder(
     }
   }
   const priceTick = opts?.priceTick ?? 0.1;
-  const qtyStep = opts?.qtyStep ?? 0.001;
+
   const params: CreateOrderParams = {
     symbol,
     side,
@@ -255,7 +255,6 @@ export async function placeStopLossOrder(
     stopPrice: roundDownToTick(stopPrice, priceTick),
     closePosition: "true",
     timeInForce: "GTC",
-    quantity,
     triggerType: "STOP_LOSS",
   };
 
@@ -343,16 +342,14 @@ export async function marketClose(
   const type = "MARKET";
   if (isOperating(locks, type)) return;
   if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, "市价平仓")) return;
-  const qtyStep = opts?.qtyStep ?? 0.001;
-  const roundedQty = roundQtyDownToStep(quantity, qtyStep);
-  const safeQty = roundedQty > 0 ? roundedQty : quantity;
+
   const params: CreateOrderParams = {
     symbol,
     side,
     type,
-    quantity: safeQty,
     closePosition: "true",
   };
+  
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
   lockOperating(locks, timers, pendings, type, log);
   try {
