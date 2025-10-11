@@ -78,7 +78,8 @@ export function lighterOrderToAster(symbol: string, order: LighterOrder): AsterO
     ? "SELL"
     : "BUY";
   return {
-    orderId: order.order_index,
+    // Use string order id to avoid precision loss; prefer on-chain order_index for cancellation
+    orderId: String(order.order_index ?? order.client_order_index ?? ""),
     clientOrderId: String(order.client_order_index ?? order.order_index ?? ""),
     symbol,
     side,

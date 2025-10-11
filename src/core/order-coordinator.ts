@@ -89,7 +89,14 @@ export async function deduplicateOrders(
   side: string,
   log: LogHandler
 ): Promise<void> {
-  const sameTypeOrders = openOrders.filter((o) => o.type === type && o.side === side);
+  // Treat STOP orders on some exchanges (e.g., Lighter) as LIMIT with stopPrice populated.
+  const sameTypeOrders = openOrders.filter((o) => {
+    const normalizedType = String(o.type).toUpperCase();
+    const isStopLike = Number.isFinite(Number(o.stopPrice)) && Number(o.stopPrice) > 0;
+    const matchesStop = type === "STOP_MARKET" && isStopLike && o.side === side;
+    const exactMatch = normalizedType === type && o.side === side;
+    return exactMatch || matchesStop;
+  });
   if (sameTypeOrders.length <= 1) return;
   sameTypeOrders.sort((a, b) => {
     const ta = b.updateTime || b.time || 0;
@@ -241,7 +248,6 @@ export async function placeStopLossOrder(
   }
   const priceTick = opts?.priceTick ?? 0.1;
   const qtyStep = opts?.qtyStep ?? 0.001;
-  const isAster = String((adapter as any).id ?? "").toLowerCase() === "aster";
   const params: CreateOrderParams = {
     symbol,
     side,
@@ -249,14 +255,10 @@ export async function placeStopLossOrder(
     stopPrice: roundDownToTick(stopPrice, priceTick),
     closePosition: "true",
     timeInForce: "GTC",
-    // Do not round down stop quantity here to avoid underflow to exchange min; gateway will quantize precisely
     quantity,
     triggerType: "STOP_LOSS",
   };
-  // For Aster futures, STOP orders must not include reduceOnly; omit it specifically.
-  if (!isAster) {
-    params.reduceOnly = "true";
-  }
+
   // Avoid forcing price for STOP_MARKET globally; keep this exchange-specific in gateways
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
   lockOperating(locks, timers, pendings, type, log);
@@ -299,8 +301,6 @@ export async function placeTrailingStopOrder(
     symbol,
     side,
     type,
-    // Do not round down trailing-stop quantity to avoid underflowing small positions to zero;
-    // let the exchange adapter handle precise quantization.
     quantity,
     reduceOnly: "true",
     activationPrice: roundDownToTick(activationPrice, priceTick),
@@ -351,8 +351,6 @@ export async function marketClose(
     side,
     type,
     quantity: safeQty,
-    reduceOnly: "true",
-    // Hint exchanges (like Paradex) to close the whole position and tolerate omitted size
     closePosition: "true",
   };
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);

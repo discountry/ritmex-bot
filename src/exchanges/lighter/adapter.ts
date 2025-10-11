@@ -108,13 +108,14 @@ export class LighterExchangeAdapter implements ExchangeAdapter {
 
   async cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void> {
     await this.ensureInitialized("cancelOrder");
-    await this.gateway.cancelOrder({ orderId: params.orderId });
+    // Accept both clientOrderId and order_index as strings; forward as-is to preserve precision
+    await this.gateway.cancelOrder({ orderId: String(params.orderId) });
   }
 
   async cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void> {
     await this.ensureInitialized("cancelOrders");
     for (const orderId of params.orderIdList) {
-      await this.gateway.cancelOrder({ orderId });
+      await this.gateway.cancelOrder({ orderId: String(orderId) });
     }
   }
 

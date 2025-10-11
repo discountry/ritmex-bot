@@ -312,7 +312,14 @@ export class LighterGateway {
     await this.ensureInitialized();
     const marketIndex = params.marketIndex ?? this.marketId;
     if (marketIndex == null) throw new Error("Market index unknown");
-    const indexValue = BigInt(typeof params.orderId === "string" ? Number(params.orderId) : params.orderId);
+    // Parse order id to BigInt without precision loss; prefer string input
+    let indexValue: bigint;
+    if (typeof params.orderId === "string") {
+      indexValue = BigInt(params.orderId);
+    } else {
+      // Fallback for numeric ids (may be unsafe if beyond 2^53-1)
+      indexValue = BigInt(Math.trunc(params.orderId));
+    }
     const { apiKeyIndex, nonce } = this.nonceManager.next();
     try {
       const signed = await this.signer.signCancelOrder({
@@ -323,6 +330,11 @@ export class LighterGateway {
       });
       const auth = await this.ensureAuthToken();
       await this.http.sendTransaction(signed.txType, signed.txInfo, { authToken: auth });
+      // Optimistically remove the order locally to avoid stale duplicates until WS confirms
+      const key = String(params.orderId);
+      this.orderMap.delete(key);
+      this.orders = Array.from(this.orderMap.values());
+      this.emitOrders();
     } catch (error) {
       this.nonceManager.acknowledgeFailure(apiKeyIndex);
       throw error;
