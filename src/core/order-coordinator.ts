@@ -353,7 +353,8 @@ export async function marketClose(
     symbol,
     side,
     type,
-    closePosition: "true",
+    quantity,
+    reduceOnly: "true",
   };
   
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
