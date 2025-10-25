@@ -3992,7 +3992,9 @@ event type is `ORDER_TRADE_UPDATE`.
     "E":1611646737479,		           // Event Time
     "T":1611646737476,		           // Transaction Time
     "ai":{							   // User's Account Configuration
-    "j":true						   // Multi-Assets Mode
+    "j":true,						   // Multi-Assets Mode
+    "f":true,                          // Specified token fee deduction
+    "d":true                           // Position mode: true for dual-side (hedge) mode, false for single-side (one-way) mode
     }
 }  
 ```

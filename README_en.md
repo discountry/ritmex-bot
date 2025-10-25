@@ -5,9 +5,10 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 * [Aster referral (30% fee discount)](https://www.asterdex.com/en/referral/4665f3)
 * [Binance referral link](https://www.binance.com/join?ref=KNKCA9XC)
 * [GRVT referral link](https://grvt.io/exchange/sign-up?ref=sea)
-* [Backpack referral link](https://backpack.exchange/join/41d60948-2a75-4d16-b7e9-523df74f2904)
+* [Backpack referral link](https://backpack.exchange/join/ritmex)
 * [edgex referral link](https://pro.edgex.exchange/referral/BULL)
 * [Paradex referral link](https://paradex.io/ref/xingxingjun)
+* [Apex referral link](https://join.omni.apex.exchange/RITHMEX)
 
 ## Documentation Map
 - [中文 README](README.md)

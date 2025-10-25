@@ -122,7 +122,7 @@ describe('GridEngine', () => {
       gridLevels: 3,
       orderSize: 0.1,
       maxPositionSize: 0.2,
-      refreshIntervalMs: 100,
+      refreshIntervalMs: 10,
       maxLogEntries: 50,
       priceTick: 0.1,
       qtyStep: 0.01,
@@ -142,16 +142,16 @@ describe('GridEngine', () => {
       adapter.emitOrders([]);
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      // Start the engine to begin processing
-      engine.start();
-
-      // Wait for engine to process and generate orders
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const snapshot = engine.getSnapshot();
-      const gridLines = snapshot.gridLines;
-      expect(gridLines).toHaveLength(3);
-      expect(snapshot.running).toBe(true);
+      // use internal syncGrid to generate orders without waiting for timers
+      const desired = (engine as any).computeDesiredOrders(150) as Array<{ side: string; price: string }>;
+      expect(desired).toHaveLength(3);
+      const buyOrders = desired.filter((order) => order.side === 'BUY');
+      const sellOrders = desired.filter((order) => order.side === 'SELL');
+      expect(buyOrders).toHaveLength(2);
+      expect(sellOrders).toHaveLength(1);
+      expect(Number(buyOrders[0]?.price)).toBeCloseTo(141.4, 1);
+      expect(Number(buyOrders[1]?.price)).toBeCloseTo(100, 6);
+      expect(Number(sellOrders[0]?.price)).toBeCloseTo(200, 6);
 
       engine.stop();
    });
@@ -162,16 +162,13 @@ describe('GridEngine', () => {
 
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
       adapter.emitOrders([]);
-      adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      engine.start();
+      const desired = (engine as any).computeDesiredOrders(150) as Array<{ side: string; reduceOnly: boolean }>;
+      const sells = desired.filter((order) => order.side === 'SELL');
+      const buys = desired.filter((order) => order.side === 'BUY');
 
-      // Wait for engine to process
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const snapshot = engine.getSnapshot();
-      expect(snapshot.direction).toBe('long');
-      expect(snapshot.running).toBe(true);
+      expect(buys.length).toBeGreaterThan(0);
+      expect(sells).toHaveLength(0);
 
       engine.stop();
    });
@@ -182,26 +179,21 @@ describe('GridEngine', () => {
 
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
       adapter.emitOrders([]);
-      adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      engine.start();
+      const desiredInitial = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+      const nearestBuy = desiredInitial.find((order) => order.side === 'BUY');
+      expect(nearestBuy).toBeTruthy();
+      const targetLevel = nearestBuy!.level;
 
-      // Wait for initial setup
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // Simulate position change
+      (engine as any).longExposure.set(targetLevel, baseConfig.orderSize);
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
-      await new Promise(resolve => setTimeout(resolve, 100));
 
-      const snapshot1 = engine.getSnapshot();
-      expect(snapshot1.position.positionAmt).toBe(baseConfig.orderSize);
+      const desiredAfterFill = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+      expect(desiredAfterFill.some((order) => order.level === targetLevel && order.side === 'BUY')).toBe(false);
 
-      // Clear position
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const snapshot2 = engine.getSnapshot();
-      expect(snapshot2.position.positionAmt).toBe(0);
+      const desiredAfterExit = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
+      expect(desiredAfterExit.some((order) => order.level === targetLevel && order.side === 'BUY')).toBe(true);
 
       engine.stop();
    });
@@ -212,19 +204,18 @@ describe('GridEngine', () => {
 
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
       adapter.emitOrders([]);
-      adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      engine.start();
+      const desiredHigh = (engine as any).computeDesiredOrders(2.45) as Array<{ level: number; side: string }>;
+      expect(desiredHigh.every((order) => {
+         const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
+         return isBuyLevel ? order.side === 'BUY' : order.side === 'SELL';
+      })).toBe(true);
 
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      const snapshot = engine.getSnapshot();
-      const gridLines = snapshot.gridLines;
-      expect(gridLines).toHaveLength(3);
-
-      // Verify grid structure is consistent
-      expect(gridLines[0]!.price).toBe(baseConfig.lowerPrice);
-      expect(gridLines[gridLines.length - 1]!.price).toBe(baseConfig.upperPrice);
+      const desiredLow = (engine as any).computeDesiredOrders(1.55) as Array<{ level: number; side: string }>;
+      expect(desiredLow.every((order) => {
+         const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
+         return isBuyLevel ? order.side === 'BUY' : order.side === 'SELL';
+      })).toBe(true);
 
       engine.stop();
    });
@@ -235,17 +226,21 @@ describe('GridEngine', () => {
 
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
       adapter.emitOrders([]);
-      adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      engine.start();
+      const desiredFull = (engine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
+      const sellCountFull = desiredFull.filter((order) => order.side === 'SELL').length;
+      expect(sellCountFull).toBeGreaterThan(0);
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const limitedHeadroomConfig = { ...baseConfig, maxPositionSize: baseConfig.orderSize * 2 };
+      const limitedEngine = new GridEngine(limitedHeadroomConfig, adapter as any, { now: () => 0 });
+      (limitedEngine as any).shortExposure.set(12, baseConfig.orderSize * 2);
 
-      const snapshot = engine.getSnapshot();
-      expect(snapshot.position.positionAmt).toBe(0);
-      expect(snapshot.running).toBe(true);
+      const desiredLimited = (limitedEngine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
+      const sellCountLimited = desiredLimited.filter((order) => order.side === 'SELL').length;
+      expect(sellCountLimited).toBeLessThanOrEqual(1);
 
       engine.stop();
+      limitedEngine.stop();
    });
 
    it('places reduce-only orders to close existing exposures', async () => {
@@ -254,14 +249,15 @@ describe('GridEngine', () => {
 
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
       adapter.emitOrders([]);
-      adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      engine.start();
+      const buyLevel = (engine as any).buyLevelIndices.slice(-1)[0];
+      (engine as any).longExposure.set(buyLevel, baseConfig.orderSize);
 
-      await new Promise(resolve => setTimeout(resolve, 100));
+      const desired = (engine as any).computeDesiredOrders(2.05) as Array<{ level: number; side: string; reduceOnly: boolean; amount: number }>;
 
-      const snapshot = engine.getSnapshot();
-      expect(snapshot.position.positionAmt).toBe(baseConfig.orderSize);
+      const closeOrder = desired.find((order) => order.reduceOnly && order.side === 'SELL');
+      expect(closeOrder).toBeTruthy();
+      expect(closeOrder!.amount).toBeCloseTo(baseConfig.orderSize);
 
       engine.stop();
    });
@@ -292,14 +288,22 @@ describe('GridEngine', () => {
       adapter.emitOrders([reduceOrder]);
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      engine.start();
+      await (engine as any).syncGrid(150);
 
-      await new Promise(resolve => setTimeout(resolve, 150));
+      const longExposure: Map<number, number> = (engine as any).longExposure;
+      const buyIndices: number[] = (engine as any).buyLevelIndices;
+
+      const totalExposure = [...longExposure.values()].reduce((acc, qty) => acc + qty, 0);
+      expect(totalExposure).toBeCloseTo(baseConfig.orderSize * 2, 6);
+      expect(longExposure.get(buyIndices.slice(-1)[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
+      expect(longExposure.get(buyIndices[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
 
       const snapshot = engine.getSnapshot();
-      expect(snapshot.position.positionAmt).toBe(baseConfig.orderSize * 2);
-      // Engine may have cancelled the existing order on startup
-      // Just verify position is tracked correctly
+      const reduceDesired = snapshot.desiredOrders.find((order) => order.side === 'SELL');
+      expect(reduceDesired).toBeTruthy();
+      expect(reduceDesired!.amount).toBeCloseTo(baseConfig.orderSize * 2, 6);
+      expect(Number(reduceDesired!.price)).toBeCloseTo(baseConfig.upperPrice, 6);
+      expect(adapter.cancelledOrders).toHaveLength(0);
 
       engine.stop();
    });
@@ -308,24 +312,15 @@ describe('GridEngine', () => {
       const adapter = new StubAdapter();
       const engine = new GridEngine(baseConfig, adapter, { now: () => Date.now() });
 
-      // Set up position BEFORE calling haltGrid
       adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0.2));
       adapter.emitOrders([]);
       adapter.emitTicker({ symbol: baseConfig.symbol, lastPrice: '150', openPrice: '150', highPrice: '150', lowPrice: '150', volume: '0', quoteVolume: '0' });
 
-      engine.start();
-
-      await new Promise(resolve => setTimeout(resolve, 100));
-
-      // Trigger halt
       (engine as any).stopReason = 'test stop';
       await (engine as any).haltGrid(90);
 
-      expect(adapter.cancelAllCount).toBeGreaterThanOrEqual(1);
-      // Market order should be created if position exists
-      if (adapter.marketOrders.length > 0) {
-         expect(adapter.marketOrders[0]!.type).toBe('MARKET');
-      }
+      expect(adapter.cancelAllCount).toBe(1);
+      expect(adapter.marketOrders).toHaveLength(1);
       expect(engine.getSnapshot().running).toBe(false);
 
       engine.stop();

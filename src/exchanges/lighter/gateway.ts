@@ -269,12 +269,24 @@ export class LighterGateway {
       await this.ensureInitialized();
       const marketIndex = params.marketIndex ?? this.marketId;
       if (marketIndex === null) { throw new Error('Market index unknown'); }
-      const indexValue = BigInt(typeof params.orderId === 'string' ? Number(params.orderId) : params.orderId);
+      // Parse order id to BigInt without precision loss; prefer string input
+      let indexValue: bigint;
+      if (typeof params.orderId === 'string') {
+         indexValue = BigInt(params.orderId);
+      } else {
+         // Fallback for numeric ids (may be unsafe if beyond 2^53-1)
+         indexValue = BigInt(Math.trunc(params.orderId));
+      }
       const { apiKeyIndex, nonce } = this.nonceManager.next();
       try {
          const signed = await this.signer.signCancelOrder({ marketIndex, orderIndex: indexValue, nonce, apiKeyIndex });
          const auth = await this.ensureAuthToken();
          await this.http.sendTransaction(signed.txType, signed.txInfo, { authToken: auth });
+         // Optimistically remove the order locally to avoid stale duplicates until WS confirms
+         const key = String(params.orderId);
+         this.orderMap.delete(key);
+         this.orders = Array.from(this.orderMap.values());
+         this.emitOrders();
       } catch (error) {
          this.nonceManager.acknowledgeFailure(apiKeyIndex);
          throw error;
@@ -282,12 +294,9 @@ export class LighterGateway {
    }
 
    async cancelAllOrders(params?: { timeInForce?: number; scheduleMs?: number; apiKeyIndex?: number }): Promise<void> {
-      if (!params) {
-         params = {};
-      }
       await this.ensureInitialized();
       const timeInForce = params?.timeInForce ?? 0;
-      const time = params?.scheduleMs !== null ? BigInt(params.scheduleMs ?? 0) : 0n;
+      const time = params?.scheduleMs !== null ? BigInt(params?.scheduleMs ?? 0) : 0n;
       const { apiKeyIndex, nonce } = this.nonceManager.next();
       try {
          const signed = await this.signer.signCancelAll({ timeInForce, scheduledTime: time, nonce, apiKeyIndex });

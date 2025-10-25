@@ -7,9 +7,10 @@
 * [Aster 30% 手续费优惠注册链接](https://www.asterdex.com/zh-CN/referral/4665f3)
 * [Binance 手续费优惠注册链接](https://www.binance.com/join?ref=KNKCA9XC)
 * [GRVT 手续费优惠注册链接](https://grvt.io/exchange/sign-up?ref=sea)
-* [Backpack 手续费优惠注册链接](https://backpack.exchange/join/41d60948-2a75-4d16-b7e9-523df74f2904)
+* [Backpack 手续费优惠注册链接](https://backpack.exchange/join/ritmex)
 * [edgex 手续费优惠注册链接](https://pro.edgex.exchange/referral/BULL)
 * [Paradex 手续费优惠注册链接](https://paradex.io/ref/xingxingjun)
+* [Apex 手续费优惠注册链接](https://join.omni.apex.exchange/SEA)
 
 ## 文档索引
 - [English README](README_en.md)

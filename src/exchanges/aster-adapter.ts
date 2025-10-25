@@ -101,11 +101,6 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
       }));
    }
 
-   async getOpenOrdersSnapshot(): Promise<AsterOrder[]> {
-      await this.ensureInitialized('getOpenOrdersSnapshot');
-      return this.gateway.getOpenOrdersSnapshot();
-   }
-
    async watchDepth(symbol: string, cb: DepthListener): Promise<void> {
       void this.ensureInitialized('watchDepth');
       this.gateway.onDepth(

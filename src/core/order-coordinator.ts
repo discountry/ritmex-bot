@@ -1,4 +1,5 @@
 import type { ExchangeAdapter } from '../exchanges/adapter';
+import { routeCloseOrder, routeLimitOrder, routeMarketOrder, routeStopOrder, routeTrailingStopOrder } from '../exchanges/order-router';
 import type { AsterOrder, CreateOrderParams } from '../exchanges/types';
 import { isUnknownOrderError } from '../utils/errors';
 import { formatPriceToString, roundDownToTick, roundQtyDownToStep } from '../utils/math';
@@ -49,7 +50,14 @@ export function unlockOperating(locks: OrderLockMap, timers: OrderTimerMap, pend
 }
 
 export async function deduplicateOrders(adapter: ExchangeAdapter, symbol: string, openOrders: AsterOrder[], locks: OrderLockMap, timers: OrderTimerMap, pendings: OrderPendingMap, type: string, side: string, log: LogHandler): Promise<void> {
-   const sameTypeOrders = openOrders.filter((o) => o.type === type && o.side === side);
+   // Treat STOP orders on some exchanges (e.g., Lighter) as LIMIT with stopPrice populated.
+   const sameTypeOrders = openOrders.filter((o) => {
+      const normalizedType = String(o.type).toUpperCase();
+      const isStopLike = Number.isFinite(Number(o.stopPrice)) && Number(o.stopPrice) > 0;
+      const matchesStop = type === 'STOP_MARKET' && isStopLike && o.side === side;
+      const exactMatch = normalizedType === type && o.side === side;
+      return exactMatch || matchesStop;
+   });
    if (sameTypeOrders.length <= 1) { return; }
    sameTypeOrders.sort((a, b) => {
       const ta = b.updateTime || b.time || 0;
@@ -95,25 +103,22 @@ export async function placeOrder(
    if (isOperating(locks, type)) { return; }
    const priceNum = Number(price);
    if (!enforceMarkPriceGuard(side, priceNum, guard, log, '限价单')) { return; }
-   const priceTick = opts?.priceTick ?? 0.1;
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = {
-      symbol,
-      side,
-      type,
-      quantity: roundQtyDownToStep(amount, qtyStep),
-      price: priceNum, // 直接使用字符串转换的数字，不再格式化
-      timeInForce: 'GTX',
-   };
-   if (reduceOnly) { params.reduceOnly = 'true'; }
+   const rawQuantity = Math.abs(amount);
+   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
+   const quantity = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
+   if (quantity <= 0) {
+      log('error', '限价单数量无效，跳过下单');
+      return;
+   }
    if (!opts?.skipDedupe) {
       await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    }
    lockOperating(locks, timers, pendings, type, log);
    try {
-      const order = await adapter.createOrder(params);
+      const order = await routeLimitOrder({ adapter, symbol, side, quantity, price: priceNum, timeInForce: 'GTX', reduceOnly: reduceOnly ? true : undefined });
       pendings[type] = String(order.orderId);
-      log('order', `挂限价单: ${side} @ ${params.price} 数量 ${params.quantity} reduceOnly=${reduceOnly}`);
+      log('order', `挂限价单: ${side} @ ${priceNum} 数量 ${quantity} reduceOnly=${reduceOnly}`);
       return order;
    } catch (err) {
       unlockOperating(locks, timers, pendings, type);
@@ -143,14 +148,19 @@ export async function placeMarketOrder(
    if (isOperating(locks, type)) { return; }
    if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, '市价单')) { return; }
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = { symbol, side, type, quantity: roundQtyDownToStep(amount, qtyStep) };
-   if (reduceOnly) { params.reduceOnly = 'true'; }
+   const rawQuantity = Math.abs(amount);
+   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
+   const quantity = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
+   if (quantity <= 0) {
+      log('error', '市价单数量无效，跳过下单');
+      return;
+   }
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {
-      const order = await adapter.createOrder(params);
+      const order = await routeMarketOrder({ adapter, symbol, side, quantity, reduceOnly: reduceOnly ? true : undefined });
       pendings[type] = String(order.orderId);
-      log('order', `市价单: ${side} 数量 ${params.quantity} reduceOnly=${reduceOnly}`);
+      log('order', `市价单: ${side} 数量 ${quantity} reduceOnly=${reduceOnly}`);
       return order;
    } catch (err) {
       unlockOperating(locks, timers, pendings, type);
@@ -192,25 +202,22 @@ export async function placeStopLossOrder(
    }
    const priceTick = opts?.priceTick ?? 0.1;
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = {
-      symbol,
-      side,
-      type,
-      stopPrice: roundDownToTick(stopPrice, priceTick),
-      reduceOnly: 'true',
-      closePosition: 'true',
-      timeInForce: 'GTC',
-      // Do not round down stop quantity here to avoid underflow to exchange min; gateway will quantize precisely
-      quantity,
-      triggerType: 'STOP_LOSS',
-   };
+   const normalizedStop = roundDownToTick(stopPrice, priceTick);
+   const rawQuantity = Math.abs(quantity);
+   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
+   const normalizedQty = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
+   if (normalizedQty <= 0) {
+      log('error', '止损单数量无效，跳过下单');
+      return;
+   }
+
    // Avoid forcing price for STOP_MARKET globally; keep this exchange-specific in gateways
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {
-      const order = await adapter.createOrder(params);
+      const order = await routeStopOrder({ adapter, symbol, side, quantity: normalizedQty, stopPrice: normalizedStop, timeInForce: 'GTC', reduceOnly: true, closePosition: true, triggerType: side === 'BUY' ? 'TAKE_PROFIT' : 'STOP_LOSS' });
       pendings[type] = String(order.orderId);
-      log('stop', `挂止损单: ${side} STOP_MARKET @ ${params.stopPrice}`);
+      log('stop', `挂止损单: ${side} STOP_MARKET @ ${normalizedStop}`);
       return order;
    } catch (err) {
       unlockOperating(locks, timers, pendings, type);
@@ -239,27 +246,27 @@ export async function placeTrailingStopOrder(
 ): Promise<AsterOrder | undefined> {
    const type = 'TRAILING_STOP_MARKET';
    if (isOperating(locks, type)) { return; }
+   if (!adapter.supportsTrailingStops()) {
+      log('error', '当前交易所不支持动态止盈单');
+      return;
+   }
    if (!enforceMarkPriceGuard(side, activationPrice, guard, log, '动态止盈单')) { return; }
    const priceTick = opts?.priceTick ?? 0.1;
    const qtyStep = opts?.qtyStep ?? 0.001;
-   const params: CreateOrderParams = {
-      symbol,
-      side,
-      type,
-      // Do not round down trailing-stop quantity to avoid underflowing small positions to zero;
-      // let the exchange adapter handle precise quantization.
-      quantity,
-      reduceOnly: 'true',
-      activationPrice: roundDownToTick(activationPrice, priceTick),
-      callbackRate,
-      timeInForce: 'GTC',
-   };
+   const normalizedActivation = roundDownToTick(activationPrice, priceTick);
+   const rawQuantity = Math.abs(quantity);
+   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
+   const normalizedQty = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
+   if (normalizedQty <= 0) {
+      log('error', '动态止盈单数量无效，跳过下单');
+      return;
+   }
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {
-      const order = await adapter.createOrder(params);
+      const order = await routeTrailingStopOrder({ adapter, symbol, side, quantity: normalizedQty, activationPrice: normalizedActivation, callbackRate, timeInForce: 'GTC', reduceOnly: true });
       pendings[type] = String(order.orderId);
-      log('order', `挂动态止盈单: ${side} activation=${params.activationPrice} callbackRate=${callbackRate}`);
+      log('order', `挂动态止盈单: ${side} activation=${normalizedActivation} callbackRate=${callbackRate}`);
       return order;
    } catch (err) {
       unlockOperating(locks, timers, pendings, type);
@@ -287,22 +294,20 @@ export async function marketClose(
    const type = 'MARKET';
    if (isOperating(locks, type)) { return; }
    if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, '市价平仓')) { return; }
-   const qtyStep = opts?.qtyStep ?? 0.001;
-   const roundedQty = roundQtyDownToStep(quantity, qtyStep);
-   const safeQty = roundedQty > 0 ? roundedQty : quantity;
-   const params: CreateOrderParams = {
-      symbol,
-      side,
-      type,
-      quantity: safeQty,
-      reduceOnly: 'true',
-      // Hint exchanges (like Paradex) to close the whole position and tolerate omitted size
-      closePosition: 'true',
-   };
+
+   const qtyStep = opts?.qtyStep ?? 0;
+   const rawQuantity = Math.abs(quantity);
+   const normalizedQtyRaw = qtyStep !== null ? roundQtyDownToStep(rawQuantity, qtyStep) : rawQuantity;
+   const normalizedQty = normalizedQtyRaw > 0 ? normalizedQtyRaw : rawQuantity;
+   if (normalizedQty <= 0) {
+      log('error', '市价平仓数量无效，跳过下单');
+      return;
+   }
+
    await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
    lockOperating(locks, timers, pendings, type, log);
    try {
-      const order = await adapter.createOrder(params);
+      const order = await routeCloseOrder({ adapter, symbol, side, quantity: normalizedQty, reduceOnly: true, closePosition: true });
       pendings[type] = String(order.orderId);
       log('close', `市价平仓: ${side}`);
    } catch (err) {

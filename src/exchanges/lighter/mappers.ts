@@ -49,7 +49,8 @@ export function toOrders(symbol: string, orders: LighterOrder[]): AsterOrder[] {
 export function lighterOrderToAster(symbol: string, order: LighterOrder): AsterOrder {
    const side: OrderSide = order.is_ask || order.side?.toLowerCase() === 'sell' || order.side?.toLowerCase() === 'ask' ? 'SELL' : 'BUY';
    return {
-      orderId: order.order_index,
+      // Use string order id to avoid precision loss; prefer on-chain order_index for cancellation
+      orderId: String(order.order_index ?? order.client_order_index ?? ''),
       clientOrderId: String(order.client_order_index ?? order.order_index ?? ''),
       symbol,
       side,
