@@ -92,10 +92,12 @@ export class TrendEngine {
    private readonly copyrightFingerprint = crypto.createHash('sha256').update(decryptCopyright()).digest('hex');
 
    private readonly listeners = new Map<TrendEngineEvent, Set<TrendEngineListener>>();
+   private precisionSync: Promise<void> | null = null;
 
    constructor(private readonly config: TradingConfig, private readonly exchange: ExchangeAdapter) {
       this.tradeLog = createTradeLog(this.config.maxLogEntries);
       this.rateLimit = new RateLimitController(this.config.pollIntervalMs, (type, detail) => this.tradeLog.push(type, detail));
+      this.syncPrecision();
       this.bootstrap();
    }
 
@@ -605,7 +607,11 @@ export class TrendEngine {
       }
       try {
          const position = getPosition(this.accountSnapshot, this.config.symbol);
-         const quantity = Math.abs(position.positionAmt) || this.config.tradeAmount;
+         const quantity = Math.abs(position.positionAmt);
+         const minQty = this.config.qtyStep > 0 ? this.config.qtyStep / 2 : 1e-12;
+         if (quantity <= minQty) {
+            return;
+         }
          await placeStopLossOrder(this.exchange, this.config.symbol, this.openOrders, this.locks, this.timers, this.pending, side, stopPrice, quantity, lastPrice, (type, detail) => this.tradeLog.push(type, detail), {
             markPrice: position.markPrice,
             maxPct: this.config.maxCloseSlippagePct,
@@ -640,7 +646,11 @@ export class TrendEngine {
       // 仅在成功创建新止损单后记录“移动止损”日志
       try {
          const position = getPosition(this.accountSnapshot, this.config.symbol);
-         const quantity = Math.abs(position.positionAmt) || this.config.tradeAmount;
+         const quantity = Math.abs(position.positionAmt);
+         const minQty = this.config.qtyStep > 0 ? this.config.qtyStep / 2 : 1e-12;
+         if (quantity <= minQty) {
+            return;
+         }
          const order = await placeStopLossOrder(this.exchange, this.config.symbol, this.openOrders, this.locks, this.timers, this.pending, side, nextStopPrice, quantity, lastPrice, (type, detail) => this.tradeLog.push(type, detail), {
             markPrice: position.markPrice,
             maxPct: this.config.maxCloseSlippagePct,
@@ -653,7 +663,11 @@ export class TrendEngine {
          // 回滚策略：尝试用原价恢复止损，以避免出现短时间内无止损保护
          try {
             const position = getPosition(this.accountSnapshot, this.config.symbol);
-            const quantity = Math.abs(position.positionAmt) || this.config.tradeAmount;
+            const quantity = Math.abs(position.positionAmt);
+            const minQty = this.config.qtyStep > 0 ? this.config.qtyStep / 2 : 1e-12;
+            if (quantity <= minQty) {
+               return;
+            }
             const restoreInvalid = (side === 'SELL' && existingStopPrice >= lastPrice) || (side === 'BUY' && existingStopPrice <= lastPrice);
             if (!restoreInvalid) {
                const restored = await placeStopLossOrder(this.exchange, this.config.symbol, this.openOrders, this.locks, this.timers, this.pending, side, existingStopPrice, quantity, lastPrice, (t, d) => this.tradeLog.push(t, d), {
@@ -682,6 +696,37 @@ export class TrendEngine {
       } catch (err) {
          this.tradeLog.push('error', `挂动态止盈失败: ${String(err)}`);
       }
+   }
+
+   private syncPrecision(): void {
+      if (this.precisionSync) { return; }
+      const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
+      if (!getPrecision) { return; }
+      this.precisionSync = getPrecision().then((precision) => {
+         if (!precision) { return; }
+         let updated = false;
+         if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
+            const delta = Math.abs(precision.priceTick - this.config.priceTick);
+            if (delta > 1e-12) {
+               this.config.priceTick = precision.priceTick;
+               updated = true;
+            }
+         }
+         if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
+            const delta = Math.abs(precision.qtyStep - this.config.qtyStep);
+            if (delta > 1e-12) {
+               this.config.qtyStep = precision.qtyStep;
+               updated = true;
+            }
+         }
+         if (updated) {
+            this.tradeLog.push('info', `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`);
+         }
+      }).catch((error) => {
+         this.tradeLog.push('error', `同步精度失败: ${extractMessage(error)}`);
+         this.precisionSync = null;
+         setTimeout(() => this.syncPrecision(), 2000);
+      });
    }
 
    private emitUpdate(): void {

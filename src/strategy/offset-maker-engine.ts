@@ -53,6 +53,9 @@ export class OffsetMakerEngine {
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
    private readonly events = new StrategyEventEmitter<MakerEvent, OffsetMakerEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
+   private priceTick: number = 0.1;
+   private qtyStep: number = 0.001;
+   private precisionSync: Promise<void> | null = null;
 
    private timer: ReturnType<typeof setInterval> | null = null;
    private processing = false;
@@ -77,6 +80,9 @@ export class OffsetMakerEngine {
    constructor(private readonly config: MakerConfig, private readonly exchange: ExchangeAdapter) {
       this.tradeLog = createTradeLog(this.config.maxLogEntries);
       this.rateLimit = new RateLimitController(this.config.refreshIntervalMs, (type, detail) => this.tradeLog.push(type, detail));
+      this.priceTick = Math.max(1e-9, this.config.priceTick);
+      this.qtyStep = Math.max(1e-9, this.qtyStep);
+      this.syncPrecision();
       // Debounce window defaults to 3x refresh interval, min 1s
       this.repriceDwellMs = Math.max(1000, this.config.refreshIntervalMs * 3);
       this.bootstrap();
@@ -242,7 +248,7 @@ export class OffsetMakerEngine {
          const finalAsk = latestAsk ?? topAsk!;
 
          // 直接使用orderbook价格，格式化为字符串避免精度问题
-         const priceDecimals = Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)));
+         const priceDecimals = this.getPriceDecimals();
          const closeBidPrice = formatPriceToString(finalBid, priceDecimals);
          const closeAskPrice = formatPriceToString(finalAsk, priceDecimals);
          const bidPrice = formatPriceToString(finalBid - this.config.bidOffset, priceDecimals);
@@ -293,7 +299,7 @@ export class OffsetMakerEngine {
       const absPosition = Math.abs(position.positionAmt);
       const side: 'BUY' | 'SELL' = position.positionAmt > 0 ? 'SELL' : 'BUY';
       const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
-      const priceDecimals = Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)));
+      const priceDecimals = this.getPriceDecimals();
       const closeBidPrice = topBid !== null ? formatPriceToString(topBid, priceDecimals) : null;
       const closeAskPrice = topAsk !== null ? formatPriceToString(topAsk, priceDecimals) : null;
       try {
@@ -301,7 +307,7 @@ export class OffsetMakerEngine {
             markPrice: position.markPrice,
             expectedPrice: side === 'SELL' ? (closeAskPrice !== null ? Number(closeAskPrice) : null) : (closeBidPrice !== null ? Number(closeBidPrice) : null),
             maxPct: this.config.maxCloseSlippagePct,
-         });
+         }, { qtyStep: this.qtyStep });
       } catch (error) {
          if (isUnknownOrderError(error)) {
             this.tradeLog.push('order', '限频强制平仓时订单已不存在');
@@ -365,7 +371,7 @@ export class OffsetMakerEngine {
             markPrice: position.markPrice,
             expectedPrice: Number(closeSidePrice) || null,
             maxPct: this.config.maxCloseSlippagePct,
-         });
+         }, { qtyStep: this.qtyStep });
       } catch (error) {
          if (isUnknownOrderError(error)) {
             this.tradeLog.push('order', '深度不平衡平仓时订单已不存在');
@@ -441,10 +447,7 @@ export class OffsetMakerEngine {
                (type, detail) => this.tradeLog.push(type, detail),
                target.reduceOnly,
                { markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice, maxPct: this.config.maxCloseSlippagePct },
-               {
-                  priceTick: this.config.priceTick,
-                  qtyStep: 0.001, // 默认数量步长
-               },
+               { priceTick: this.priceTick, qtyStep: this.qtyStep },
             );
             // Record last placed entry order timing and price
             if (!target.reduceOnly) {
@@ -481,7 +484,7 @@ export class OffsetMakerEngine {
                markPrice: position.markPrice,
                expectedPrice: Number(position.positionAmt > 0 ? bidPrice : askPrice) || null,
                maxPct: this.config.maxCloseSlippagePct,
-            });
+            }, { qtyStep: this.qtyStep });
          } catch (error) {
             if (isUnknownOrderError(error)) {
                this.tradeLog.push('order', '止损平仓时订单已不存在');
@@ -510,6 +513,43 @@ export class OffsetMakerEngine {
             this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
          });
       }
+   }
+
+   private syncPrecision(): void {
+      if (this.precisionSync) { return; }
+      const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
+      if (!getPrecision) { return; }
+      this.precisionSync = getPrecision().then((precision) => {
+         if (!precision) { return; }
+         let updated = false;
+         if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
+            if (Math.abs(precision.priceTick - this.priceTick) > 1e-12) {
+               this.priceTick = precision.priceTick;
+               this.config.priceTick = precision.priceTick;
+               updated = true;
+            }
+         }
+         if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
+            if (Math.abs(precision.qtyStep - this.qtyStep) > 1e-12) {
+               this.qtyStep = precision.qtyStep;
+               updated = true;
+            }
+         }
+         if (updated) {
+            this.tradeLog.push('info', `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`);
+         }
+      }).catch((error) => {
+         this.tradeLog.push('error', `同步精度失败: ${String(error)}`);
+         this.precisionSync = null;
+         setTimeout(() => this.syncPrecision(), 2000);
+      });
+   }
+
+   private getPriceDecimals(): number {
+      const tick = Math.max(1e-9, this.priceTick);
+      const raw = Math.log10(1 / tick);
+      if (!Number.isFinite(raw)) { return 0; }
+      return Math.max(0, Math.floor(raw + 1e-9));
    }
 
    private emitUpdate(): void {
@@ -548,7 +588,7 @@ export class OffsetMakerEngine {
          depthImbalance: this.lastImbalance,
          skipBuySide: this.lastSkipBuy,
          skipSellSide: this.lastSkipSell,
-         feedStatus: {} as any,
+         feedStatus: { account: true, orders: true, depth: true, ticker: true },
       };
    }
 

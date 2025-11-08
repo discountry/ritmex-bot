@@ -15,9 +15,11 @@ export function makeOrderPlan(openOrders: AsterOrder[], targets: OrderTarget[]):
       const orderPrice = String(order.price);
       const reduceOnly = order.reduceOnly === true;
       const matchedIndex = targets.findIndex((target, index) => {
-         return (
-            unmatched.has(index) && target.side === order.side && target.reduceOnly === reduceOnly && orderPrice === target.price // 直接使用字符串比较
-         );
+         const targetPrice = String(target.price);
+         const orderPriceValue = Number(orderPrice);
+         const targetPriceValue = Number(targetPrice);
+         const priceMatches = Number.isFinite(orderPriceValue) && Number.isFinite(targetPriceValue) ? Math.abs(orderPriceValue - targetPriceValue) <= 1e-8 : orderPrice === targetPrice;
+         return (unmatched.has(index) && target.side === order.side && target.reduceOnly === reduceOnly && priceMatches);
       });
       if (matchedIndex >= 0) {
          unmatched.delete(matchedIndex);

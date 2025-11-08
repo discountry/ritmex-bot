@@ -1,5 +1,5 @@
 import { extractMessage } from '../../utils/errors';
-import type { AccountListener, DepthListener, ExchangeAdapter, KlineListener, OrderListener, TickerListener } from '../adapter';
+import type { AccountListener, DepthListener, ExchangeAdapter, ExchangePrecision, KlineListener, OrderListener, TickerListener } from '../adapter';
 import type { AsterOrder, CreateOrderParams } from '../types';
 import { LighterGateway, type LighterGatewayOptions } from './gateway';
 
@@ -115,6 +115,16 @@ export class LighterExchangeAdapter implements ExchangeAdapter {
    async cancelAllOrders(_params: { symbol: string }): Promise<void> {
       await this.ensureInitialized('cancelAllOrders');
       await this.gateway.cancelAllOrders();
+   }
+
+   async getPrecision(): Promise<ExchangePrecision | null> {
+      try {
+         const precision = await this.gateway.getPrecision();
+         return { priceTick: precision.priceTick, qtyStep: precision.qtyStep, priceDecimals: precision.priceDecimals, sizeDecimals: precision.sizeDecimals, marketId: precision.marketId ?? undefined };
+      } catch (error) {
+         this.logError('precision', error);
+         return null;
+      }
    }
 
    private ensureInitialized(context?: string): Promise<void> {

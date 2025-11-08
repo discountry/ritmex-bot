@@ -965,7 +965,7 @@ function mapTicker(response: IApiTickerResponse, symbol: string): AsterTicker | 
 }
 
 function mapKlines(response: IApiCandlestickResponse, symbol: string): AsterKline[] {
-   return (response.result ?? []).map((entry) => ({
+   return (response.result ?? []).reverse().map((entry) => ({
       openTime: nsToMs(entry.open_time ?? Date.now() * ONE_SECOND_IN_NANOSECONDS),
       closeTime: nsToMs(entry.close_time ?? Date.now() * ONE_SECOND_IN_NANOSECONDS),
       open: entry.open ?? '0',

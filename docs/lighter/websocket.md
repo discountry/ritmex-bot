@@ -1,18 +1,16 @@
-WebSocket
-This page will help you get started with zkLighter WebSocket server.
-
-Connection
-URL: wss://mainnet.zklighter.elliot.ai/stream
+# WebSocket
+URL: `wss://mainnet.zklighter.elliot.ai/stream`
 
 You can directly connect to the WebSocket server using wscat:
 
-
+```
 wscat -c 'wss://mainnet.zklighter.elliot.ai/stream'
-Send Tx
+```
+
+
 You can send transactions using the websocket as follows:
 
-JSON
-
+```
 {
     "type": "jsonapi/sendtx",
     "data": {
@@ -20,32 +18,33 @@ JSON
         "tx_info": ...
     }
 }
-The tx_type options can be found in the SignerClient file, while tx_info can be generated using the sign methods in the SignerClient.
+```
 
-Example: ws_send_tx.py
 
-Send Batch Tx
+The _tx\_type_ options can be found in the [SignerClient](https://github.com/elliottech/lighter-python/blob/main/lighter/signer_client.py) file, while _tx\_info_ can be generated using the sign methods in the SignerClient.
+
+Example: [ws\_send\_tx.py](https://github.com/elliottech/lighter-python/blob/main/examples/ws_send_tx.py)
+
 You can send batch transactions to execute up to 50 transactions in a single message.
 
-JSON
-
+```
 {
     "type": "jsonapi/sendtxbatch",
     "data": {
-        "tx_types": [INTEGER],
-        "tx_infos": [tx_info]
+        "tx_types": "[INTEGER]",
+        "tx_infos": "[tx_info]"
     }
 }
-The tx_type options can be found in the SignerClient file, while tx_info can be generated using the sign methods in the SignerClient.
+```
 
-Example: ws_send_batch_tx.py
 
-Types
+The _tx\_type_ options can be found in the [SignerClient](https://github.com/elliottech/lighter-python/blob/main/lighter/signer_client.py) file, while _tx\_info_ can be generated using the sign methods in the SignerClient.
+
+Example: [ws\_send\_batch\_tx.py](https://github.com/elliottech/lighter-python/blob/main/examples/ws_send_batch_tx.py)
+
 We first need to define some types that appear often in the JSONs.
 
-Transaction JSON
-JSON
-
+```
 Transaction = {
     "hash": STRING,
     "type": INTEGER,
@@ -63,10 +62,12 @@ Transaction = {
     "sequence_index": INTEGER,
     "parent_hash": STRING
 }
+```
+
+
 Example:
 
-JSON
-
+```
 {
     "hash": "0xabc123456789def",
     "type": 15,
@@ -84,11 +85,12 @@ JSON
     "sequence_index": 5678,
     "parent_hash": "0xparenthash123456"
 }
-Used in: Transaction, Executed Transaction, Account Tx.
+```
 
-Order JSON
-JSON
 
+Used in: [Transaction](https://apibetadocs.lighter.xyz/docs/websocket-reference#transaction), [Executed Transaction](https://apibetadocs.lighter.xyz/docs/websocket-reference#executed-transaction), [Account Tx](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-tx).
+
+```
 Order = {
     "order_index": INTEGER,
     "client_order_index": INTEGER,
@@ -122,11 +124,12 @@ Order = {
     "block_height": INTEGER,
     "timestamp": INTEGER,
 }
-Used in: Account Market, Account All Orders, Account Orders.
+```
 
-Trade JSON
-JSON
 
+Used in: [Account Market](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-market), [Account All Orders](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-all-orders), [Account Orders](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-orders).
+
+```
 Trade = {
     "trade_id": INTEGER,
     "tx_hash": STRING,
@@ -153,10 +156,12 @@ Trade = {
     "maker_initial_margin_fraction_before": INTEGER (omitted when zero),
     "maker_position_sign_changed": BOOL (omitted when false),
 }
+```
+
+
 Example:
 
-JSON
-
+```
 {
     "trade_id": 401,
     "tx_hash": "0xabc123456789",
@@ -179,11 +184,12 @@ JSON
     "maker_entry_quote_before":"3075.396750",
     "maker_initial_margin_fraction_before":400
 }
-Used in: Trade, Account All, Account Market, Account All Trades.
+```
 
-Position JSON
-JSON
 
+Used in: [Trade](https://apibetadocs.lighter.xyz/docs/websocket-reference#trade), [Account All](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-all), [Account Market](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-market), [Account All Trades](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-all-trades).
+
+```
 Position = {
     "market_id": INTEGER,
     "symbol": STRING,
@@ -202,10 +208,12 @@ Position = {
     "margin_mode": INT,
     "allocated_margin": STRING,
 }
+```
+
+
 Example:
 
-JSON
-
+```
 {
     "market_id": 101,
     "symbol": "BTC-USD",
@@ -224,49 +232,56 @@ JSON
     "margin_mode": 1,
     "allocated_margin": "46342",
 }
-Used in: Account All, Account Market, Account All Positions.
+```
 
-PoolShares JSON
-JSON
 
+Used in: [Account All](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-all), [Account Market](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-market), [Account All Positions](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-all-positions).
+
+```
 PoolShares = {
     "public_pool_index": INTEGER,
     "shares_amount": INTEGER,
     "entry_usdc": STRING
 }
+```
+
+
 Example:
 
-JSON
-
+```
 {
     "public_pool_index": 1,
     "shares_amount": 100,
     "entry_usdc": "1000.00"
 }
-Used in: Account All, Account All Positions.
+```
 
-Channels
-Order Book
+
+Used in: [Account All](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-all), [Account All Positions](https://apibetadocs.lighter.xyz/docs/websocket-reference#account-all-positions).
+
 The order book channel sends the new ask and bid orders for the given market.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "order_book/{MARKET_INDEX}"
 }
-Example Subscription
+```
 
-JSON
 
+**Example Subscription**
+
+```
 {
     "type": "subscribe",
     "channel": "order_book/0"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "order_book:{MARKET_INDEX}",
     "offset": INTEGER,
@@ -288,10 +303,12 @@ JSON
     },
     "type": "update/order_book"
 }
-Example Response
+```
 
-JSON
 
+**Example Response**
+
+```
 {
     "channel": "order_book:0",
     "offset": 41692864,
@@ -313,35 +330,42 @@ JSON
     },
     "type": "update/order_book"
 }
-Market Stats
+```
+
+
 The market stats channel sends the market stat data for the given market.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "market_stats/{MARKET_INDEX}"
 }
+```
+
+
 or
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "market_stats/all"
 }
-Example Subscription
+```
 
-JSON
 
+**Example Subscription**
+
+```
 {
     "type": "subscribe",
     "channel": "market_stats/0"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "market_stats:{MARKET_INDEX}",
     "market_stats": {
@@ -361,10 +385,12 @@ JSON
     },
     "type": "update/market_stats"
 }
-Example Response
+```
 
-JSON
 
+**Example Response**
+
+```
 {
     "channel": "market_stats:0",
     "market_stats": {
@@ -384,37 +410,44 @@ JSON
     },
     "type": "update/market_stats"
 }
-Trade
+```
+
+
 The trade channel sends the new trade data for the given market.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "trade/{MARKET_INDEX}"
 }
-Example Subscription
+```
 
-JSON
 
+**Example Subscription**
+
+```
 {
     "type": "subscribe",
     "channel": "trade/0"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "trade:{MARKET_INDEX}",
     "trades": [Trade]
     ],
     "type": "update/trade"
 }
-Example Response
+```
 
-JSON
 
+**Example Response**
+
+```
 {
     "channel": "trade:0",
     "trades": [
@@ -437,27 +470,32 @@ JSON
     ],
     "type": "update/trade"
 }
-Account All
+```
+
+
 The account all channel sends specific account market data for all markets.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "account_all/{ACCOUNT_ID}"
 }
-Example Subscription
+```
 
-JSON
 
+**Example Subscription**
+
+```
 {
     "type": "subscribe",
     "channel": "account_all/1"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "account": INTEGER,
     "channel": "account_all:{ACCOUNT_ID}",
@@ -491,10 +529,12 @@ JSON
     },
     "type": "update/account_all"
 }
-Example Response
+```
 
-JSON
 
+**Example Response**
+
+```
 {
     "account": 10,
     "channel": "account_all:10",
@@ -574,29 +614,34 @@ JSON
     },
     "type": "update/account"
 }
-Account Market
+```
+
+
 The account market channel sends specific account market data for a market.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "account_market/{MARKET_ID}/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Example Subscription
+```
 
-JSON
 
+**Example Subscription**
+
+```
 {
     "type": "subscribe",
     "channel": "account_market/0/40",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "account": INTEGER,
     "channel": "account_all/{MARKET_ID}/{ACCOUNT_ID}",
@@ -614,27 +659,32 @@ JSON
     "trades": [Trade],
     "type": "update/account_market"
 }
-Account Stats
+```
+
+
 The account stats channel sends account stats data for the specific account.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "user_stats/{ACCOUNT_ID}"
 }
-Example Subscription
+```
 
-JSON
 
+**Example Subscription**
+
+```
 {
     "type": "subscribe",
     "channel": "user_stats/0"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "user_stats:{ACCOUNT_ID}",
     "stats": {
@@ -664,10 +714,12 @@ JSON
     },
     "type": "update/user_stats"
 }
-Example Response
+```
 
-JSON
 
+**Example Response**
+
+```
 {
     "channel": "user_stats:10",
     "stats": {
@@ -696,57 +748,65 @@ JSON
     },
     "type": "update/user_stats"
 }
-Transaction
+```
+
+
 The transaction channel sends all new transactions.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "transaction"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "transaction",
     "txs": [Transaction],
     "type": "update/transaction"
 }
-Executed Transaction
-The structure is the same as with Transaction channel. But this channel sends only executed transactions.
+```
 
-JSON
 
+The structure is the same as with [Transaction](#transaction) channel. But this channel sends only executed transactions.
+
+```
 {
     "type": "subscribe",
     "channel": "executed_transaction"
 }
-Account Tx
-The structure is the same as with Transaction channel. But this channel sends only transactions related to a specific account.
+```
 
-JSON
 
+The structure is the same as with [Transaction](#transaction) channel. But this channel sends only transactions related to a specific account.
+
+```
 {
     "type": "subscribe",
     "channel": "account_tx/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Account All Orders
+```
+
+
 The account all orders channel sends data about all the orders of an account.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "account_all_orders/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "account_all_orders:{ACCOUNT_ID}",
     "orders": {
@@ -754,38 +814,44 @@ JSON
     },
     "type": "update/account_all_orders"
 }
-Height
+```
+
+
 Blockchain height updates
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "height",
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "height",
     "height": INTEGER,
     "type": "update/height"
 }
-Pool data
+```
+
+
 Provides data about pool activities: trades, orders, positions, shares and funding histories.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "pool_data/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "pool_data:{ACCOUNT_ID}",
     "account": INTEGER,
@@ -804,20 +870,23 @@ JSON
     },
     "type": "subscribed/pool_data"
 }
-Pool info
+```
+
+
 Provides information about pools.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "pool_info/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "pool_info:{ACCOUNT_ID}",
     "pool_info": {
@@ -842,20 +911,23 @@ JSON
     },
     "type": "subscribed/pool_info"
 }
-Notification
+```
+
+
 Provides notifications received by an account. Notifications can be of three kinds: liquidation, deleverage, or announcement. Each kind has a different content structure.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "notification/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "notification:{ACCOUNT_ID}",
     "notifs": [
@@ -872,10 +944,12 @@ JSON
     ],
     "type": "subscribed/notification"
 }
-Liquidation Notification Content
+```
 
-JSON
 
+**Liquidation Notification Content**
+
+```
 {
     "id": STRING,
     "is_ask": BOOL,
@@ -886,10 +960,12 @@ JSON
     "timestamp": INTEGER,
     "avg_price": STRING
 }
-Deleverage Notification Content
+```
 
-JSON
 
+**Deleverage Notification Content**
+
+```
 {
     "id": STRING,
     "usdc_amount": STRING,
@@ -898,19 +974,23 @@ JSON
     "settlement_price": STRING,
     "timestamp": INTEGER
 }
-Announcement Notification Content
+```
 
-JSON
 
+**Announcement Notification Content**
+
+```
 {
     "title": STRING,
     "content": STRING, 
     "created_at": INTEGER
 }
-Example response
+```
 
-JSON
 
+**Example response**
+
+```
 {
     "channel": "notification:12345",
     "notifs": [
@@ -953,20 +1033,23 @@ JSON
     ],
     "type": "update/notification"
 }
-Account Orders
+```
+
+
 The account all orders channel sends data about the orders of an account on a certain market.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "account_orders/{MARKET_INDEX}/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "account": {ACCOUNT_INDEX}, 
     "channel": "account_orders:{MARKET_INDEX}",
@@ -976,20 +1059,23 @@ JSON
     },
     "type": "update/account_orders"
 }
-Account All Trades
+```
+
+
 The account all trades channel sends data about all the trades of an account.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "account_all_trades/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "account_all_trades:{ACCOUNT_ID}",
     "trades": {
@@ -1001,20 +1087,23 @@ JSON
     "daily_volume": FLOAT,
     "type": "update/account_all_trades"
 }
-Account All Positions
+```
+
+
 The account all orders channel sends data about all the order of an account.
 
-JSON
-
+```
 {
     "type": "subscribe",
     "channel": "account_all_positions/{ACCOUNT_ID}",
     "auth": "{AUTH_TOKEN}"
 }
-Response Structure
+```
 
-JSON
 
+**Response Structure**
+
+```
 {
     "channel": "account_all_positions:{ACCOUNT_ID}",
     "positions": {
@@ -1023,3 +1112,9 @@ JSON
     "shares": [PoolShares],
     "type": "update/account_all_positions"
 }
+```
+
+
+Updated 30 days ago
+
+* * *

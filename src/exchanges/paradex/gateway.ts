@@ -843,8 +843,8 @@ export class ParadexGateway {
          const positions = await fetchPositions.call(this.exchange);
          this.logger('fetchPositionsResponse', JSON.stringify(positions));
          if (Array.isArray(positions)) {
-            (balance as any).info ??= {};
-            (balance as any).info.positions = positions;
+            balance.info = balance.info ?? {};
+            balance.info.positions = positions;
          }
       } catch (error) {
          this.logger('fetchPositions', error);

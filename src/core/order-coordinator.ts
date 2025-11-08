@@ -298,7 +298,13 @@ export async function marketClose(
    const qtyStep = opts?.qtyStep ?? 0;
    const rawQuantity = Math.abs(quantity);
    const normalizedQtyRaw = qtyStep !== null ? roundQtyDownToStep(rawQuantity, qtyStep) : rawQuantity;
-   const normalizedQty = normalizedQtyRaw > 0 ? normalizedQtyRaw : rawQuantity;
+   let normalizedQty = normalizedQtyRaw > 0 ? normalizedQtyRaw : rawQuantity;
+   if (qtyStep !== null) {
+      const epsilon = Math.max(qtyStep * 1e-4, 1e-10);
+      if (Math.abs(rawQuantity - normalizedQty) <= epsilon) {
+         normalizedQty = rawQuantity;
+      }
+   }
    if (normalizedQty <= 0) {
       log('error', '市价平仓数量无效，跳过下单');
       return;

@@ -109,12 +109,21 @@ function mapOrderType(value?: string): OrderType {
 }
 
 export function toAccountSnapshot(symbol: string, details: LighterAccountDetails, positions: LighterPosition[] = [], assets: AsterAccountAsset[] = [], options?: { marketSymbol?: string | null; marketId?: number | null }): AsterAccountSnapshot {
-   const targetSymbol = options?.marketSymbol?.toUpperCase();
-   const targetMarketId = options?.marketId;
+   options = options ?? {};
+   const targetSymbol = options?.marketSymbol ?? null;
+   const targetMarketId = options?.marketId !== null && Number.isFinite(Number(options.marketId)) ? Number(options.marketId) : null;
    const filteredPositions = positions.filter((position) => {
-      const marketMatches = targetMarketId === null || (Number.isFinite(Number(position.market_id)) && Number(position.market_id) === Number(targetMarketId));
-      const symbolMatches = !targetSymbol || (typeof position.symbol === 'string' && position.symbol.toUpperCase() === targetSymbol);
-      return marketMatches && symbolMatches;
+      if (targetMarketId !== null) {
+         const positionMarketId = Number(position.market_id);
+         if (Number.isFinite(positionMarketId)) {
+            return positionMarketId === targetMarketId;
+         }
+         return targetSymbol ? symbolsMatch(position.symbol, targetSymbol) : false;
+      }
+      if (targetSymbol) {
+         return symbolsMatch(position.symbol, targetSymbol);
+      }
+      return true;
    });
    const transformedPositions = filteredPositions.map((position) => lighterPositionToAster(symbol, position));
    const aggregateUnrealized = transformedPositions.reduce((acc, pos) => acc + Number(pos.unrealizedProfit ?? 0), 0);
@@ -154,4 +163,24 @@ function lighterPositionToAster(symbol: string, position: LighterPosition): Aste
       marginType: position.margin_mode === 1 ? 'ISOLATED' : 'CROSS',
       markPrice: undefined,
    };
+}
+
+function symbolsMatch(source: string | null | undefined, target: string | null | undefined): boolean {
+   if (!source || !target) { return false; }
+   const sourceForms = normalizeSymbolForms(source);
+   const targetForms = normalizeSymbolForms(target);
+   if (!sourceForms.length || !targetForms.length) { return false; }
+   return sourceForms.some((value) => targetForms.includes(value));
+}
+
+function normalizeSymbolForms(value: string): string[] {
+   const upper = value.toUpperCase();
+   const sanitized = upper.replace(/[^A-Z0-9]/g, '');
+   const parts = upper.split(/[-:/]/).filter(Boolean);
+   const base = parts.length ? parts[0] : '';
+   const forms = new Set<string>();
+   if (upper) { forms.add(upper); }
+   if (sanitized) { forms.add(sanitized); }
+   if (base) { forms.add(base); }
+   return Array.from(forms);
 }

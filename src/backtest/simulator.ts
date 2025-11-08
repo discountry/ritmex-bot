@@ -5,7 +5,7 @@ export interface BacktestParams {
    tradeQty: number; // fallback fixed size in units
    feePct: number; // taker fee, e.g., 0.001
    slippagePct: number; // applied on fills
-   lossLimitPct?: number; // legacy percent stop vs entry (e.g., 0.01 == 1%)
+   lossLimitPct?: number; // legacy percent stop vs entry (e.g., 0.01 === 1%)
    trailingProfitPct?: number; // legacy activation threshold vs entry (e.g., 0.02)
    // ATR-based risk controls
    atrLen?: number; // ATR period

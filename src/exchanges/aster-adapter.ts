@@ -1,5 +1,5 @@
 import { extractMessage } from '../utils/errors';
-import type { AccountListener, DepthListener, ExchangeAdapter, KlineListener, OrderListener, TickerListener } from './adapter';
+import type { AccountListener, DepthListener, ExchangeAdapter, ExchangePrecision, KlineListener, OrderListener, TickerListener } from './adapter';
 import { AsterGateway } from './aster/client';
 import type { AsterDepth, AsterKline, AsterOrder, AsterTicker, CreateOrderParams } from './types';
 
@@ -150,5 +150,16 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
    async cancelAllOrders(params: { symbol: string }): Promise<void> {
       await this.ensureInitialized('cancelAllOrders');
       await this.gateway.cancelAllOrders(params);
+   }
+
+   async getPrecision(): Promise<ExchangePrecision | null> {
+      try {
+         const precision = await this.gateway.getPrecision(this.symbol);
+         if (!precision) { return null; }
+         return { priceTick: precision.priceTick, qtyStep: precision.qtyStep, priceDecimals: precision.priceDecimals, sizeDecimals: precision.sizeDecimals };
+      } catch (error) {
+         console.error('[AsterExchangeAdapter] getPrecision failed', error);
+         return null;
+      }
    }
 }

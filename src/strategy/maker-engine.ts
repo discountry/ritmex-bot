@@ -62,6 +62,9 @@ export class MakerEngine {
    private readonly tradeLog: ReturnType<typeof createTradeLog>;
    private readonly events = new StrategyEventEmitter<MakerEvent, MakerEngineSnapshot>();
    private readonly sessionVolume = new SessionVolumeTracker();
+   private priceTick: number = 0.1;
+   private qtyStep: number = 0.001;
+   private precisionSync: Promise<void> | null = null;
 
    private timer: ReturnType<typeof setInterval> | null = null;
    private processing = false;
@@ -82,6 +85,9 @@ export class MakerEngine {
    constructor(private readonly config: MakerConfig, private readonly exchange: ExchangeAdapter) {
       this.tradeLog = createTradeLog(this.config.maxLogEntries);
       this.rateLimit = new RateLimitController(this.config.refreshIntervalMs, (type, detail) => this.tradeLog.push(type, detail));
+      this.priceTick = Math.max(1e-9, this.config.priceTick);
+      this.qtyStep = Math.max(1e-9, this.qtyStep);
+      this.syncPrecision();
       this.bootstrap();
    }
 
@@ -239,7 +245,7 @@ export class MakerEngine {
          }
 
          // 直接使用orderbook价格，格式化为字符串避免精度问题
-         const priceDecimals = Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)));
+         const priceDecimals = this.getPriceDecimals();
          const closeBidPrice = formatPriceToString(topBid, priceDecimals);
          const closeAskPrice = formatPriceToString(topAsk, priceDecimals);
          const bidPrice = formatPriceToString(topBid - this.config.bidOffset, priceDecimals);
@@ -289,7 +295,7 @@ export class MakerEngine {
       if (Math.abs(position.positionAmt) < EPS) { return; }
       const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
       if (topBid === null || topAsk === null) { return; }
-      const priceDecimals = Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)));
+      const priceDecimals = this.getPriceDecimals();
       const closeBidPrice = formatPriceToString(topBid, priceDecimals);
       const closeAskPrice = formatPriceToString(topAsk, priceDecimals);
       await this.checkRisk(position, Number(closeBidPrice), Number(closeAskPrice));
@@ -366,10 +372,7 @@ export class MakerEngine {
                (type, detail) => this.tradeLog.push(type, detail),
                target.reduceOnly,
                { markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice, maxPct: this.config.maxCloseSlippagePct },
-               {
-                  priceTick: this.config.priceTick,
-                  qtyStep: 0.001, // 默认数量步长
-               },
+               { priceTick: this.priceTick, qtyStep: this.qtyStep },
             );
          } catch (error) {
             if (isInsufficientBalanceError(error)) {
@@ -409,7 +412,7 @@ export class MakerEngine {
                markPrice: position.markPrice,
                expectedPrice: Number(closeSidePrice) || null,
                maxPct: this.config.maxCloseSlippagePct,
-            });
+            }, { qtyStep: this.qtyStep });
          } catch (error) {
             if (isUnknownOrderError(error)) {
                this.tradeLog.push('order', '止损平仓时订单已不存在');
@@ -437,6 +440,43 @@ export class MakerEngine {
             this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
          });
       }
+   }
+
+   private syncPrecision(): void {
+      if (this.precisionSync) { return; }
+      const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
+      if (!getPrecision) { return; }
+      this.precisionSync = getPrecision().then((precision) => {
+         if (!precision) { return; }
+         let updated = false;
+         if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
+            if (Math.abs(precision.priceTick - this.priceTick) > 1e-12) {
+               this.priceTick = precision.priceTick;
+               this.config.priceTick = precision.priceTick;
+               updated = true;
+            }
+         }
+         if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
+            if (Math.abs(precision.qtyStep - this.qtyStep) > 1e-12) {
+               this.qtyStep = precision.qtyStep;
+               updated = true;
+            }
+         }
+         if (updated) {
+            this.tradeLog.push('info', `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`);
+         }
+      }).catch((error) => {
+         this.tradeLog.push('error', `同步精度失败: ${extractMessage(error)}`);
+         this.precisionSync = null;
+         setTimeout(() => this.syncPrecision(), 2000);
+      });
+   }
+
+   private getPriceDecimals(): number {
+      const tick = Math.max(1e-9, this.priceTick);
+      const raw = Math.log10(1 / tick);
+      if (!Number.isFinite(raw)) { return 0; }
+      return Math.max(0, Math.floor(raw + 1e-9));
    }
 
    private emitUpdate(): void {

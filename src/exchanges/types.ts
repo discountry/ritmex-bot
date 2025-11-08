@@ -318,6 +318,35 @@ export interface AsterSpotExchangeFilter {
    [key: string]: string | number | boolean | undefined;
 }
 
+export interface AsterFuturesSymbolFilter {
+   filterType: string;
+   tickSize?: string;
+   stepSize?: string;
+   minPrice?: string;
+   maxPrice?: string;
+   minQty?: string;
+   maxQty?: string;
+   [key: string]: string | number | boolean | undefined;
+}
+
+export interface AsterFuturesSymbolInfo {
+   symbol: string;
+   pair?: string;
+   contractType?: string;
+   pricePrecision?: number;
+   quantityPrecision?: number;
+   baseAssetPrecision?: number;
+   quotePrecision?: number;
+   underlyingType?: string;
+   filters?: AsterFuturesSymbolFilter[];
+}
+
+export interface AsterFuturesExchangeInfo {
+   timezone?: string;
+   serverTime?: number;
+   symbols?: AsterFuturesSymbolInfo[];
+}
+
 export interface AsterSpotAssetInfo {
    asset: string;
 }
