@@ -4,6 +4,7 @@ import type { AsterCredentials } from "./aster-adapter";
 import type { LighterCredentials } from "./lighter/adapter";
 import type { BackpackCredentials } from "./backpack/adapter";
 import type { ParadexCredentials } from "./paradex/adapter";
+import type { ExtendedCredentials } from "./extended/adapter";
 
 interface BuildAdapterOptions {
   symbol: string;
@@ -32,6 +33,11 @@ export function buildAdapterFromEnv(options: BuildAdapterOptions): ExchangeAdapt
   if (id === "paradex") {
     const credentials = resolveParadexCredentials();
     return createExchangeAdapter({ exchange: id, symbol, paradex: credentials });
+  }
+
+  if (id === "extended") {
+    const credentials = resolveExtendedCredentials(symbol);
+    return createExchangeAdapter({ exchange: id, symbol, extended: credentials });
   }
 
   return createExchangeAdapter({ exchange: id, symbol, grvt: { symbol } });
@@ -112,6 +118,25 @@ function resolveParadexCredentials(): ParadexCredentials {
   };
 
   return credentials;
+}
+
+function resolveExtendedCredentials(symbol: string): ExtendedCredentials {
+  const apiKey = process.env.EXTENDED_API_KEY;
+  const starkPrivateKey = process.env.EXTENDED_STARK_PRIVATE_KEY;
+  const vaultId = process.env.EXTENDED_VAULT_ID;
+  if (!apiKey || !starkPrivateKey || !vaultId) {
+    throw new Error("缺少 EXTENDED_API_KEY / EXTENDED_STARK_PRIVATE_KEY / EXTENDED_VAULT_ID 环境变量");
+  }
+  return {
+    apiKey,
+    starkPrivateKey,
+    vaultId,
+    market: process.env.EXTENDED_MARKET ?? symbol,
+    apiHost: process.env.EXTENDED_API_HOST,
+    streamHost: process.env.EXTENDED_STREAM_HOST,
+    privateStreamHost: process.env.EXTENDED_PRIVATE_STREAM_HOST,
+    userAgent: process.env.EXTENDED_USER_AGENT,
+  };
 }
 
 function isHex32(value: string): boolean {

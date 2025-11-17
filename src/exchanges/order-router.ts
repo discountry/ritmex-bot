@@ -13,8 +13,9 @@ import * as backpackOrders from "./backpack/order";
 import * as grvtOrders from "./grvt/order";
 import * as lighterOrders from "./lighter/order";
 import * as paradexOrders from "./paradex/order";
+import * as extendedOrders from "./extended/order";
 
-type ExchangeKey = "aster" | "backpack" | "grvt" | "lighter" | "paradex";
+type ExchangeKey = "aster" | "backpack" | "grvt" | "lighter" | "paradex" | "extended";
 
 interface ExchangeOrderHandlers {
   limit(intent: LimitOrderIntent): Promise<AsterOrder>;
@@ -60,9 +61,16 @@ const handlerMap: Record<ExchangeKey, ExchangeOrderHandlers> = {
     trailingStop: paradexOrders.createTrailingStopOrder,
     close: paradexOrders.createClosePositionOrder,
   },
+  extended: {
+    limit: extendedOrders.createLimitOrder,
+    market: extendedOrders.createMarketOrder,
+    stop: extendedOrders.createStopOrder,
+    trailingStop: extendedOrders.createTrailingStopOrder,
+    close: extendedOrders.createClosePositionOrder,
+  },
 };
 
-const knownExchanges: ExchangeKey[] = ["aster", "backpack", "grvt", "lighter", "paradex"];
+const knownExchanges: ExchangeKey[] = ["aster", "backpack", "grvt", "lighter", "paradex", "extended"];
 
 function normalizeExchangeId(value: string | undefined | null): string | undefined {
   if (!value) return undefined;
@@ -115,4 +123,3 @@ export function routeTrailingStopOrder(intent: TrailingStopOrderIntent): Promise
 export function routeCloseOrder(intent: ClosePositionIntent): Promise<AsterOrder> {
   return getHandlers(intent).close(intent);
 }
-

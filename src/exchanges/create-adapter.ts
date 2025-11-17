@@ -4,6 +4,7 @@ import { GrvtExchangeAdapter, type GrvtCredentials } from "./grvt/adapter";
 import { LighterExchangeAdapter, type LighterCredentials } from "./lighter/adapter";
 import { BackpackExchangeAdapter, type BackpackCredentials } from "./backpack/adapter";
 import { ParadexExchangeAdapter, type ParadexCredentials } from "./paradex/adapter";
+import { ExtendedExchangeAdapter, type ExtendedCredentials } from "./extended/adapter";
 
 export interface ExchangeFactoryOptions {
   symbol: string;
@@ -13,9 +14,10 @@ export interface ExchangeFactoryOptions {
   lighter?: LighterCredentials;
   backpack?: BackpackCredentials;
   paradex?: ParadexCredentials;
+  extended?: ExtendedCredentials;
 }
 
-export type SupportedExchangeId = "aster" | "grvt" | "lighter" | "backpack" | "paradex";
+export type SupportedExchangeId = "aster" | "grvt" | "lighter" | "backpack" | "paradex" | "extended";
 
 export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   const fallback = (value ?? process.env.EXCHANGE ?? process.env.TRADE_EXCHANGE ?? "aster")
@@ -26,6 +28,7 @@ export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   if (fallback === "lighter") return "lighter";
   if (fallback === "backpack") return "backpack";
   if (fallback === "paradex") return "paradex";
+  if (fallback === "extended") return "extended";
   return "aster";
 }
 
@@ -34,6 +37,7 @@ export function getExchangeDisplayName(id: SupportedExchangeId): string {
   if (id === "lighter") return "Lighter";
   if (id === "backpack") return "Backpack";
   if (id === "paradex") return "Paradex";
+  if (id === "extended") return "Extended";
   return "AsterDex";
 }
 
@@ -50,6 +54,9 @@ export function createExchangeAdapter(options: ExchangeFactoryOptions): Exchange
   }
   if (id === "paradex") {
     return new ParadexExchangeAdapter({ ...options.paradex, symbol: options.symbol });
+  }
+  if (id === "extended") {
+    return new ExtendedExchangeAdapter({ ...options.extended, market: options.symbol });
   }
   return new AsterExchangeAdapter({ ...options.aster, symbol: options.symbol });
 }

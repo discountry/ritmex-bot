@@ -30,6 +30,7 @@ const SYMBOL_PRIORITY_BY_EXCHANGE: Record<SupportedExchangeId, { envKeys: string
   lighter: { envKeys: ["LIGHTER_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDT" },
   backpack: { envKeys: ["BACKPACK_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDC" },
   paradex: { envKeys: ["PARADEX_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC/USDC" },
+  extended: { envKeys: ["EXTENDED_MARKET", "EXTENDED_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-USD" },
 };
 
 export function resolveSymbolFromEnv(explicitExchangeId?: SupportedExchangeId | string | null): string {
