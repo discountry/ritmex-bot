@@ -159,8 +159,8 @@ export const gridConfig: GridConfig = {
   refreshIntervalMs: parseNumber(process.env.GRID_REFRESH_INTERVAL_MS, 800),
   priceTick: parseNumber(process.env.GRID_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
   qtyStep: parseNumber(process.env.GRID_QTY_STEP ?? process.env.QTY_STEP, 0.001),
-  levelsPerSide: Math.max(5, Math.floor(parseNumber(process.env.GRID_LEVELS_PER_SIDE, 24))),
-  spacingPct: Math.max(0.0002, parseNumber(process.env.GRID_SPACING_PCT, 0.0005)),
+  levelsPerSide: Math.max(5, Math.floor(parseNumber(process.env.GRID_LEVELS_PER_SIDE, 36))),
+  spacingPct: Math.max(0.0001, parseNumber(process.env.GRID_SPACING_PCT, 0.00025)),
   stopLossBufferPct: Math.max(0.001, parseNumber(process.env.GRID_STOP_BUFFER_PCT, 0.003)),
   maxLogEntries: parseNumber(process.env.GRID_MAX_LOG_ENTRIES, 200),
 };
