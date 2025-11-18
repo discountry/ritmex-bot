@@ -381,6 +381,7 @@ export class GridEngine {
   private buildDesiredOrders(): DesiredGridOrder[] {
     if (!this.gridReady || this.gridSpacing == null) return [];
     const desired: DesiredGridOrder[] = [];
+    const absPos = Math.abs(this.position.positionAmt);
     for (const level of this.levels) {
       if (level.blockedUntil && this.now() < level.blockedUntil) {
         continue;
@@ -405,6 +406,20 @@ export class GridEngine {
           intent: "ENTRY",
         });
       }
+    }
+    // Apply max position guard: if net仓位已达上限，跳过会增大仓位的开仓单
+    if (this.config.maxPositionSize > 0) {
+      return desired.filter((order) => {
+        if (order.intent !== "ENTRY") return true;
+        // opening in same direction as current position increases abs position
+        if (this.position.positionAmt >= 0 && order.side === "BUY") {
+          return absPos + order.amount <= this.config.maxPositionSize + EPSILON;
+        }
+        if (this.position.positionAmt <= 0 && order.side === "SELL") {
+          return absPos + order.amount <= this.config.maxPositionSize + EPSILON;
+        }
+        return true;
+      });
     }
     return desired;
   }

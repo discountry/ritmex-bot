@@ -139,7 +139,7 @@ export function GridApp({ onExit }: GridAppProps) {
         <Box flexDirection="column" marginRight={4}>
           <Text color="greenBright">网格配置</Text>
           <Text>
-            单笔数量: {formatNumber(gridConfig.tradeAmount, 6)} ｜ 每侧格子数: {gridConfig.levelsPerSide}
+            单笔数量: {formatNumber(gridConfig.tradeAmount, 6)} ｜ 每侧格子数: {gridConfig.levelsPerSide} ｜ 最大仓位: {formatNumber(gridConfig.maxPositionSize, 6)}
           </Text>
           <Text>
             网格步长: {(gridConfig.spacingPct * 100).toFixed(3)}% ｜ 止损缓冲: {(gridConfig.stopLossBufferPct * 100).toFixed(3)}%

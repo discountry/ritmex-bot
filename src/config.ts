@@ -126,6 +126,7 @@ export interface GridConfig {
   spacingPct: number;
   stopLossBufferPct: number;
   maxLogEntries: number;
+  maxPositionSize: number;
 }
 
 const resolveBasisSymbol = (envKeys: string[], fallback: string): string => {
@@ -153,17 +154,27 @@ export const basisConfig: BasisArbConfig = {
   arbAmount: parseNumber(process.env.ARB_AMOUNT, parseNumber(process.env.TRADE_AMOUNT, 0)),
 };
 
+const resolveGridMaxPosition = (tradeAmount: number): number => {
+  const fallback = Math.max(tradeAmount * 10, tradeAmount);
+  const raw = process.env.GRID_MAX_POSITION_SIZE ?? process.env.GRID_MAX_POSITION ?? process.env.GRID_POSITION_CAP;
+  const parsed = parseNumber(raw, fallback);
+  return parsed > 0 ? parsed : fallback;
+};
+
 export const gridConfig: GridConfig = {
   symbol: resolveSymbolFromEnv(),
   tradeAmount: parseNumber(process.env.TRADE_AMOUNT, 0.001),
   refreshIntervalMs: parseNumber(process.env.GRID_REFRESH_INTERVAL_MS, 800),
   priceTick: parseNumber(process.env.GRID_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
   qtyStep: parseNumber(process.env.GRID_QTY_STEP ?? process.env.QTY_STEP, 0.001),
-  levelsPerSide: Math.max(5, Math.floor(parseNumber(process.env.GRID_LEVELS_PER_SIDE, 36))),
+  levelsPerSide: Math.max(5, Math.floor(parseNumber(process.env.GRID_LEVELS_PER_SIDE, 15))),
   spacingPct: Math.max(0.0001, parseNumber(process.env.GRID_SPACING_PCT, 0.00025)),
   stopLossBufferPct: Math.max(0.001, parseNumber(process.env.GRID_STOP_BUFFER_PCT, 0.003)),
   maxLogEntries: parseNumber(process.env.GRID_MAX_LOG_ENTRIES, 200),
+  maxPositionSize: 0, // placeholder updated below
 };
+
+gridConfig.maxPositionSize = resolveGridMaxPosition(gridConfig.tradeAmount);
 
 export function isBasisStrategyEnabled(): boolean {
   const raw = process.env.ENABLE_BASIS_STRATEGY;
