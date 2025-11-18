@@ -9,6 +9,7 @@ export interface BaseOrderIntent {
   reduceOnly?: boolean;
   closePosition?: boolean;
   timeInForce?: TimeInForce | "GTX";
+  clientOrderId?: string;
 }
 
 export interface LimitOrderIntent extends BaseOrderIntent {
@@ -39,4 +40,3 @@ export function toStringBoolean(value: boolean | undefined): "true" | "false" | 
   if (value === undefined) return undefined;
   return value ? "true" : "false";
 }
-

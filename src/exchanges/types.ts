@@ -25,6 +25,7 @@ export interface CreateOrderParams {
   reduceOnly?: StringBoolean;
   closePosition?: StringBoolean;
   triggerType?: "UNSPECIFIED" | "TAKE_PROFIT" | "STOP_LOSS";
+  clientOrderId?: string;
 }
 
 export interface AsterAccountPosition {

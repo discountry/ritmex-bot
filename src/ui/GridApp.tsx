@@ -118,10 +118,10 @@ export function GridApp({ onExit }: GridAppProps) {
       <Box flexDirection="column" marginBottom={1}>
         <Text color="cyanBright">Grid Strategy Dashboard</Text>
         <Text>
-          交易所: {exchangeName} ｜ 交易对: {snapshot.symbol} ｜ 状态: {snapshot.running ? "运行中" : "暂停"} ｜ 方向: {snapshot.direction}
+          交易所: {exchangeName} ｜ 交易对: {snapshot.symbol} ｜ 状态: {snapshot.running ? "运行中" : "暂停"}
         </Text>
         <Text>
-          实时价格: {formatNumber(snapshot.lastPrice, 4)} ｜ 下界: {formatNumber(snapshot.lowerPrice, 4)} ｜ 上界: {formatNumber(snapshot.upperPrice, 4)} ｜ 网格数量: {snapshot.gridLines.length}
+          实时价格: {formatNumber(snapshot.lastPrice, 4)} ｜ 中心价: {formatNumber(snapshot.centerPrice, 4)} ｜ 下界: {formatNumber(snapshot.lowerPrice, 4)} ｜ 上界: {formatNumber(snapshot.upperPrice, 4)} ｜ 网格数量: {snapshot.gridLines.length}
         </Text>
         <Text color="gray">数据状态:
           {feedEntries.map((entry, index) => (
@@ -139,10 +139,10 @@ export function GridApp({ onExit }: GridAppProps) {
         <Box flexDirection="column" marginRight={4}>
           <Text color="greenBright">网格配置</Text>
           <Text>
-            单笔数量: {formatNumber(gridConfig.orderSize, 6)} ｜ 最大仓位: {formatNumber(gridConfig.maxPositionSize, 6)}
+            单笔数量: {formatNumber(gridConfig.tradeAmount, 6)} ｜ 每侧格子数: {gridConfig.levelsPerSide}
           </Text>
           <Text>
-            止损阈值: {(gridConfig.stopLossPct * 100).toFixed(2)}% ｜ 重启阈值: {(gridConfig.restartTriggerPct * 100).toFixed(2)}% ｜ 自动重启: {gridConfig.autoRestart ? "启用" : "关闭"}
+            网格步长: {(gridConfig.spacingPct * 100).toFixed(3)}% ｜ 止损缓冲: {(gridConfig.stopLossBufferPct * 100).toFixed(3)}%
           </Text>
           <Text>
             刷新间隔: {gridConfig.refreshIntervalMs} ms

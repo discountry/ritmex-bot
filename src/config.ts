@@ -116,25 +116,16 @@ export interface BasisArbConfig {
   arbAmount: number; // base asset amount to arb (e.g., ASTER amount when ASTERUSDT)
 }
 
-export type GridDirection = "both" | "long" | "short";
-
 export interface GridConfig {
   symbol: string;
-  lowerPrice: number;
-  upperPrice: number;
-  gridLevels: number;
-  orderSize: number;
-  maxPositionSize: number;
+  tradeAmount: number;
   refreshIntervalMs: number;
-  maxLogEntries: number;
   priceTick: number;
   qtyStep: number;
-  direction: GridDirection;
-  stopLossPct: number;
-  restartTriggerPct: number;
-  autoRestart: boolean;
-  gridMode: "geometric";
-  maxCloseSlippagePct: number;
+  levelsPerSide: number;
+  spacingPct: number;
+  stopLossBufferPct: number;
+  maxLogEntries: number;
 }
 
 const resolveBasisSymbol = (envKeys: string[], fallback: string): string => {
@@ -162,48 +153,17 @@ export const basisConfig: BasisArbConfig = {
   arbAmount: parseNumber(process.env.ARB_AMOUNT, parseNumber(process.env.TRADE_AMOUNT, 0)),
 };
 
-const resolveGridDirection = (raw: string | undefined, fallback: GridDirection): GridDirection => {
-  if (!raw) return fallback;
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === "long" || normalized === "long-only") return "long";
-  if (normalized === "short" || normalized === "short-only") return "short";
-  if (normalized === "both" || normalized === "dual" || normalized === "bi" || normalized === "two-way") return "both";
-  return fallback;
-};
-
-const resolveGridMaxPosition = (orderSize: number, levels: number): number => {
-  const fallback = Math.max(orderSize * Math.max(levels - 1, 1), orderSize);
-  const raw = process.env.GRID_MAX_POSITION_SIZE ?? process.env.GRID_MAX_POSITION ?? process.env.GRID_POSITION_CAP;
-  const parsed = parseNumber(raw, fallback);
-  return parsed > 0 ? parsed : fallback;
-};
-
 export const gridConfig: GridConfig = {
   symbol: resolveSymbolFromEnv(),
-  lowerPrice: parseNumber(process.env.GRID_LOWER_PRICE ?? process.env.GRID_LOWER_BOUND, 0),
-  upperPrice: parseNumber(process.env.GRID_UPPER_PRICE ?? process.env.GRID_UPPER_BOUND, 0),
-  gridLevels: Math.max(2, Math.floor(parseNumber(process.env.GRID_LEVELS, 10))),
-  orderSize: parseNumber(process.env.GRID_ORDER_SIZE, parseNumber(process.env.TRADE_AMOUNT, 0.001)),
-  maxPositionSize: 0, // placeholder, replaced below
-  refreshIntervalMs: parseNumber(process.env.GRID_REFRESH_INTERVAL_MS, 1_000),
-  maxLogEntries: parseNumber(process.env.GRID_MAX_LOG_ENTRIES, 200),
+  tradeAmount: parseNumber(process.env.TRADE_AMOUNT, 0.001),
+  refreshIntervalMs: parseNumber(process.env.GRID_REFRESH_INTERVAL_MS, 800),
   priceTick: parseNumber(process.env.GRID_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
   qtyStep: parseNumber(process.env.GRID_QTY_STEP ?? process.env.QTY_STEP, 0.001),
-  direction: resolveGridDirection(process.env.GRID_DIRECTION, "both"),
-  stopLossPct: Math.max(0, parseNumber(process.env.GRID_STOP_LOSS_PCT, 0.01)),
-  restartTriggerPct: Math.max(0, parseNumber(process.env.GRID_RESTART_TRIGGER_PCT, 0.01)),
-  autoRestart: parseBoolean(process.env.GRID_AUTO_RESTART_ENABLED ?? process.env.GRID_ENABLE_AUTO_RESTART, true),
-  gridMode: "geometric",
-  maxCloseSlippagePct: Math.max(
-    0,
-    parseNumber(
-      process.env.GRID_MAX_CLOSE_SLIPPAGE_PCT ?? process.env.MAX_CLOSE_SLIPPAGE_PCT,
-      0.05
-    )
-  ),
+  levelsPerSide: Math.max(5, Math.floor(parseNumber(process.env.GRID_LEVELS_PER_SIDE, 24))),
+  spacingPct: Math.max(0.0002, parseNumber(process.env.GRID_SPACING_PCT, 0.0005)),
+  stopLossBufferPct: Math.max(0.001, parseNumber(process.env.GRID_STOP_BUFFER_PCT, 0.003)),
+  maxLogEntries: parseNumber(process.env.GRID_MAX_LOG_ENTRIES, 200),
 };
-
-gridConfig.maxPositionSize = resolveGridMaxPosition(gridConfig.orderSize, gridConfig.gridLevels);
 
 export function isBasisStrategyEnabled(): boolean {
   const raw = process.env.ENABLE_BASIS_STRATEGY;

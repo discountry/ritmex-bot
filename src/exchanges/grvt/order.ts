@@ -22,6 +22,9 @@ function applyCommonFields(params: CreateOrderParams, intent: BaseOrderIntent): 
   if (intent.closePosition !== undefined) {
     params.closePosition = toStringBoolean(intent.closePosition);
   }
+  if (intent.clientOrderId) {
+    params.clientOrderId = intent.clientOrderId;
+  }
   return params;
 }
 
@@ -34,6 +37,7 @@ export async function createLimitOrder(intent: LimitOrderIntent): Promise<AsterO
       quantity: intent.quantity,
       price: intent.price,
       timeInForce: intent.timeInForce ?? "GTX",
+      clientOrderId: intent.clientOrderId,
     },
     intent
   );
@@ -89,4 +93,3 @@ export async function createClosePositionOrder(intent: ClosePositionIntent): Pro
   );
   return intent.adapter.createOrder(params);
 }
-

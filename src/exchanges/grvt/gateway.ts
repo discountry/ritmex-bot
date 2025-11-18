@@ -1201,6 +1201,7 @@ function toApiOrderPayload(order: GrvtSignedOrder): IOrder {
   const metadata = order.metadata ? toApiOrderMetadata(order.metadata) : undefined;
   return {
     ...order,
+    client_order_id: order.metadata?.client_order_id,
     time_in_force: toApiTimeInForce(order.time_in_force),
     metadata,
   };
@@ -1300,7 +1301,7 @@ function buildUnsignedOrder(params: {
 
   const trigger = buildTriggerMetadata(orderParams);
   const metadata = {
-    client_order_id: generateClientOrderId(),
+    client_order_id: orderParams.clientOrderId ?? generateClientOrderId(),
     ...(trigger ? { trigger } : {}),
   };
 
