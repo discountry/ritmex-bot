@@ -599,8 +599,8 @@ export class ParadexGateway {
 
     try {
       const isClosePosition = (extraParams as any).closePosition === true;
-      // Only omit amount for MARKET close-position orders; STOP requires explicit size
-      const shouldOmitAmount = isClosePosition && type === "market";
+      // Paradex requires explicit size for close-position MARKET orders; always send amount
+      const shouldOmitAmount = false;
       const amountArg: any = shouldOmitAmount ? undefined : amount;
       if (!shouldOmitAmount && amountArg != null && extraParams.size === undefined) {
         extraParams.size = amountArg.toString();
