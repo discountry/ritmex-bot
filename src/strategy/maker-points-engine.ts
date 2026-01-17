@@ -26,6 +26,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import { HourlyStatsTracker } from "./common/hourly-stats";
 import { BinanceDepthTracker, type BinanceDepthSnapshot } from "./common/binance-depth";
 import { buildBpsTargets } from "./maker-points-logic";
 import { t } from "../i18n";
@@ -99,6 +100,7 @@ export class MakerPointsEngine {
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<MakerPointsEvent, MakerPointsSnapshot>();
   private readonly sessionVolume = new SessionVolumeTracker();
+  private readonly hourlyStats = new HourlyStatsTracker();
   private readonly rateLimit: RateLimitController;
   private readonly binanceDepth: BinanceDepthTracker;
   private readonly notifier: NotificationSender;
@@ -148,6 +150,7 @@ export class MakerPointsEngine {
 
   private lastPositionAmt = 0;
   private lastPositionSide: "LONG" | "SHORT" | "FLAT" = "FLAT";
+  private lastWalletBalance: number | null = null;
 
   // 连接保护相关状态
   private connectionState: "connected" | "disconnected" = "connected";
@@ -183,6 +186,7 @@ export class MakerPointsEngine {
     if (this.timer) return;
     this.timer = setInterval(() => {
       void this.tick();
+      void this.checkHourlyReport();
     }, this.config.refreshIntervalMs);
     if (!this.stopLossTimer) {
       this.stopLossTimer = setInterval(() => {
@@ -227,6 +231,14 @@ export class MakerPointsEngine {
         if (Number.isFinite(totalUnrealized)) {
           this.accountUnrealized = totalUnrealized;
         }
+
+        // 统计盈亏变动
+        const currentWalletBalance = Number(snapshot.totalWalletBalance ?? 0);
+        if (this.lastWalletBalance !== null && currentWalletBalance !== this.lastWalletBalance) {
+          this.hourlyStats.addPnl(currentWalletBalance - this.lastWalletBalance);
+        }
+        this.lastWalletBalance = currentWalletBalance;
+
         const position = getPosition(snapshot, this.config.symbol);
         this.sessionVolume.update(position, this.getReferencePrice());
         this.detectPositionChange(position);
@@ -244,6 +256,9 @@ export class MakerPointsEngine {
       this.exchange.watchOrders.bind(this.exchange),
       (orders) => {
         this.syncLocksWithOrders(orders);
+        if (Array.isArray(orders)) {
+          this.hourlyStats.updateOrders(orders);
+        }
         this.openOrders = Array.isArray(orders)
           ? orders.filter(
               (order) =>
@@ -669,6 +684,7 @@ export class MakerPointsEngine {
     for (const order of toCancel) {
       if (this.pendingCancelOrders.has(String(order.orderId))) continue;
       this.pendingCancelOrders.add(String(order.orderId));
+      this.hourlyStats.recordCancel();
       await safeCancelOrder(
         this.exchange,
         this.config.symbol,
@@ -708,6 +724,7 @@ export class MakerPointsEngine {
           : target.side === "BUY"
             ? priceNum - 1
             : priceNum + 1;
+        this.hourlyStats.recordPlace();
         await placeOrder(
           this.exchange,
           this.config.symbol,
@@ -750,6 +767,55 @@ export class MakerPointsEngine {
    * 在每次 reprice 时查询真实挂单，发现未预期的挂单时取消所有挂单
    * @returns true 表示发现问题并执行了取消操作，调用方应跳过本轮挂单
    */
+  private lastReportedHour: number = new Date().getHours();
+  private hourCounter: number = 0;
+
+  private async checkHourlyReport(): Promise<void> {
+    const now = new Date();
+    const currentHour = now.getHours();
+    if (currentHour !== this.lastReportedHour) {
+      this.hourCounter++;
+      const interval = Number(process.env.MAKER_POINTS_REPORT_INTERVAL_HOURS) || 1;
+      
+      if (this.hourCounter < interval) {
+        this.lastReportedHour = currentHour;
+        return;
+      }
+      
+      this.hourCounter = 0;
+      const stats = this.hourlyStats.getSnapshot();
+      const durationMin = Math.round((Date.now() - stats.startTime) / 60000);
+      
+      const message = [
+        `📊 *STANDX 运行统计播报*`,
+        ``,
+        `🕒 时间段: ${new Date(stats.startTime).toLocaleTimeString()} - ${now.toLocaleTimeString()}`,
+        `⏱ 持续时长: ${durationMin} 分钟`,
+        ``,
+        `📝 挂单次数: ${stats.placeCount}`,
+        `🚫 撤单次数: ${stats.cancelCount}`,
+        `✅ 成交次数: ${stats.fillCount}`,
+        `💰 周期盈亏: ${stats.realizedPnl.toFixed(4)} USD`,
+        ``,
+        `📈 当前仓位: ${this.lastPositionAmt.toFixed(4)} ${this.config.symbol}`,
+        `💵 账户余额: ${this.lastWalletBalance?.toFixed(2) ?? "0.00"} USD`
+      ].join("\n");
+
+      await this.notifier.send({
+        type: "custom",
+        level: "info",
+        symbol: this.config.symbol,
+        title: "每小时运行统计",
+        message,
+        timestamp: Date.now(),
+      });
+
+      this.tradeLog.push("info", `已发送每小时统计播报: 成交 ${stats.fillCount} 次`);
+      this.hourlyStats.reset();
+      this.lastReportedHour = currentHour;
+    }
+  }
+
   private async verifyOrdersIfNeeded(): Promise<boolean> {
     // 如果交易所不支持查询挂单，跳过验证
     if (!this.exchange.queryOpenOrders) return false;
