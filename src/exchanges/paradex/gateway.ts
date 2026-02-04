@@ -602,7 +602,10 @@ export class ParadexGateway {
       // Only omit amount for MARKET close-position orders; STOP requires explicit size
       const shouldOmitAmount = isClosePosition && type === "market";
       const amountArg: any = shouldOmitAmount ? undefined : amount;
-      if (!shouldOmitAmount && amountArg != null && extraParams.size === undefined) {
+      // Paradex/ccxt may require `size` even when amount is omitted for closePosition MARKET orders.
+      if (shouldOmitAmount && amount != null && extraParams.size === undefined) {
+        extraParams.size = amount.toString();
+      } else if (!shouldOmitAmount && amountArg != null && extraParams.size === undefined) {
         extraParams.size = amountArg.toString();
       }
       const order = (await this.exchange.createOrder(
