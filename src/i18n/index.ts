@@ -248,8 +248,8 @@ const translations: Record<string, TranslationEntry> = {
     en: "Quote mode: {mode} | BUY {buy} | SELL {sell}",
   },
   "makerPoints.binanceLine": {
-    zh: "Binance 深度: 买10 {buy} ｜ 卖10 {sell} ｜ 状态: {status}",
-    en: "Binance depth: bid10 {buy} | ask10 {sell} | Status: {status}",
+    zh: "Binance 深度(±9bps): 买 {buy} ｜ 卖 {sell} ｜ 状态: {status}",
+    en: "Binance depth (±9bps): bid {buy} | ask {sell} | Status: {status}",
   },
   "makerPoints.bandDepthLine": {
     zh: "StandX 档位 {band}bps 深度: 买 {buy} ｜ 卖 {sell}",

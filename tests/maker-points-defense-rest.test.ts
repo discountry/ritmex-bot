@@ -94,6 +94,8 @@ describe("MakerPointsEngine defense-mode REST polling", () => {
     (engine as any).enterDefenseMode({
       standxDepthStale: true,
       binanceStale: false,
+      binanceUnhealthy: false,
+      binanceHealthReason: null,
       standxAccountStale: false,
       accountInvalid: false,
       standxRestUnhealthy: false,
@@ -146,6 +148,8 @@ describe("MakerPointsEngine defense-mode REST polling", () => {
     (engine as any).enterDefenseMode({
       standxDepthStale: true,
       binanceStale: false,
+      binanceUnhealthy: false,
+      binanceHealthReason: null,
       standxAccountStale: false,
       accountInvalid: false,
       standxRestUnhealthy: false,

@@ -203,8 +203,10 @@ export class MakerPointsEngine {
     this.qtyStep = Math.max(1e-9, this.config.qtyStep);
     this.binanceDepth = new BinanceDepthTracker(resolveBinanceSymbol(this.config.symbol), {
       baseUrl: process.env.BINANCE_SPOT_WS_URL ?? process.env.BINANCE_WS_URL,
+      restBaseUrl: process.env.BINANCE_REST_URL,
       levels: 20,
       ratio: 9,
+      depthWindowBps: 9,
       speedMs: 100,
       logger: (context, error) => {
         this.tradeLog.push("warn", `Binance ${context} 异常: ${extractMessage(error)}`);
@@ -221,6 +223,7 @@ export class MakerPointsEngine {
         this.feedStatus.binance = false;
         this.tradeLog.push("warn", "Binance 深度连接断开");
       } else if (state === "stale") {
+        this.feedStatus.binance = false;
         this.tradeLog.push("warn", "Binance 深度数据过时");
       } else if (state === "connected") {
         this.feedStatus.binance = true;
@@ -1654,6 +1657,8 @@ export class MakerPointsEngine {
     const now = Date.now();
     const standxDepthStale = this.lastStandxDepthTime > 0 && (now - this.lastStandxDepthTime) > DATA_STALE_THRESHOLD_MS;
     const binanceStale = this.lastBinanceDepthTime > 0 && (now - this.lastBinanceDepthTime) > DATA_STALE_THRESHOLD_MS;
+    const binanceHealth = this.binanceDepth.getHealth();
+    const binanceUnhealthy = !binanceHealth.healthy;
 
     const standxAccountAge = this.lastStandxAccountTime > 0 ? now - this.lastStandxAccountTime : 0;
     const standxAccountStaleByAge = this.lastStandxAccountTime > 0 && standxAccountAge > ACCOUNT_DATA_STALE_THRESHOLD_MS;
@@ -1675,6 +1680,7 @@ export class MakerPointsEngine {
     const shouldDefend =
       standxDepthStale ||
       binanceStale ||
+      binanceUnhealthy ||
       standxAccountStale ||
       accountInvalid ||
       standxRestUnhealthy ||
@@ -1692,6 +1698,8 @@ export class MakerPointsEngine {
         standxRestLastError: this.standxRestLastError,
         marginModeNotIsolated,
         marginMode,
+        binanceUnhealthy,
+        binanceHealthReason: binanceHealth.reason,
         standxDepthAge: this.lastStandxDepthTime > 0 ? now - this.lastStandxDepthTime : 0,
         binanceAge: this.lastBinanceDepthTime > 0 ? now - this.lastBinanceDepthTime : 0,
         standxAccountAge,
@@ -1710,6 +1718,8 @@ export class MakerPointsEngine {
   private enterDefenseMode(staleInfo: {
     standxDepthStale: boolean;
     binanceStale: boolean;
+    binanceUnhealthy?: boolean;
+    binanceHealthReason?: string | null;
     standxAccountStale: boolean;
     accountInvalid: boolean;
     standxRestUnhealthy: boolean;
@@ -1744,8 +1754,13 @@ export class MakerPointsEngine {
     if (staleInfo.binanceStale) {
       staleItems.push(`Binance深度(${Math.round(staleInfo.binanceAge / 1000)}s)`);
     }
+    if (staleInfo.binanceUnhealthy && staleInfo.binanceHealthReason) {
+      staleItems.push(`Binance簿记异常(${staleInfo.binanceHealthReason})`);
+    }
 
-    this.tradeLog.push("warn", `数据过时检测: ${staleItems.join(", ")}，进入防御模式`);
+    const staleSummary = staleItems.length > 0 ? staleItems.join(", ") : "unknown";
+
+    this.tradeLog.push("warn", `数据过时检测: ${staleSummary}，进入防御模式`);
 
     // 发送通知
     if (!this.defenseModeNotified) {
@@ -1754,7 +1769,7 @@ export class MakerPointsEngine {
         level: "warn",
         symbol: this.config.symbol,
         title: "防御模式",
-        message: `数据推送中断: ${staleItems.join(", ")}，已取消所有挂单`,
+        message: `数据推送中断: ${staleSummary}，已取消所有挂单`,
         details: staleInfo,
       });
       this.defenseModeNotified = true;
