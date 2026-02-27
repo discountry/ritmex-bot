@@ -313,8 +313,8 @@ const translations: Record<string, TranslationEntry> = {
   "grid.direction.long": { zh: "多", en: "Long" },
   "grid.direction.short": { zh: "空", en: "Short" },
   "basis.onlyAster": {
-    zh: "期现套利策略目前仅支持 Aster / Nado / StandX 交易所。请设置 EXCHANGE=aster 或 EXCHANGE=nado 或 EXCHANGE=standx 后重试。",
-    en: "Basis arbitrage currently supports only Aster, Nado, and StandX. Set EXCHANGE=aster, EXCHANGE=nado, or EXCHANGE=standx and retry.",
+    zh: "期现套利策略目前仅支持 Aster / Nado / StandX / Binance。请设置 EXCHANGE=aster、EXCHANGE=nado、EXCHANGE=standx 或 EXCHANGE=binance 后重试。",
+    en: "Basis arbitrage currently supports Aster, Nado, StandX, and Binance. Set EXCHANGE=aster, EXCHANGE=nado, EXCHANGE=standx, or EXCHANGE=binance and retry.",
   },
   "basis.startFailed": {
     zh: "无法启动期现套利策略: {message}",

@@ -6,6 +6,7 @@ import type { BackpackCredentials } from "./backpack/adapter";
 import type { ParadexCredentials } from "./paradex/adapter";
 import type { NadoCredentials } from "./nado/adapter";
 import type { StandxCredentials } from "./standx/adapter";
+import type { BinanceCredentials } from "./binance/adapter";
 import { t } from "../i18n";
 import type { Address } from "viem";
 
@@ -46,6 +47,11 @@ export function buildAdapterFromEnv(options: BuildAdapterOptions): ExchangeAdapt
   if (id === "standx") {
     const credentials = resolveStandxCredentials(symbol);
     return createExchangeAdapter({ exchange: id, symbol, standx: credentials });
+  }
+
+  if (id === "binance") {
+    const credentials = resolveBinanceCredentials(symbol);
+    return createExchangeAdapter({ exchange: id, symbol, binance: credentials });
   }
 
   return createExchangeAdapter({ exchange: id, symbol, grvt: { symbol } });
@@ -171,6 +177,30 @@ function resolveStandxCredentials(symbol: string): StandxCredentials {
     wsUrl: process.env.STANDX_WS_URL ?? undefined,
     sessionId: process.env.STANDX_SESSION_ID ?? undefined,
     signingKey: process.env.STANDX_REQUEST_PRIVATE_KEY ?? undefined,
+  };
+}
+
+function resolveBinanceCredentials(symbol: string): BinanceCredentials {
+  const apiKey = process.env.BINANCE_API_KEY;
+  const apiSecret = process.env.BINANCE_API_SECRET;
+  if (!apiKey || !apiSecret) {
+    throw new Error("Missing BINANCE_API_KEY or BINANCE_API_SECRET environment variable");
+  }
+
+  const marketTypeRaw = process.env.BINANCE_MARKET_TYPE?.trim().toLowerCase();
+  const marketType: BinanceCredentials["marketType"] =
+    marketTypeRaw === "spot" ? "spot" : marketTypeRaw === "auto" ? "auto" : "perp";
+
+  return {
+    apiKey,
+    apiSecret,
+    symbol: process.env.BINANCE_SYMBOL ?? symbol,
+    marketType,
+    sandbox: parseOptionalBoolean(process.env.BINANCE_SANDBOX),
+    spotRestUrl: process.env.BINANCE_SPOT_REST_URL ?? undefined,
+    futuresRestUrl: process.env.BINANCE_FUTURES_REST_URL ?? undefined,
+    spotWsUrl: process.env.BINANCE_SPOT_WS_URL ?? undefined,
+    futuresWsUrl: process.env.BINANCE_FUTURES_WS_URL ?? undefined,
   };
 }
 

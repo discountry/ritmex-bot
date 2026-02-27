@@ -15,8 +15,9 @@ import * as lighterOrders from "./lighter/order";
 import * as paradexOrders from "./paradex/order";
 import * as nadoOrders from "./nado/order";
 import * as standxOrders from "./standx/order";
+import * as binanceOrders from "./binance/order";
 
-type ExchangeKey = "aster" | "backpack" | "grvt" | "lighter" | "paradex" | "nado" | "standx";
+type ExchangeKey = "aster" | "backpack" | "grvt" | "lighter" | "paradex" | "nado" | "standx" | "binance";
 
 interface ExchangeOrderHandlers {
   limit(intent: LimitOrderIntent): Promise<AsterOrder>;
@@ -76,6 +77,13 @@ const handlerMap: Record<ExchangeKey, ExchangeOrderHandlers> = {
     trailingStop: standxOrders.createTrailingStopOrder,
     close: standxOrders.createClosePositionOrder,
   },
+  binance: {
+    limit: binanceOrders.createLimitOrder,
+    market: binanceOrders.createMarketOrder,
+    stop: binanceOrders.createStopOrder,
+    trailingStop: binanceOrders.createTrailingStopOrder,
+    close: binanceOrders.createClosePositionOrder,
+  },
 };
 
 const knownExchanges: ExchangeKey[] = [
@@ -86,6 +94,7 @@ const knownExchanges: ExchangeKey[] = [
   "paradex",
   "nado",
   "standx",
+  "binance",
 ];
 
 function normalizeExchangeId(value: string | undefined | null): string | undefined {

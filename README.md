@@ -86,7 +86,7 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 
 | 变量 | 说明 |
 | --- | --- |
-| `EXCHANGE` | 选择交易所（`aster`/`standx`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`） |
+| `EXCHANGE` | 选择交易所（`aster`/`binance`/`standx`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`） |
 | `TRADE_SYMBOL` | 交易对（默认 `BTCUSDT`） |
 | `TRADE_AMOUNT` | 单笔下单数量（标的资产计） |
 | `LOSS_LIMIT` | 单笔最大亏损触发的强平额度（USDT） |

@@ -82,7 +82,7 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 
 | Variable | Purpose |
 | --- | --- |
-| `EXCHANGE` | Choose the venue (`aster` / `standx` / `grvt` / `lighter` / `backpack` / `paradex` / `nado`) |
+| `EXCHANGE` | Choose the venue (`aster` / `binance` / `standx` / `grvt` / `lighter` / `backpack` / `paradex` / `nado`) |
 | `TRADE_SYMBOL` | Contract symbol (defaults to `BTCUSDT`) |
 | `TRADE_AMOUNT` | Order size in base asset units |
 | `LOSS_LIMIT` | Max per-trade loss in USDT before forced close |

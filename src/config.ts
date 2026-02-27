@@ -97,6 +97,7 @@ const SYMBOL_PRIORITY_BY_EXCHANGE: Record<SupportedExchangeId, { envKeys: string
   paradex: { envKeys: ["PARADEX_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC/USDC" },
   nado: { envKeys: ["NADO_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-PERP" },
   standx: { envKeys: ["STANDX_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-USD" },
+  binance: { envKeys: ["BINANCE_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDT" },
 };
 
 export function resolveSymbolFromEnv(explicitExchangeId?: SupportedExchangeId | string | null): string {
@@ -312,6 +313,7 @@ export const basisConfig: BasisArbConfig = {
       const exchange = (process.env.EXCHANGE ?? "").trim().toLowerCase();
       if (exchange === "nado") return "BTC-PERP";
       if (exchange === "standx") return "BTC-USD";
+      if (exchange === "binance") return "BTCUSDT_PERP";
       return "ASTERUSDT";
     })()
   ),
@@ -321,6 +323,7 @@ export const basisConfig: BasisArbConfig = {
       const exchange = (process.env.EXCHANGE ?? "").trim().toLowerCase();
       if (exchange === "nado") return "KBTC";
       if (exchange === "standx") return "BTC-USD";
+      if (exchange === "binance") return "BTCUSDT";
       return "ASTERUSDT";
     })()
   ),

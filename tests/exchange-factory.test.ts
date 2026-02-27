@@ -5,6 +5,7 @@ import { GrvtExchangeAdapter } from "../src/exchanges/grvt/adapter";
 import { BackpackExchangeAdapter } from "../src/exchanges/backpack/adapter";
 import { ParadexExchangeAdapter } from "../src/exchanges/paradex/adapter";
 import { StandxExchangeAdapter } from "../src/exchanges/standx/adapter";
+import { BinanceExchangeAdapter } from "../src/exchanges/binance/adapter";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -32,6 +33,7 @@ describe("exchange factory", () => {
     expect(resolveExchangeId("BACKPACK")).toBe("backpack");
     expect(resolveExchangeId("PaRaDeX")).toBe("paradex");
     expect(resolveExchangeId("StandX")).toBe("standx");
+    expect(resolveExchangeId("BiNaNcE")).toBe("binance");
   });
 
   it("creates grvt adapter when EXCHANGE=grvt", () => {
@@ -78,5 +80,16 @@ describe("exchange factory", () => {
     const adapter = createExchangeAdapter({ symbol: "BTC-USD" });
     expect(adapter).toBeInstanceOf(StandxExchangeAdapter);
     expect(adapter.id).toBe("standx");
+  });
+
+  it("creates binance adapter when EXCHANGE=binance", () => {
+    process.env.EXCHANGE = "binance";
+    process.env.BINANCE_API_KEY = "api-key";
+    process.env.BINANCE_API_SECRET = "api-secret";
+    process.env.BINANCE_SYMBOL = "BTCUSDT";
+
+    const adapter = createExchangeAdapter({ symbol: "BTCUSDT" });
+    expect(adapter).toBeInstanceOf(BinanceExchangeAdapter);
+    expect(adapter.id).toBe("binance");
   });
 });

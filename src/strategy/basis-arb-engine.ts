@@ -167,7 +167,7 @@ export class BasisArbEngine {
       }
     );
 
-    if (this.exchange.id === "nado" || this.exchange.id === "standx") {
+    if (this.exchange.id === "nado" || this.exchange.id === "standx" || this.exchange.id === "binance") {
       safeSubscribe<AsterDepth>(
         this.exchange.watchDepth.bind(this.exchange, this.config.spotSymbol),
         (depth) => {
@@ -409,8 +409,9 @@ export class BasisArbEngine {
       if (!Number.isFinite(wallet) || !Number.isFinite(available)) continue;
       if (Math.abs(wallet) === 0 && Math.abs(available) === 0) continue;
 
-      if (name === "USDT0") {
-        futuresBalances.push({ asset: name, wallet, available });
+      const isTaggedFuturesAsset = /0$/.test(name);
+      if (isTaggedFuturesAsset) {
+        futuresBalances.push({ asset: name.replace(/0$/, ""), wallet, available });
         continue;
       }
       const locked = Math.max(wallet - available, 0);

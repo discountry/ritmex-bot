@@ -6,6 +6,7 @@ import { BackpackExchangeAdapter, type BackpackCredentials } from "./backpack/ad
 import { ParadexExchangeAdapter, type ParadexCredentials } from "./paradex/adapter";
 import { NadoExchangeAdapter, type NadoCredentials } from "./nado/adapter";
 import { StandxExchangeAdapter, type StandxCredentials } from "./standx/adapter";
+import { BinanceExchangeAdapter, type BinanceCredentials } from "./binance/adapter";
 
 export interface ExchangeFactoryOptions {
   symbol: string;
@@ -17,6 +18,7 @@ export interface ExchangeFactoryOptions {
   paradex?: ParadexCredentials;
   nado?: NadoCredentials;
   standx?: StandxCredentials;
+  binance?: BinanceCredentials;
 }
 
 export type SupportedExchangeId =
@@ -26,7 +28,8 @@ export type SupportedExchangeId =
   | "backpack"
   | "paradex"
   | "nado"
-  | "standx";
+  | "standx"
+  | "binance";
 
 export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   const fallback = (value ?? process.env.EXCHANGE ?? process.env.TRADE_EXCHANGE ?? "aster")
@@ -39,6 +42,7 @@ export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   if (fallback === "paradex") return "paradex";
   if (fallback === "nado") return "nado";
   if (fallback === "standx") return "standx";
+  if (fallback === "binance" || fallback === "bnb") return "binance";
   return "aster";
 }
 
@@ -49,6 +53,7 @@ export function getExchangeDisplayName(id: SupportedExchangeId): string {
   if (id === "paradex") return "Paradex";
   if (id === "nado") return "Nado";
   if (id === "standx") return "StandX";
+  if (id === "binance") return "Binance";
   return "AsterDex";
 }
 
@@ -71,6 +76,9 @@ export function createExchangeAdapter(options: ExchangeFactoryOptions): Exchange
   }
   if (id === "standx") {
     return new StandxExchangeAdapter({ ...options.standx, symbol: options.symbol });
+  }
+  if (id === "binance") {
+    return new BinanceExchangeAdapter({ ...options.binance, symbol: options.symbol });
   }
   return new AsterExchangeAdapter({ ...options.aster, symbol: options.symbol });
 }

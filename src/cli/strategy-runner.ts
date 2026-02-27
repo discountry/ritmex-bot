@@ -141,8 +141,8 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       throw new Error("Basis arbitrage strategy is disabled. Set ENABLE_BASIS_STRATEGY=true to enable it.");
     }
     const exchangeId = resolveExchangeId();
-    if (exchangeId !== "aster" && exchangeId !== "nado" && exchangeId !== "standx") {
-      throw new Error("Basis arbitrage strategy currently only supports the Aster, Nado, and StandX exchanges");
+    if (exchangeId !== "aster" && exchangeId !== "nado" && exchangeId !== "standx" && exchangeId !== "binance") {
+      throw new Error("Basis arbitrage strategy currently only supports the Aster, Nado, StandX, and Binance exchanges");
     }
     const adapter = createAdapterOrThrow(basisConfig.futuresSymbol);
     const engine = new BasisArbEngine(basisConfig, adapter);

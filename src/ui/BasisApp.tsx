@@ -31,7 +31,7 @@ export function BasisApp({ onExit }: BasisAppProps) {
   );
 
   useEffect(() => {
-    if (exchangeId !== "aster" && exchangeId !== "nado" && exchangeId !== "standx") {
+    if (exchangeId !== "aster" && exchangeId !== "nado" && exchangeId !== "standx" && exchangeId !== "binance") {
       setError(new Error(t("basis.onlyAster")));
       return;
     }

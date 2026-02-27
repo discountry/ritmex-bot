@@ -71,6 +71,13 @@ describe("BasisArbEngine", () => {
         time: 2_000,
       }),
     };
+    const futuresClient = {
+      getPremiumIndex: vi.fn().mockResolvedValue({
+        fundingRate: "0.0001",
+        nextFundingTime: 3_600_000,
+        time: 2_000,
+      }),
+    };
 
     const engine = new BasisArbEngine(
       {
@@ -79,10 +86,12 @@ describe("BasisArbEngine", () => {
         refreshIntervalMs: 1_000,
         maxLogEntries: 10,
         takerFeeRate: 0.0004,
+        arbAmount: 1,
       },
       adapter,
       {
         spotClient,
+        futuresClient,
         now: () => 1_000,
       }
     );
@@ -111,7 +120,7 @@ describe("BasisArbEngine", () => {
     const expectedNet = 1.04 * (1 - effectiveFee) - 1.05 * (1 + effectiveFee);
     expect(snapshot.netSpread).toBeCloseTo(expectedNet, 6);
     expect(snapshot.netSpreadBps).toBeCloseTo((expectedNet / 1.05) * 10_000, 6);
-    expect(snapshot.feedStatus).toEqual({ futures: true, spot: true });
+    expect(snapshot.feedStatus).toEqual({ futures: true, spot: true, funding: true });
     expect(snapshot.opportunity).toBe(expectedNet >= 0);
 
     engine.stop();

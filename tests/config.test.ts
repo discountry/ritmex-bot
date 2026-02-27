@@ -49,4 +49,11 @@ describe("resolveSymbolFromEnv", () => {
 
     expect(resolveSymbolFromEnv("standx")).toBe("ETH-USD");
   });
+
+  it("supports binance symbol defaults when explicit exchange id is provided", () => {
+    delete process.env.EXCHANGE;
+    process.env.BINANCE_SYMBOL = "ETHUSDT";
+
+    expect(resolveSymbolFromEnv("binance")).toBe("ETHUSDT");
+  });
 });
