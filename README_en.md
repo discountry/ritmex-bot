@@ -108,6 +108,38 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 3. Adjust `TRADE_SYMBOL`, `PRICE_TICK`, and `QTY_STEP` to match the requested market.
 4. The bootstrap script auto-populates these variables; manual installs must maintain them.
 
+### Binance
+1. Set `EXCHANGE=binance`.
+2. Provide `BINANCE_API_KEY` and `BINANCE_API_SECRET`.
+3. Set market mode via `BINANCE_MARKET_TYPE`:
+   - `perp`: perpetual futures (default)
+   - `spot`: spot market
+   - `auto`: resolve by symbol (not recommended when both spot/perp share the same symbol)
+4. Set `BINANCE_SYMBOL` (or fallback to `TRADE_SYMBOL`):
+   - Perp recommended: `BTCUSDT_PERP` (or `BTCUSDT` with `BINANCE_MARKET_TYPE=perp`)
+   - Spot recommended: `BTCUSDT` (also accepts `BTCUSDT_SPOT`)
+5. For Basis arbitrage on Binance, explicitly split legs:
+   - `BASIS_FUTURES_SYMBOL=BTCUSDT_PERP`
+   - `BASIS_SPOT_SYMBOL=BTCUSDT`
+6. Optional sandbox/custom endpoints:
+   - `BINANCE_SANDBOX=true`
+   - `BINANCE_SPOT_REST_URL` / `BINANCE_FUTURES_REST_URL`
+   - `BINANCE_SPOT_WS_URL` / `BINANCE_FUTURES_WS_URL`
+
+> The Binance adapter is WS-first by default (depth/ticker/kline/account/order streams), with REST used only for reconciliation and fallback.
+>
+> In spot mode, some derivatives-only protective order capabilities are exchange-limited, and the strategy will degrade gracefully based on venue capabilities.
+
+**Example (perp maker)**
+```bash
+EXCHANGE=binance BINANCE_MARKET_TYPE=perp BINANCE_SYMBOL=BTCUSDT_PERP bun run index.ts --strategy maker
+```
+
+**Example (spot grid)**
+```bash
+EXCHANGE=binance BINANCE_MARKET_TYPE=spot BINANCE_SYMBOL=BTCUSDT bun run index.ts --strategy grid
+```
+
 ### StandX
 
 * [StandX Maker Points Strategy Guide](docs/standx/maker-points-guide.md)

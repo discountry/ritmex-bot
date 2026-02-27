@@ -111,6 +111,38 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 3. 根据交易对调整 `TRADE_SYMBOL`、`PRICE_TICK`、`QTY_STEP` 等精度参数。
 4. 一键脚本会自动写入这些变量，手动部署时需自行维护。
 
+### Binance
+1. 设置 `EXCHANGE=binance`。
+2. 填写 `BINANCE_API_KEY`、`BINANCE_API_SECRET`。
+3. 设置市场模式 `BINANCE_MARKET_TYPE`：
+   - `perp`：永续（默认）
+   - `spot`：现货
+   - `auto`：按符号自动匹配（同名现货/永续并存时建议不要使用）
+4. 设置交易符号 `BINANCE_SYMBOL`（或使用 `TRADE_SYMBOL`）：
+   - 永续建议写 `BTCUSDT_PERP`（或直接 `BTCUSDT` + `BINANCE_MARKET_TYPE=perp`）
+   - 现货建议写 `BTCUSDT`（也支持 `BTCUSDT_SPOT`）
+5. 需要做期现套利（Basis）时，建议显式拆分：
+   - `BASIS_FUTURES_SYMBOL=BTCUSDT_PERP`
+   - `BASIS_SPOT_SYMBOL=BTCUSDT`
+6. 可选测试网/自定义端点：
+   - `BINANCE_SANDBOX=true`
+   - `BINANCE_SPOT_REST_URL` / `BINANCE_FUTURES_REST_URL`
+   - `BINANCE_SPOT_WS_URL` / `BINANCE_FUTURES_WS_URL`
+
+> Binance 适配器默认优先使用 WebSocket（盘口、ticker、kline、账户/订单用户流），仅在必要时使用 REST 补偿与兜底。
+>
+> 若使用现货模式，部分“仅合约可用”的保护单能力会受交易所限制，策略会按交易所能力自动降级。
+
+**示例（永续做市）**
+```bash
+EXCHANGE=binance BINANCE_MARKET_TYPE=perp BINANCE_SYMBOL=BTCUSDT_PERP bun run index.ts --strategy maker
+```
+
+**示例（现货网格）**
+```bash
+EXCHANGE=binance BINANCE_MARKET_TYPE=spot BINANCE_SYMBOL=BTCUSDT bun run index.ts --strategy grid
+```
+
 ### StandX
 
 * [StandX 做市策略教程](docs/standx/maker-points-guide.md)
