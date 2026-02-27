@@ -1,0 +1,2 @@
+URL: https://developers.binance.com/docs/binance-spot-api-docs/rest-api.md
+Error: 404 
