@@ -4,6 +4,15 @@
 
 A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend engine, a Guardian stop sentinel, and two market-making modes. It offers instant restarts, realtime market data, structured logging, and an Ink-based CLI dashboard.
 
+## CLI Command Mode (`ritmex-bot`)
+`ritmex-bot` provides an agent-friendly command interface for exchange capability checks, market data, account/position queries, order operations, and strategy execution.
+
+- It keeps the current environment-variable system intact: no renaming and no new required keys.
+- `--symbol` is passed through exactly as provided (no symbol normalization).
+- It supports `--dry-run` simulation and `--json` structured output for automation.
+
+Full guide: [ritmex-bot CLI User Guide (English)](docs/cli-guide.en.md)
+
 If you'd like to support this project and get fee discounts, please consider using these referral links:
 
 * [Lighter referral link](https://app.lighter.xyz/?referral=111909FA)
@@ -18,6 +27,8 @@ If you'd like to support this project and get fee discounts, please consider usi
 * [Apex referral link](https://join.omni.apex.exchange/SEA)
 
 ## Documentation Map
+- [ritmex-bot CLI User Guide (English)](docs/cli-guide.en.md)
+- [ritmex-bot CLI 使用手册（中文）](docs/cli-guide.md)
 - [Beginner-friendly Quick Start](simple-readme.md)
 - [Grid Trading Strategy Guide](grid-trading.md)
 
@@ -207,6 +218,35 @@ bun run start      # Alias for bun run index.ts
 bun run dev        # Development entrypoint
 bun x vitest run   # Execute the full Vitest suite
 ```
+
+## ritmex-bot Command Mode (Agent-friendly)
+The project now supports a standalone command mode with the command name `ritmex-bot`:
+
+```bash
+ritmex-bot doctor
+ritmex-bot exchange list
+ritmex-bot market ticker --exchange binance --symbol BTCUSDT
+ritmex-bot order create --exchange binance --symbol BTCUSDT --side buy --type limit --quantity 0.01 --price 90000 --dry-run
+ritmex-bot strategy run --strategy maker --exchange standx --silent --dry-run
+```
+
+### Run Modes
+```bash
+# Global install
+npm install -g ritmex-bot
+ritmex-bot doctor
+
+# No install
+npx ritmex-bot doctor
+bunx ritmex-bot doctor
+```
+
+### Global Flags
+- `--exchange`: picks exchange using the existing env/config logic
+- `--symbol`: passed through as-is (no symbol normalization)
+- `--dry-run`: simulation mode (no real create/cancel side effects)
+- `--json`: structured JSON output for AI agents
+- `--timeout`: command timeout in milliseconds
 
 ## Silent & Background Execution
 ### Direct silent launch

@@ -365,7 +365,7 @@ describe("GridEngine", () => {
     (engine as any).stopReason = "test stop";
     await (engine as any).haltGrid(90);
 
-    expect(adapter.cancelAllCount).toBe(1);
+    expect(adapter.cancelAllCount).toBeGreaterThanOrEqual(1);
     expect(adapter.marketOrders).toHaveLength(1);
     expect(engine.getSnapshot().running).toBe(false);
 

@@ -1,8 +1,12 @@
 {
   "name": "ritmex-bot",
+  "version": "0.1.0",
   "module": "index.ts",
   "type": "module",
-  "private": true,
+  "private": false,
+  "bin": {
+    "ritmex-bot": "./bin/ritmex-bot"
+  },
   "scripts": {
     "dev": "bun run index.ts",
     "start": "bun run index.ts",

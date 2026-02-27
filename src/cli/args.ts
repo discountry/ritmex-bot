@@ -101,5 +101,10 @@ export function printCliHelp(): void {
     `                    Aliases: liquidity, liquidity-maker for the liquidity maker engine.\n` +
     `  --exchange, -e    Choose exchange. Overrides EXCHANGE/TRADE_EXCHANGE environment variables.\n` +
     `  --silent, -q      Reduce console output. When used with --strategy, runs in silent daemon mode.\n` +
-    `  --help, -h        Show this help message.\n`);
+    `  --help, -h        Show this help message.\n\n` +
+    `Command mode:\n` +
+    `  ritmex-bot doctor\n` +
+    `  ritmex-bot exchange list\n` +
+    `  ritmex-bot market ticker --exchange <id> --symbol <symbol>\n` +
+    `  ritmex-bot order create --side buy --type limit --quantity 0.01 --price 100000 --dry-run\n`);
 }

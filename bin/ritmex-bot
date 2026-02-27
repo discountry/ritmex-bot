@@ -1,0 +1,19 @@
+#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const entry = resolve(__dirname, "..", "index.ts");
+const bunBinary = process.env.BUN_BIN || "bun";
+
+const result = spawnSync(bunBinary, ["run", entry, ...process.argv.slice(2)], {
+  stdio: "inherit",
+});
+
+if (result.error) {
+  console.error("[ritmex-bot] Bun is required to run this CLI. Install Bun from https://bun.sh");
+  process.exit(1);
+}
+
+process.exit(result.status ?? 1);

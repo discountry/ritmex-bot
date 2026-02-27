@@ -100,6 +100,13 @@ class PythonSignerBridge {
       pending.reject(new Error(String(error)));
       return;
     }
+    if (
+      Object.prototype.hasOwnProperty.call(payload, "txHash") ||
+      Object.prototype.hasOwnProperty.call(payload, "messageToSign")
+    ) {
+      pending.resolve(payload);
+      return;
+    }
     pending.resolve(payload.result ?? null);
   }
 
@@ -181,7 +188,7 @@ export class LighterSigner {
     await this.ensureReady();
     const apiKeyIndex = params.apiKeyIndex ?? this.defaultKeyIndex;
 
-    const result = await this.bridge.call("sign_create_order", {
+    const bridgePayload = await this.bridge.call("sign_create_order", {
       apiKeyIndex,
       marketIndex: params.marketIndex,
       clientOrderIndex: params.clientOrderIndex.toString(),
@@ -193,13 +200,14 @@ export class LighterSigner {
       reduceOnly: params.reduceOnly,
       triggerPrice: params.triggerPrice,
       orderExpiry: params.orderExpiry.toString(),
+      expiredAt: params.expiredAt?.toString(),
       nonce: params.nonce.toString(),
       accountIndex: this.accountIndex.toString(),
     });
 
-    const txInfo = String(result);
+    const txInfo = this.resolveTxInfo(bridgePayload);
     let signature: string | undefined;
-    let txHash: string | undefined;
+    let txHash: string | undefined = this.resolveTxHash(bridgePayload);
     try {
       const parsed = JSON.parse(txInfo);
       if (typeof parsed?.Sig === "string") signature = parsed.Sig;
@@ -220,7 +228,7 @@ export class LighterSigner {
     await this.ensureReady();
     const apiKeyIndex = params.apiKeyIndex ?? this.defaultKeyIndex;
 
-    const result = await this.bridge.call("sign_cancel_order", {
+    const bridgePayload = await this.bridge.call("sign_cancel_order", {
       apiKeyIndex,
       marketIndex: params.marketIndex,
       orderIndex: params.orderIndex.toString(),
@@ -228,7 +236,7 @@ export class LighterSigner {
       accountIndex: this.accountIndex.toString(),
     });
 
-    const txInfo = String(result);
+    const txInfo = this.resolveTxInfo(bridgePayload);
     let signature: string | undefined;
     try {
       const parsed = JSON.parse(txInfo);
@@ -248,7 +256,7 @@ export class LighterSigner {
     await this.ensureReady();
     const apiKeyIndex = params.apiKeyIndex ?? this.defaultKeyIndex;
 
-    const result = await this.bridge.call("sign_cancel_all", {
+    const bridgePayload = await this.bridge.call("sign_cancel_all", {
       apiKeyIndex,
       timeInForce: params.timeInForce,
       scheduledTime: params.scheduledTime.toString(),
@@ -256,7 +264,7 @@ export class LighterSigner {
       accountIndex: this.accountIndex.toString(),
     });
 
-    const txInfo = String(result);
+    const txInfo = this.resolveTxInfo(bridgePayload);
     let signature: string | undefined;
     try {
       const parsed = JSON.parse(txInfo);
@@ -281,5 +289,18 @@ export class LighterSigner {
       accountIndex: this.accountIndex.toString(),
     });
     return String(result ?? "");
+  }
+
+  private resolveTxInfo(payload: unknown): string {
+    if (payload && typeof payload === "object" && "result" in payload) {
+      return String((payload as { result?: unknown }).result ?? "");
+    }
+    return String(payload ?? "");
+  }
+
+  private resolveTxHash(payload: unknown): string | undefined {
+    if (!payload || typeof payload !== "object") return undefined;
+    const hash = (payload as { txHash?: unknown }).txHash;
+    return typeof hash === "string" && hash.length > 0 ? hash : undefined;
   }
 }

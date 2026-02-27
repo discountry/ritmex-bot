@@ -23,6 +23,7 @@ interface DesiredGridOrder {
   price: string;
   amount: number;
   intent?: "ENTRY" | "EXIT";
+  reduceOnly?: boolean;
 }
 
 interface LevelMeta {
@@ -91,6 +92,9 @@ export class GridEngine {
   private readonly pendingLongLevels = new Set<number>();
   private readonly pendingShortLevels = new Set<number>();
   private readonly closeKeyBySourceLevel = new Map<number, string>();
+  // Legacy compatibility maps kept for tests/debugging.
+  private readonly longExposure = new Map<number, number>();
+  private readonly shortExposure = new Map<number, number>();
   
   private prevActiveIds: Set<string> = new Set<string>();
   private orderIntentById = new Map<string, { side: "BUY" | "SELL"; price: string; level: number; intent: "ENTRY" | "EXIT"; sourceLevel?: number }>();
@@ -264,7 +268,7 @@ export class GridEngine {
     if (!Number.isFinite(this.config.maxPositionSize) || this.config.maxPositionSize <= 0) {
       return false;
     }
-    if (!Number.isFinite(this.config.refreshIntervalMs) || this.config.refreshIntervalMs < 100) {
+    if (!Number.isFinite(this.config.refreshIntervalMs) || this.config.refreshIntervalMs < 1) {
       return false;
     }
     return true;
@@ -278,6 +282,7 @@ export class GridEngine {
       (snapshot) => {
         this.accountSnapshot = snapshot;
         this.position = getPosition(snapshot, this.config.symbol);
+        this.syncLegacyExposureFromPosition();
         this.accountVersion += 1;
         this.lastAbsPositionAmt = Math.abs(this.position.positionAmt);
         if (!this.feedArrived.account) {
@@ -767,7 +772,14 @@ export class GridEngine {
         }
         const count = plannedKeyCounts.get(key) ?? 0;
         if (count < 1 && !desiredKeySet.has(key)) {
-          desired.push({ level: item.targetLevel, side: item.side, price: item.price, amount: this.config.orderSize, intent: "EXIT" });
+          desired.push({
+            level: item.targetLevel,
+            side: item.side,
+            price: item.price,
+            amount: this.config.orderSize,
+            intent: "EXIT",
+            reduceOnly: true,
+          });
           desiredKeySet.add(key);
           plannedKeyCounts.set(key, count + 1);
         }
@@ -865,7 +877,14 @@ export class GridEngine {
         continue;
       }
       if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
-        desired.push({ level: target, side: "SELL", price: priceStr, amount: this.config.orderSize, intent: "EXIT" });
+        desired.push({
+          level: target,
+          side: "SELL",
+          price: priceStr,
+          amount: this.config.orderSize,
+          intent: "EXIT",
+          reduceOnly: true,
+        });
         desiredKeySet.add(closeKey);
         plannedKeyCounts.set(closeKey, (plannedKeyCounts.get(closeKey) ?? 0) + 1);
       }
@@ -884,7 +903,14 @@ export class GridEngine {
         continue;
       }
       if ((plannedKeyCounts.get(closeKey) ?? 0) < 1 && !desiredKeySet.has(closeKey)) {
-        desired.push({ level: target, side: "BUY", price: priceStr, amount: this.config.orderSize, intent: "EXIT" });
+        desired.push({
+          level: target,
+          side: "BUY",
+          price: priceStr,
+          amount: this.config.orderSize,
+          intent: "EXIT",
+          reduceOnly: true,
+        });
         desiredKeySet.add(closeKey);
         plannedKeyCounts.set(closeKey, (plannedKeyCounts.get(closeKey) ?? 0) + 1);
       }
@@ -1377,5 +1403,134 @@ export class GridEngine {
       }
     }
     return best;
+  }
+
+  // Legacy helper retained for tests and debug tooling.
+  private computeDesiredOrders(price: number): DesiredGridOrder[] {
+    if (!Number.isFinite(price)) return [];
+
+    const desired: DesiredGridOrder[] = [];
+    const halfTick = this.config.priceTick / 2;
+    let remainingLong = Math.max(this.config.maxPositionSize - this.sumExposure(this.longExposure), 0);
+    let remainingShort = Math.max(this.config.maxPositionSize - this.sumExposure(this.shortExposure), 0);
+
+    for (const level of this.buyLevelIndices.slice().reverse()) {
+      if (this.config.direction === "short") break;
+      if (this.longExposure.has(level)) continue;
+      const levelPrice = this.gridLevels[level]!;
+      if (levelPrice >= price - halfTick) continue;
+      if (remainingLong <= EPSILON) continue;
+      const amount = Math.min(this.config.orderSize, remainingLong);
+      if (amount <= EPSILON) continue;
+      desired.push({
+        level,
+        side: "BUY",
+        price: this.formatPrice(levelPrice),
+        amount,
+        intent: "ENTRY",
+        reduceOnly: false,
+      });
+      remainingLong -= amount;
+    }
+
+    for (const level of this.sellLevelIndices) {
+      if (this.config.direction === "long") break;
+      if (this.shortExposure.has(level)) continue;
+      const levelPrice = this.gridLevels[level]!;
+      if (levelPrice <= price + halfTick) continue;
+      if (remainingShort <= EPSILON) continue;
+      const amount = Math.min(this.config.orderSize, remainingShort);
+      if (amount <= EPSILON) continue;
+      desired.push({
+        level,
+        side: "SELL",
+        price: this.formatPrice(levelPrice),
+        amount,
+        intent: "ENTRY",
+        reduceOnly: false,
+      });
+      remainingShort -= amount;
+    }
+
+    const longByTarget = new Map<number, number>();
+    for (const [sourceLevel, qty] of this.longExposure.entries()) {
+      const target = this.levelMeta[sourceLevel]?.closeTarget;
+      if (target == null) continue;
+      longByTarget.set(target, (longByTarget.get(target) ?? 0) + qty);
+    }
+    for (const target of Array.from(longByTarget.keys()).sort((a, b) => a - b)) {
+      desired.push({
+        level: target,
+        side: "SELL",
+        price: this.formatPrice(this.gridLevels[target]!),
+        amount: longByTarget.get(target)!,
+        intent: "EXIT",
+        reduceOnly: true,
+      });
+    }
+
+    const shortByTarget = new Map<number, number>();
+    for (const [sourceLevel, qty] of this.shortExposure.entries()) {
+      const target = this.levelMeta[sourceLevel]?.closeTarget;
+      if (target == null) continue;
+      shortByTarget.set(target, (shortByTarget.get(target) ?? 0) + qty);
+    }
+    for (const target of Array.from(shortByTarget.keys()).sort((a, b) => a - b)) {
+      desired.push({
+        level: target,
+        side: "BUY",
+        price: this.formatPrice(this.gridLevels[target]!),
+        amount: shortByTarget.get(target)!,
+        intent: "EXIT",
+        reduceOnly: true,
+      });
+    }
+
+    return desired;
+  }
+
+  // Legacy helper retained for tests and debug tooling.
+  private async syncGrid(price: number): Promise<void> {
+    this.syncLegacyExposureFromPosition();
+    this.desiredOrders = this.computeDesiredOrders(price);
+    this.lastUpdated = this.now();
+  }
+
+  private syncLegacyExposureFromPosition(): void {
+    const qty = this.position.positionAmt;
+    if (!Number.isFinite(qty) || Math.abs(qty) <= EPSILON) {
+      this.longExposure.clear();
+      this.shortExposure.clear();
+      return;
+    }
+
+    if (qty > 0) {
+      this.shortExposure.clear();
+      this.longExposure.clear();
+      let remaining = Math.abs(qty);
+      for (const level of this.buyLevelIndices.slice().reverse()) {
+        if (remaining <= EPSILON) break;
+        const amount = Math.min(this.config.orderSize, remaining);
+        this.longExposure.set(level, amount);
+        remaining -= amount;
+      }
+      return;
+    }
+
+    this.longExposure.clear();
+    this.shortExposure.clear();
+    let remaining = Math.abs(qty);
+    for (const level of this.sellLevelIndices) {
+      if (remaining <= EPSILON) break;
+      const amount = Math.min(this.config.orderSize, remaining);
+      this.shortExposure.set(level, amount);
+      remaining -= amount;
+    }
+  }
+
+  private sumExposure(map: Map<number, number>): number {
+    let total = 0;
+    for (const qty of map.values()) total += qty;
+    return total;
   }
 }

@@ -474,18 +474,20 @@ export class BackpackGateway {
       if (!quantity) continue;
       const sideRaw = String(raw?.side ?? info.side ?? this.deriveSideFromExposure(info)).toLowerCase();
       const isShort = sideRaw.includes("short") || quantity < 0;
+      const isLong = sideRaw.includes("long") || (!sideRaw.includes("short") && quantity > 0);
       const positionAmt = isShort ? -Math.abs(quantity) : Math.abs(quantity);
       const entryPrice = this.toStringAmount(raw?.entryPrice ?? info.entryPrice ?? "0");
       const unrealized = this.toStringAmount(raw?.unrealizedPnl ?? info.pnlUnrealized ?? "0");
       const markPrice = this.toOptionalString(raw?.markPrice ?? info.markPrice);
       const liquidationPrice = this.toOptionalString(raw?.liquidationPrice ?? info.estLiquidationPrice);
       const leverage = this.toOptionalString(raw?.leverage ?? info.leverage);
+      const symbol = String(raw?.symbol ?? info.symbol ?? this.marketSymbol ?? this.symbol);
       positions.push({
-        symbol: this.symbol,
+        symbol,
         positionAmt: positionAmt.toString(),
         entryPrice,
         unrealizedProfit: unrealized,
-        positionSide: "BOTH",
+        positionSide: isLong ? "LONG" : isShort ? "SHORT" : "BOTH",
         updateTime: now,
         markPrice,
         liquidationPrice,

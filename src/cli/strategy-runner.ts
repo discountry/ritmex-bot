@@ -2,6 +2,7 @@ import { basisConfig, gridConfig, isBasisStrategyEnabled, liquidityMakerConfig, 
 import { getExchangeDisplayName, isBasisSupportedExchangeId, resolveExchangeId } from "../exchanges/create-adapter";
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
+import { DryRunExchangeAdapter } from "../exchanges/dry-run-adapter";
 import { MakerEngine, type MakerEngineSnapshot } from "../strategy/maker-engine";
 import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
 import { LiquidityMakerEngine, type LiquidityMakerEngineSnapshot } from "../strategy/liquidity-maker-engine";
@@ -16,6 +17,7 @@ import type { StrategyId } from "./args";
 
 interface RunnerOptions {
   silent?: boolean;
+  dryRun?: boolean;
 }
 
 type StrategyRunner = (options: RunnerOptions) => Promise<void>;
@@ -43,12 +45,13 @@ export async function startStrategy(strategyId: StrategyId, options: RunnerOptio
 const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
   trend: async (opts) => {
     const config = tradingConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new TrendEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "trend",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -56,12 +59,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
   },
   swing: async (opts) => {
     const config = swingConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new SwingEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "swing",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -69,12 +73,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
   },
   guardian: async (opts) => {
     const config = tradingConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new GuardianEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "guardian",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -82,12 +87,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
   },
   maker: async (opts) => {
     const config = makerConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new MakerEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "maker",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -99,12 +105,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       throw new Error("Maker Points strategy only supports the StandX exchange.");
     }
     const config = makerPointsConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new MakerPointsEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "maker-points",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -112,12 +119,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
   },
   "offset-maker": async (opts) => {
     const config = makerConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new OffsetMakerEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "offset-maker",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -125,12 +133,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
   },
   "liquidity-maker": async (opts) => {
     const config = liquidityMakerConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new LiquidityMakerEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "liquidity-maker",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -144,12 +153,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
     if (!isBasisSupportedExchangeId(exchangeId)) {
       throw new Error("Basis arbitrage strategy currently only supports the Aster, Nado, StandX, and Binance exchanges");
     }
-    const adapter = createAdapterOrThrow(basisConfig.futuresSymbol);
+    const adapter = createAdapterOrThrow(basisConfig.futuresSymbol, opts.dryRun);
     const engine = new BasisArbEngine(basisConfig, adapter);
     await runEngine({
       engine,
       strategy: "basis",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -157,12 +167,13 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
   },
   grid: async (opts) => {
     const config = gridConfig;
-    const adapter = createAdapterOrThrow(config.symbol);
+    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
     const engine = new GridEngine(config, adapter);
     await runEngine({
       engine,
       strategy: "grid",
       silent: opts.silent,
+      dryRun: opts.dryRun,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
       offUpdate: (emitter) => engine.off("update", emitter),
@@ -174,6 +185,7 @@ interface EngineHarness<TSnapshot> {
   engine: { start(): void; stop(): void };
   strategy: StrategyId;
   silent?: boolean;
+  dryRun?: boolean;
   getSnapshot: () => TSnapshot;
   onUpdate: (handler: (snapshot: TSnapshot) => void) => void;
   offUpdate: (handler: (snapshot: TSnapshot) => void) => void;
@@ -226,7 +238,8 @@ async function runEngine<
   onUpdate(emitter);
   engine.start();
 
-  console.info(`[${label}] Starting on ${exchangeName}. Mode: ${silent ? "silent" : "interactive"}. Press Ctrl+C to exit.`);
+  const modeLabel = `${silent ? "silent" : "interactive"}${harness.dryRun ? "+dry-run" : ""}`;
+  console.info(`[${label}] Starting on ${exchangeName}. Mode: ${modeLabel}. Press Ctrl+C to exit.`);
 
   const shutdown = (signal: NodeJS.Signals) => {
     try {
@@ -251,8 +264,12 @@ async function runEngine<
   });
 }
 
-function createAdapterOrThrow(symbol: string): ExchangeAdapter {
-  return buildAdapterFromEnv({ exchangeId: resolveExchangeId(), symbol });
+function createAdapterOrThrow(symbol: string, dryRun?: boolean): ExchangeAdapter {
+  const adapter = buildAdapterFromEnv({ exchangeId: resolveExchangeId(), symbol });
+  if (dryRun) {
+    return new DryRunExchangeAdapter(adapter);
+  }
+  return adapter;
 }
 
 type TradeLogEntry = { time: string; type: string; detail: string };

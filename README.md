@@ -8,6 +8,15 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 
 基于 Bun 的多交易所永续合约量化终端，内置趋势跟随（SMA30）、Guardian 防守与做市策略，支持快速恢复、实时行情订阅、日志追踪与 CLI 仪表盘。
 
+## CLI 命令模式（ritmex-bot）
+`ritmex-bot` 支持 Agent 友好的结构化命令调用，覆盖交易所能力查询、行情、账户、仓位、下单、撤单与策略启动。
+
+- 保持现有环境变量体系，不新增也不改名，只读取当前执行环境中的变量。
+- `--symbol` 原样透传，不对交易对做统一改写。
+- 支持 `--dry-run` 模拟执行与 `--json` 结构化输出，便于自动化系统集成。
+
+完整文档请见：[ritmex-bot CLI 使用手册（中文）](docs/cli-guide.md)
+
 如果您希望获取优惠并支持本项目，请考虑使用以下注册链接：
 
 * [Lighter 手续费优惠注册链接](https://app.lighter.xyz/?referral=111909FA)
@@ -22,6 +31,8 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 * [Apex 手续费优惠注册链接](https://join.omni.apex.exchange/SEA)
 
 ## 文档索引
+- [ritmex-bot CLI 使用手册（中文）](docs/cli-guide.md)
+- [ritmex-bot CLI User Guide (English)](docs/cli-guide.en.md)
 - [简明上手指南（零基础）](simple-readme.md)
 - [基础网格策略使用教程](grid-trading.md)
 
@@ -211,6 +222,35 @@ bun run start      # 等价于运行 index.ts
 bun run dev        # 调试模式
 bun x vitest run   # 执行全部测试
 ```
+
+## ritmex-bot 命令模式（Agent 友好）
+项目现已支持独立命令模式，命令名为 `ritmex-bot`：
+
+```bash
+ritmex-bot doctor
+ritmex-bot exchange list
+ritmex-bot market ticker --exchange binance --symbol BTCUSDT
+ritmex-bot order create --exchange binance --symbol BTCUSDT --side buy --type limit --quantity 0.01 --price 90000 --dry-run
+ritmex-bot strategy run --strategy maker --exchange standx --silent --dry-run
+```
+
+### 运行方式
+```bash
+# 全局安装
+npm install -g ritmex-bot
+ritmex-bot doctor
+
+# 不安装直接运行
+npx ritmex-bot doctor
+bunx ritmex-bot doctor
+```
+
+### 全局参数
+- `--exchange`：按现有逻辑选择交易所（不修改原有环境变量体系）
+- `--symbol`：原样透传，不做统一或改写
+- `--dry-run`：模拟执行，不发真实下单/撤单请求
+- `--json`：输出结构化 JSON，便于 AI Agent 解析
+- `--timeout`：命令超时毫秒数
 
 ## 静默启动与后台运行
 ### 直接静默启动
