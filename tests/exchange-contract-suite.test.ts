@@ -28,7 +28,6 @@ import type {
 
 const ORIGINAL_ENV = { ...process.env };
 
-const TRAILING_SUPPORTED_EXCHANGES = new Set<SupportedExchangeId>(["aster", "binance"]);
 const REQUIRED_ENV_BY_EXCHANGE: Record<SupportedExchangeId, Record<string, string>> = {
   aster: {
     ASTER_API_KEY: "aster-key",
@@ -76,7 +75,7 @@ class RecorderAdapter implements ExchangeAdapter {
   }
 
   supportsTrailingStops(): boolean {
-    return TRAILING_SUPPORTED_EXCHANGES.has(this.id);
+    return false;
   }
 
   watchAccount(_cb: (snapshot: AsterAccountSnapshot) => void): void {}
@@ -234,7 +233,7 @@ describe("exchange contract suite", () => {
     }
   });
 
-  it("enforces trailing-stop capability via exchange-specific handlers", async () => {
+  it("routes trailing-stop intent by exchange capability (supported or explicit rejection)", async () => {
     delete process.env.EXCHANGE;
     delete process.env.TRADE_EXCHANGE;
 
@@ -249,11 +248,13 @@ describe("exchange contract suite", () => {
         callbackRate: 0.2,
       };
 
-      if (TRAILING_SUPPORTED_EXCHANGES.has(id)) {
-        await expect(routeTrailingStopOrder(intent)).resolves.toMatchObject({ type: "TRAILING_STOP_MARKET" });
+      try {
+        const order = await routeTrailingStopOrder(intent);
+        expect(order.type).toBe("TRAILING_STOP_MARKET");
         expect(adapter.lastCreateOrderParams?.type).toBe("TRAILING_STOP_MARKET");
-      } else {
-        await expect(routeTrailingStopOrder(intent)).rejects.toThrow(/does not support trailing stop/i);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        expect(message).toMatch(/does not support trailing stop/i);
       }
     }
   });

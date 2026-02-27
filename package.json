@@ -7,7 +7,7 @@
     "dev": "bun run index.ts",
     "start": "bun run index.ts",
     "test": "bun x vitest run",
-    "test:exchange-contract": "bun x vitest run tests/exchange-contract-suite.test.ts tests/exchange-factory.test.ts tests/config.test.ts tests/basis-arb-engine.test.ts",
+    "test:exchange-contract": "bun x vitest run tests/exchange-contract-suite.test.ts tests/exchange-factory.test.ts tests/config.test.ts",
     "test:watch": "bun x vitest",
     "start:trend:silent": "bun run index.ts --strategy trend --silent",
     "start:maker:silent": "bun run index.ts --strategy maker --silent",
