@@ -1,5 +1,6 @@
 import type { ExchangeAdapter } from "./adapter";
 import type { AsterOrder } from "./types";
+import { SUPPORTED_EXCHANGE_IDS, type SupportedExchangeId } from "./create-adapter";
 import type {
   BaseOrderIntent,
   ClosePositionIntent,
@@ -17,7 +18,7 @@ import * as nadoOrders from "./nado/order";
 import * as standxOrders from "./standx/order";
 import * as binanceOrders from "./binance/order";
 
-type ExchangeKey = "aster" | "backpack" | "grvt" | "lighter" | "paradex" | "nado" | "standx" | "binance";
+type ExchangeKey = SupportedExchangeId;
 
 interface ExchangeOrderHandlers {
   limit(intent: LimitOrderIntent): Promise<AsterOrder>;
@@ -86,16 +87,7 @@ const handlerMap: Record<ExchangeKey, ExchangeOrderHandlers> = {
   },
 };
 
-const knownExchanges: ExchangeKey[] = [
-  "aster",
-  "backpack",
-  "grvt",
-  "lighter",
-  "paradex",
-  "nado",
-  "standx",
-  "binance",
-];
+const knownExchanges: ExchangeKey[] = [...SUPPORTED_EXCHANGE_IDS];
 
 function normalizeExchangeId(value: string | undefined | null): string | undefined {
   if (!value) return undefined;
@@ -107,7 +99,7 @@ function resolveExchangeKey(adapter: ExchangeAdapter): ExchangeKey {
   const candidates = [fromEnv, normalizeExchangeId(adapter.id)];
   for (const candidate of candidates) {
     if (!candidate) continue;
-    if ((knownExchanges as string[]).includes(candidate)) {
+    if (knownExchanges.includes(candidate as ExchangeKey)) {
       return candidate as ExchangeKey;
     }
   }

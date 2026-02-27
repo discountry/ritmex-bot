@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { basisConfig } from "../config";
-import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
+import { getExchangeDisplayName, isBasisSupportedExchangeId, resolveExchangeId } from "../exchanges/create-adapter";
 import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
 import { BasisArbEngine, type BasisArbSnapshot } from "../strategy/basis-arb-engine";
 import { formatNumber } from "../utils/format";
@@ -31,7 +31,7 @@ export function BasisApp({ onExit }: BasisAppProps) {
   );
 
   useEffect(() => {
-    if (exchangeId !== "aster" && exchangeId !== "nado" && exchangeId !== "standx" && exchangeId !== "binance") {
+    if (!isBasisSupportedExchangeId(exchangeId)) {
       setError(new Error(t("basis.onlyAster")));
       return;
     }

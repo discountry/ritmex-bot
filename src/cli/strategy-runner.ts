@@ -1,5 +1,5 @@
 import { basisConfig, gridConfig, isBasisStrategyEnabled, liquidityMakerConfig, makerConfig, makerPointsConfig, swingConfig, tradingConfig } from "../config";
-import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
+import { getExchangeDisplayName, isBasisSupportedExchangeId, resolveExchangeId } from "../exchanges/create-adapter";
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
 import { MakerEngine, type MakerEngineSnapshot } from "../strategy/maker-engine";
@@ -141,7 +141,7 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       throw new Error("Basis arbitrage strategy is disabled. Set ENABLE_BASIS_STRATEGY=true to enable it.");
     }
     const exchangeId = resolveExchangeId();
-    if (exchangeId !== "aster" && exchangeId !== "nado" && exchangeId !== "standx" && exchangeId !== "binance") {
+    if (!isBasisSupportedExchangeId(exchangeId)) {
       throw new Error("Basis arbitrage strategy currently only supports the Aster, Nado, StandX, and Binance exchanges");
     }
     const adapter = createAdapterOrThrow(basisConfig.futuresSymbol);

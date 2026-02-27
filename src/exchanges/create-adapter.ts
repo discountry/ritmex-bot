@@ -8,6 +8,24 @@ import { NadoExchangeAdapter, type NadoCredentials } from "./nado/adapter";
 import { StandxExchangeAdapter, type StandxCredentials } from "./standx/adapter";
 import { BinanceExchangeAdapter, type BinanceCredentials } from "./binance/adapter";
 
+export const SUPPORTED_EXCHANGE_IDS = [
+  "aster",
+  "grvt",
+  "lighter",
+  "backpack",
+  "paradex",
+  "nado",
+  "standx",
+  "binance",
+] as const;
+
+export const BASIS_SUPPORTED_EXCHANGE_IDS = [
+  "aster",
+  "nado",
+  "standx",
+  "binance",
+] as const;
+
 export interface ExchangeFactoryOptions {
   symbol: string;
   exchange?: string;
@@ -21,64 +39,70 @@ export interface ExchangeFactoryOptions {
   binance?: BinanceCredentials;
 }
 
-export type SupportedExchangeId =
-  | "aster"
-  | "grvt"
-  | "lighter"
-  | "backpack"
-  | "paradex"
-  | "nado"
-  | "standx"
-  | "binance";
+export type SupportedExchangeId = (typeof SUPPORTED_EXCHANGE_IDS)[number];
+export type BasisSupportedExchangeId = (typeof BASIS_SUPPORTED_EXCHANGE_IDS)[number];
+
+const EXCHANGE_DISPLAY_NAME: Record<SupportedExchangeId, string> = {
+  aster: "AsterDex",
+  grvt: "GRVT",
+  lighter: "Lighter",
+  backpack: "Backpack",
+  paradex: "Paradex",
+  nado: "Nado",
+  standx: "StandX",
+  binance: "Binance",
+};
+
+const EXCHANGE_ALIAS_MAP: Record<string, SupportedExchangeId> = {
+  aster: "aster",
+  grvt: "grvt",
+  lighter: "lighter",
+  backpack: "backpack",
+  paradex: "paradex",
+  nado: "nado",
+  standx: "standx",
+  binance: "binance",
+  bnb: "binance",
+};
+
+export function isSupportedExchangeId(value: string): value is SupportedExchangeId {
+  return SUPPORTED_EXCHANGE_IDS.includes(value as SupportedExchangeId);
+}
+
+export function isBasisSupportedExchangeId(value: string): value is BasisSupportedExchangeId {
+  return BASIS_SUPPORTED_EXCHANGE_IDS.includes(value as BasisSupportedExchangeId);
+}
 
 export function resolveExchangeId(value?: string | null): SupportedExchangeId {
   const fallback = (value ?? process.env.EXCHANGE ?? process.env.TRADE_EXCHANGE ?? "aster")
     .toString()
     .trim()
     .toLowerCase();
-  if (fallback === "grvt") return "grvt";
-  if (fallback === "lighter") return "lighter";
-  if (fallback === "backpack") return "backpack";
-  if (fallback === "paradex") return "paradex";
-  if (fallback === "nado") return "nado";
-  if (fallback === "standx") return "standx";
-  if (fallback === "binance" || fallback === "bnb") return "binance";
-  return "aster";
+  return EXCHANGE_ALIAS_MAP[fallback] ?? "aster";
 }
 
 export function getExchangeDisplayName(id: SupportedExchangeId): string {
-  if (id === "grvt") return "GRVT";
-  if (id === "lighter") return "Lighter";
-  if (id === "backpack") return "Backpack";
-  if (id === "paradex") return "Paradex";
-  if (id === "nado") return "Nado";
-  if (id === "standx") return "StandX";
-  if (id === "binance") return "Binance";
-  return "AsterDex";
+  return EXCHANGE_DISPLAY_NAME[id];
 }
 
 export function createExchangeAdapter(options: ExchangeFactoryOptions): ExchangeAdapter {
   const id = resolveExchangeId(options.exchange);
-  if (id === "grvt") {
-    return new GrvtExchangeAdapter({ ...options.grvt, symbol: options.symbol });
+  switch (id) {
+    case "aster":
+      return new AsterExchangeAdapter({ ...options.aster, symbol: options.symbol });
+    case "grvt":
+      return new GrvtExchangeAdapter({ ...options.grvt, symbol: options.symbol });
+    case "lighter":
+      return new LighterExchangeAdapter({ ...options.lighter, displaySymbol: options.symbol });
+    case "backpack":
+      return new BackpackExchangeAdapter({ ...options.backpack, symbol: options.symbol });
+    case "paradex":
+      return new ParadexExchangeAdapter({ ...options.paradex, symbol: options.symbol });
+    case "nado":
+      return new NadoExchangeAdapter({ ...options.nado, symbol: options.symbol });
+    case "standx":
+      return new StandxExchangeAdapter({ ...options.standx, symbol: options.symbol });
+    case "binance":
+      return new BinanceExchangeAdapter({ ...options.binance, symbol: options.symbol });
   }
-  if (id === "lighter") {
-    return new LighterExchangeAdapter({ ...options.lighter, displaySymbol: options.symbol });
-  }
-  if (id === "backpack") {
-    return new BackpackExchangeAdapter({ ...options.backpack, symbol: options.symbol });
-  }
-  if (id === "paradex") {
-    return new ParadexExchangeAdapter({ ...options.paradex, symbol: options.symbol });
-  }
-  if (id === "nado") {
-    return new NadoExchangeAdapter({ ...options.nado, symbol: options.symbol });
-  }
-  if (id === "standx") {
-    return new StandxExchangeAdapter({ ...options.standx, symbol: options.symbol });
-  }
-  if (id === "binance") {
-    return new BinanceExchangeAdapter({ ...options.binance, symbol: options.symbol });
-  }
-  return new AsterExchangeAdapter({ ...options.aster, symbol: options.symbol });
 }

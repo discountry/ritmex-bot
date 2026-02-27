@@ -1,10 +1,12 @@
+import { SUPPORTED_EXCHANGE_IDS, type SupportedExchangeId } from "../exchanges/create-adapter";
+
 export type StrategyId = "trend" | "swing" | "guardian" | "maker" | "maker-points" | "offset-maker" | "liquidity-maker" | "basis" | "grid";
 
 export interface CliOptions {
   strategy?: StrategyId;
   silent: boolean;
   help: boolean;
-  exchange?: "aster" | "grvt" | "lighter" | "backpack" | "paradex" | "nado" | "standx" | "binance";
+  exchange?: SupportedExchangeId;
 }
 
 const STRATEGY_VALUES = new Set<StrategyId>([
@@ -82,16 +84,7 @@ function assignStrategy(options: CliOptions, raw: string): void {
 function assignExchange(options: CliOptions, raw: string): void {
   const normalized = raw.trim().toLowerCase();
   if (!normalized) return;
-  if (
-    normalized === "aster" ||
-    normalized === "grvt" ||
-    normalized === "lighter" ||
-    normalized === "backpack" ||
-    normalized === "paradex" ||
-    normalized === "nado" ||
-    normalized === "standx" ||
-    normalized === "binance"
-  ) {
+  if (SUPPORTED_EXCHANGE_IDS.includes(normalized as SupportedExchangeId)) {
     options.exchange = normalized as CliOptions["exchange"];
   } else if (normalized === "gravity" || normalized === "grav" || normalized === "grv") {
     options.exchange = "grvt";
@@ -99,8 +92,9 @@ function assignExchange(options: CliOptions, raw: string): void {
 }
 
 export function printCliHelp(): void {
+  const exchangeList = SUPPORTED_EXCHANGE_IDS.join("|");
   // eslint-disable-next-line no-console
-  console.log(`Usage: bun run index.ts [--strategy <trend|swing|guardian|maker|maker-points|offset-maker|liquidity-maker|basis|grid>] [--exchange <aster|grvt|lighter|backpack|paradex|nado|standx|binance>] [--silent]\n\n` +
+  console.log(`Usage: bun run index.ts [--strategy <trend|swing|guardian|maker|maker-points|offset-maker|liquidity-maker|basis|grid>] [--exchange <${exchangeList}>] [--silent]\n\n` +
     `Options:\n` +
     `  --strategy, -s    Automatically start the specified strategy without the interactive menu.\n` +
     `                    Aliases: offset, offset-maker for the offset maker engine.\n` +
