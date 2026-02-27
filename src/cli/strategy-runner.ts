@@ -1,13 +1,16 @@
-import { makerConfig, tradingConfig } from "../config";
+import { basisConfig, gridConfig, isBasisStrategyEnabled, liquidityMakerConfig, makerConfig, makerPointsConfig, swingConfig, tradingConfig } from "../config";
 import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
-import {
-  MakerEngine,
-  type MakerEngineSnapshot,
-} from "../strategy/maker-engine";
+import { MakerEngine, type MakerEngineSnapshot } from "../strategy/maker-engine";
 import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
+import { LiquidityMakerEngine, type LiquidityMakerEngineSnapshot } from "../strategy/liquidity-maker-engine";
+import { MakerPointsEngine, type MakerPointsSnapshot } from "../strategy/maker-points-engine";
 import { TrendEngine, type TrendEngineSnapshot } from "../strategy/trend-engine";
+import { SwingEngine, type SwingEngineSnapshot } from "../strategy/swing-engine";
+import { GuardianEngine, type GuardianEngineSnapshot } from "../strategy/guardian-engine";
+import { BasisArbEngine, type BasisArbSnapshot } from "../strategy/basis-arb-engine";
+import { GridEngine, type GridEngineSnapshot } from "../strategy/grid-engine";
 import { extractMessage } from "../utils/errors";
 import type { StrategyId } from "./args";
 
@@ -19,8 +22,14 @@ type StrategyRunner = (options: RunnerOptions) => Promise<void>;
 
 export const STRATEGY_LABELS: Record<StrategyId, string> = {
   trend: "Trend Following",
+  swing: "Swing",
+  guardian: "Guardian",
   maker: "Maker",
+  "maker-points": "Maker Points",
   "offset-maker": "Offset Maker",
+  "liquidity-maker": "Liquidity Maker",
+  basis: "Basis Arbitrage",
+  grid: "Grid",
 };
 
 export async function startStrategy(strategyId: StrategyId, options: RunnerOptions = {}): Promise<void> {
@@ -45,6 +54,32 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       offUpdate: (emitter) => engine.off("update", emitter),
     });
   },
+  swing: async (opts) => {
+    const config = swingConfig;
+    const adapter = createAdapterOrThrow(config.symbol);
+    const engine = new SwingEngine(config, adapter);
+    await runEngine({
+      engine,
+      strategy: "swing",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
+  guardian: async (opts) => {
+    const config = tradingConfig;
+    const adapter = createAdapterOrThrow(config.symbol);
+    const engine = new GuardianEngine(config, adapter);
+    await runEngine({
+      engine,
+      strategy: "guardian",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
   maker: async (opts) => {
     const config = makerConfig;
     const adapter = createAdapterOrThrow(config.symbol);
@@ -52,6 +87,23 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
     await runEngine({
       engine,
       strategy: "maker",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
+  "maker-points": async (opts) => {
+    const exchangeId = resolveExchangeId();
+    if (exchangeId !== "standx") {
+      throw new Error("Maker Points strategy only supports the StandX exchange.");
+    }
+    const config = makerPointsConfig;
+    const adapter = createAdapterOrThrow(config.symbol);
+    const engine = new MakerPointsEngine(config, adapter);
+    await runEngine({
+      engine,
+      strategy: "maker-points",
       silent: opts.silent,
       getSnapshot: () => engine.getSnapshot(),
       onUpdate: (emitter) => engine.on("update", emitter),
@@ -71,6 +123,51 @@ const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
       offUpdate: (emitter) => engine.off("update", emitter),
     });
   },
+  "liquidity-maker": async (opts) => {
+    const config = liquidityMakerConfig;
+    const adapter = createAdapterOrThrow(config.symbol);
+    const engine = new LiquidityMakerEngine(config, adapter);
+    await runEngine({
+      engine,
+      strategy: "liquidity-maker",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
+  basis: async (opts) => {
+    if (!isBasisStrategyEnabled()) {
+      throw new Error("Basis arbitrage strategy is disabled. Set ENABLE_BASIS_STRATEGY=true to enable it.");
+    }
+    const exchangeId = resolveExchangeId();
+    if (exchangeId !== "aster" && exchangeId !== "nado" && exchangeId !== "standx") {
+      throw new Error("Basis arbitrage strategy currently only supports the Aster, Nado, and StandX exchanges");
+    }
+    const adapter = createAdapterOrThrow(basisConfig.futuresSymbol);
+    const engine = new BasisArbEngine(basisConfig, adapter);
+    await runEngine({
+      engine,
+      strategy: "basis",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
+  grid: async (opts) => {
+    const config = gridConfig;
+    const adapter = createAdapterOrThrow(config.symbol);
+    const engine = new GridEngine(config, adapter);
+    await runEngine({
+      engine,
+      strategy: "grid",
+      silent: opts.silent,
+      getSnapshot: () => engine.getSnapshot(),
+      onUpdate: (emitter) => engine.on("update", emitter),
+      offUpdate: (emitter) => engine.off("update", emitter),
+    });
+  },
 };
 
 interface EngineHarness<TSnapshot> {
@@ -82,7 +179,18 @@ interface EngineHarness<TSnapshot> {
   offUpdate: (handler: (snapshot: TSnapshot) => void) => void;
 }
 
-async function runEngine<TSnapshot extends TrendEngineSnapshot | MakerEngineSnapshot | OffsetMakerEngineSnapshot>(
+async function runEngine<
+  TSnapshot extends
+    | TrendEngineSnapshot
+    | SwingEngineSnapshot
+    | GuardianEngineSnapshot
+    | MakerEngineSnapshot
+    | MakerPointsSnapshot
+    | OffsetMakerEngineSnapshot
+    | LiquidityMakerEngineSnapshot
+    | BasisArbSnapshot
+    | GridEngineSnapshot
+>(
   harness: EngineHarness<TSnapshot>
 ): Promise<void> {
   const { engine, strategy, silent, getSnapshot, onUpdate, offUpdate } = harness;

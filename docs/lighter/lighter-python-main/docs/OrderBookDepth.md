@@ -10,6 +10,7 @@ Name | Type | Description | Notes
 **asks** | [**List[PriceLevel]**](PriceLevel.md) |  | 
 **bids** | [**List[PriceLevel]**](PriceLevel.md) |  | 
 **offset** | **int** |  | 
+**nonce** | **int** |  | 
 
 ## Example
 

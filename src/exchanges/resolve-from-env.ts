@@ -4,6 +4,10 @@ import type { AsterCredentials } from "./aster-adapter";
 import type { LighterCredentials } from "./lighter/adapter";
 import type { BackpackCredentials } from "./backpack/adapter";
 import type { ParadexCredentials } from "./paradex/adapter";
+import type { NadoCredentials } from "./nado/adapter";
+import type { StandxCredentials } from "./standx/adapter";
+import { t } from "../i18n";
+import type { Address } from "viem";
 
 interface BuildAdapterOptions {
   symbol: string;
@@ -34,6 +38,16 @@ export function buildAdapterFromEnv(options: BuildAdapterOptions): ExchangeAdapt
     return createExchangeAdapter({ exchange: id, symbol, paradex: credentials });
   }
 
+  if (id === "nado") {
+    const credentials = resolveNadoCredentials(symbol);
+    return createExchangeAdapter({ exchange: id, symbol, nado: credentials });
+  }
+
+  if (id === "standx") {
+    const credentials = resolveStandxCredentials(symbol);
+    return createExchangeAdapter({ exchange: id, symbol, standx: credentials });
+  }
+
   return createExchangeAdapter({ exchange: id, symbol, grvt: { symbol } });
 }
 
@@ -41,7 +55,7 @@ function resolveAsterCredentials(): AsterCredentials {
   const apiKey = process.env.ASTER_API_KEY;
   const apiSecret = process.env.ASTER_API_SECRET;
   if (!apiKey || !apiSecret) {
-    throw new Error("缺少 ASTER_API_KEY 或 ASTER_API_SECRET 环境变量");
+    throw new Error(t("env.missingAster"));
   }
   return { apiKey, apiSecret };
 }
@@ -50,11 +64,11 @@ function resolveLighterCredentials(symbol: string): LighterCredentials {
   const accountIndexRaw = process.env.LIGHTER_ACCOUNT_INDEX;
   const apiPrivateKey = process.env.LIGHTER_API_PRIVATE_KEY;
   if (!accountIndexRaw || !apiPrivateKey) {
-    throw new Error("缺少 LIGHTER_ACCOUNT_INDEX 或 LIGHTER_API_PRIVATE_KEY 环境变量");
+    throw new Error(t("env.missingLighter"));
   }
   const accountIndex = Number(accountIndexRaw);
   if (!Number.isInteger(accountIndex)) {
-    throw new Error("LIGHTER_ACCOUNT_INDEX 必须是整数");
+    throw new Error(t("env.lighterIndexInteger"));
   }
   const credentials: LighterCredentials = {
     displaySymbol: symbol,
@@ -76,7 +90,7 @@ function resolveBackpackCredentials(symbol: string): BackpackCredentials {
   const apiKey = process.env.BACKPACK_API_KEY;
   const apiSecret = process.env.BACKPACK_API_SECRET;
   if (!apiKey || !apiSecret) {
-    throw new Error("缺少 BACKPACK_API_KEY 或 BACKPACK_API_SECRET 环境变量");
+    throw new Error(t("env.missingBackpack"));
   }
   const credentials: BackpackCredentials = {
     apiKey,
@@ -94,13 +108,13 @@ function resolveParadexCredentials(): ParadexCredentials {
   const walletAddress = process.env.PARADEX_WALLET_ADDRESS;
 
   if (!privateKey || !walletAddress) {
-    throw new Error("Paradex 需要配置 PARADEX_PRIVATE_KEY 与 PARADEX_WALLET_ADDRESS");
+    throw new Error(t("env.missingParadex"));
   }
   if (!isHex32(privateKey)) {
-    throw new Error("PARADEX_PRIVATE_KEY 必须是 0x 开头的 32 字节十六进制字符串");
+    throw new Error(t("env.invalidParadexPrivateKey"));
   }
   if (!isHexAddress(walletAddress)) {
-    throw new Error("PARADEX_WALLET_ADDRESS 必须是有效的 0x 开头 40 字节十六进制地址");
+    throw new Error(t("env.invalidParadexAddress"));
   }
 
   const credentials: ParadexCredentials = {
@@ -112,6 +126,52 @@ function resolveParadexCredentials(): ParadexCredentials {
   };
 
   return credentials;
+}
+
+function resolveNadoCredentials(symbol: string): NadoCredentials {
+  const signerPrivateKey = process.env.NADO_SIGNER_PRIVATE_KEY;
+  const subaccountOwner = process.env.NADO_SUBACCOUNT_OWNER ?? process.env.NADO_EVM_ADDRESS;
+
+  if (!signerPrivateKey || !subaccountOwner) {
+    throw new Error(t("env.missingNado"));
+  }
+  if (!isHex32(signerPrivateKey)) {
+    throw new Error(t("env.invalidNadoPrivateKey"));
+  }
+  if (!isHexAddress(subaccountOwner)) {
+    throw new Error(t("env.invalidNadoAddress"));
+  }
+
+  const credentials: NadoCredentials = {
+    symbol: process.env.NADO_SYMBOL ?? symbol,
+    signerPrivateKey,
+    subaccountOwner: subaccountOwner as Address,
+    subaccountName: process.env.NADO_SUBACCOUNT_NAME ?? undefined,
+    env: process.env.NADO_ENV as any,
+    gatewayWsUrl: process.env.NADO_GATEWAY_WS_URL ?? undefined,
+    subscriptionsWsUrl: process.env.NADO_SUBSCRIPTIONS_WS_URL ?? undefined,
+    archiveUrl: process.env.NADO_ARCHIVE_URL ?? undefined,
+    triggerUrl: process.env.NADO_TRIGGER_URL ?? undefined,
+    marketSlippagePct: parseOptionalNumber(process.env.NADO_MARKET_SLIPPAGE_PCT),
+    stopTriggerSource: process.env.NADO_STOP_TRIGGER_SOURCE as any,
+  };
+
+  return credentials;
+}
+
+function resolveStandxCredentials(symbol: string): StandxCredentials {
+  const token = process.env.STANDX_TOKEN;
+  if (!token) {
+    throw new Error(t("env.missingStandx"));
+  }
+  return {
+    token,
+    symbol: process.env.STANDX_SYMBOL ?? symbol,
+    baseUrl: process.env.STANDX_BASE_URL ?? undefined,
+    wsUrl: process.env.STANDX_WS_URL ?? undefined,
+    sessionId: process.env.STANDX_SESSION_ID ?? undefined,
+    signingKey: process.env.STANDX_REQUEST_PRIVATE_KEY ?? undefined,
+  };
 }
 
 function isHex32(value: string): boolean {

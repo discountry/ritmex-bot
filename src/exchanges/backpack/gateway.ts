@@ -1,4 +1,13 @@
-import ccxt, { type Balances, type Order as CcxtOrder, type OrderBook as CcxtOrderBook, type Ticker as CcxtTicker } from "ccxt";
+import ccxt, {
+  type Balances,
+  type Order as CcxtOrder,
+  type OrderBook as CcxtOrderBook,
+  type Ticker as CcxtTicker,
+} from "ccxt";
+import NodeWebSocket from "ws";
+import { sign, utils as edUtils, hashes as edHashes } from "@noble/ed25519";
+import { sha512 } from "@noble/hashes/sha512";
+import { randomBytes } from "crypto";
 import type {
   AsterAccountSnapshot,
   AsterAccountPosition,
@@ -16,6 +25,41 @@ import type {
   TickerListener,
   KlineListener,
 } from "../adapter";
+
+const WebSocketCtor: typeof globalThis.WebSocket =
+  typeof globalThis.WebSocket !== "undefined"
+    ? globalThis.WebSocket
+    : ((NodeWebSocket as unknown) as typeof globalThis.WebSocket);
+
+// Configure ed25519 to use our sha512 implementation
+(edUtils as any).sha512 = sha512;
+(edHashes as any).sha512 = sha512;
+
+const ORDER_STATUS_MAP: Record<string, string> = {
+  NEW: "NEW",
+  OPEN: "OPEN",
+  FILLED: "FILLED",
+  CLOSED: "FILLED",
+  CANCELLED: "CANCELLED",
+  CANCELED: "CANCELLED",
+  EXPIRED: "EXPIRED",
+  PARTIALLY_FILLED: "PARTIALLY_FILLED",
+  PARTIAL: "PARTIALLY_FILLED",
+  TRIGGER_PENDING: "TRIGGER_PENDING",
+  TRIGGERPENDING: "TRIGGER_PENDING",
+  TRIGGER_FAILED: "TRIGGER_FAILED",
+  TRIGGERFAILED: "TRIGGER_FAILED",
+  REJECTED: "REJECTED",
+};
+
+const TRIGGER_TOPICS = {
+  orders: (marketId: string) => `account.orderUpdate.${marketId}`,
+  positions: (marketId: string) => `account.positionUpdate.${marketId}`,
+};
+
+const DEFAULT_WS_WINDOW = "5000";
+const WS_PING_INTERVAL = 25_000;
+const WS_RECONNECT_DELAY = 2_000;
 
 export interface BackpackGatewayOptions {
   apiKey?: string;
@@ -36,50 +80,58 @@ export class BackpackGateway {
   private readonly logger: (context: string, error: unknown) => void;
   private initialized = false;
   private initPromise: Promise<void> | null = null;
-  
-  // Event listeners
-  private accountListeners = new Set<AccountListener>();
-  private orderListeners = new Set<OrderListener>();
-  private depthListeners = new Set<DepthListener>();
-  private tickerListeners = new Set<TickerListener>();
-  private klineListeners = new Set<{ interval: string; callback: KlineListener }>();
-  
-  // Polling intervals
-  private accountPollTimer: NodeJS.Timeout | null = null;
-  private orderPollTimer: NodeJS.Timeout | null = null;
-  private depthPollTimer: NodeJS.Timeout | null = null;
-  private tickerPollTimer: NodeJS.Timeout | null = null;
-  private klinePollTimers = new Map<string, NodeJS.Timeout>();
-  
-  // WebSocket streams
-  private wsOrderBook: any = null;
-  private wsTicker: any = null;
-  private wsKlines = new Map<string, any>();
-  private wsOrders: any = null;
-  private wsBalance: any = null;
+
+  private readonly accountListeners = new Set<AccountListener>();
+  private readonly orderListeners = new Set<OrderListener>();
+  private readonly depthListeners = new Set<DepthListener>();
+  private readonly tickerListeners = new Set<TickerListener>();
+  private readonly klineListeners = new Set<{ interval: string; callback: KlineListener }>();
+
+  private accountPollTimer: ReturnType<typeof setInterval> | null = null;
+  private orderPollTimer: ReturnType<typeof setInterval> | null = null;
+  private depthPollTimer: ReturnType<typeof setInterval> | null = null;
+  private tickerPollTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly klinePollTimers = new Map<string, ReturnType<typeof setInterval>>();
+
+  private readonly localOrders = new Map<string, AsterOrder>();
+  private lastBalanceSnapshot: AsterAccountSnapshot | null = null;
+  private marketId = "";
+
+  private ws: WebSocket | null = null;
+  private wsReady = false;
+  private wsPingTimer: ReturnType<typeof setInterval> | null = null;
+  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly wsTopics = new Set<string>();
+  private wsConnecting = false;
+  private readonly wsWindow: string;
+  private wsCleanup: (() => void) | null = null;
+
+  private readonly apiKey: string;
+  private readonly apiSecret: string;
 
   constructor(options: BackpackGatewayOptions) {
     this.symbol = options.symbol.toUpperCase();
     this.marketSymbol = this.symbol;
     this.logger = options.logger ?? ((context, error) => console.error(`[BackpackGateway] ${context}:`, error));
-    
-    // dynamic constructor for specific exchange
+    this.apiKey = options.apiKey ?? process.env.BACKPACK_API_KEY ?? "";
+    this.apiSecret = options.apiSecret ?? process.env.BACKPACK_API_SECRET ?? "";
+    this.wsWindow = process.env.BACKPACK_WS_WINDOW ?? DEFAULT_WS_WINDOW;
+
     this.exchange = new (ccxt as any).backpack({
-      apiKey: options.apiKey,
-      secret: options.apiSecret,
-      password: options.password,
-      subaccount: options.subaccount,
-      sandbox: options.sandbox ?? false,
+      apiKey: this.apiKey,
+      secret: this.apiSecret,
+      password: options.password ?? process.env.BACKPACK_PASSWORD,
+      subaccount: options.subaccount ?? process.env.BACKPACK_SUBACCOUNT,
+      sandbox: options.sandbox ?? (process.env.BACKPACK_SANDBOX === "true"),
       enableRateLimit: true,
-      timeout: 30000,
+      timeout: 30_000,
     });
+
   }
 
   async ensureInitialized(symbol?: string): Promise<void> {
     if (this.initialized) return;
-    
     if (this.initPromise) return this.initPromise;
-    
     this.initPromise = this.doInitialize(symbol);
     return this.initPromise;
   }
@@ -87,98 +139,82 @@ export class BackpackGateway {
   private async doInitialize(symbol?: string): Promise<void> {
     try {
       await this.exchange.loadMarkets();
-
-      // Verify symbol exists
       const requested = (symbol ?? this.symbol).toUpperCase();
-      const resolved = this.resolveMarketSymbol(requested);
-      if (!resolved) {
+      const market = this.findMarket(requested);
+      if (!market) {
         throw new Error(`Symbol ${requested} not found in Backpack markets`);
       }
-      this.marketSymbol = resolved;
-      this.market = this.exchange.market(this.marketSymbol);
-      this.isContractMarket = Boolean(this.market?.contract);
-
+      this.market = market;
+      this.marketSymbol = market.symbol;
+      this.marketId = market.id;
+      this.isContractMarket = Boolean(market.contract);
+    if (process.env.BACKPACK_DEBUG === "1") {
+      console.debug("[BackpackGateway] marketInfo", {
+        userSymbol: this.symbol,
+        ccxtSymbol: this.marketSymbol,
+        marketId: this.marketId,
+      });
+    }
       this.initialized = true;
-      this.logger("initialize", `Backpack gateway initialized for ${this.marketSymbol}`);
     } catch (error) {
-      this.logger("initialize", error);
       throw error;
     }
   }
 
-  private resolveMarketSymbol(requested: string): string | null {
-    // normalize helpers (strip non-alphanumerics for robust comparisons)
-    const strip = (v: string | undefined | null) => (v ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-
-    // Backpack uses USDC quote; accept common USD/USDT aliases in user input
-    const normalizeUsdAlias = (v: string) => {
-      const up = v.toUpperCase();
-      // Replace ...USD... or ...USDT... (optionally before _ or PERP or end) with USDC
-      // Examples: BTCUSDPERP -> BTCUSDCPERP, BTCUSD -> BTCUSDC, BTC_USDT_PERP -> BTC_USDC_PERP
-      return up
-        .replace(/USDT(?=(?:[_-]?PERP)?$)/, "USDC")
-        .replace(/USD(?=(?:[_-]?PERP)?$)/, "USDC");
-    };
-
-    const requestedWithUsdc = normalizeUsdAlias(requested);
-    const compactRequested = strip(requestedWithUsdc);
-
-    // 1) exact key in markets (e.g. "BTC/USDC" or "BTC/USDC:USDC")
-    if (this.exchange.markets[requestedWithUsdc]) return requestedWithUsdc;
-
-    // 2) direct markets_by_id lookup by exact id
-    const byId = (this.exchange as any).markets_by_id ?? {};
-    if (byId[requestedWithUsdc]) return byId[requestedWithUsdc].symbol;
-
-    // 3) flexible lookup: compare compacted forms against ids, symbols, and base+quote
+  private findMarket(requested: string): any | null {
+    const normalize = (value: string | undefined | null): string =>
+      (value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const normalized = normalize(requested);
     const markets = Object.values(this.exchange.markets) as Array<any>;
-    for (const m of markets) {
-      const idCompact = strip(m.id as string);
-      const symbolCompact = strip(m.symbol as string);
-      const baseQuoteCompact = strip((m.base as string) + (m.quote as string));
-      if (idCompact === compactRequested) return m.symbol;
-      if (symbolCompact === compactRequested) return m.symbol;
-      if (baseQuoteCompact === compactRequested) return m.symbol;
-    }
 
-    // 4) try matching against markets_by_id keys by compacted form
-    for (const key of Object.keys(byId)) {
-      if (strip(key) === compactRequested) return byId[key].symbol;
+    for (const market of markets) {
+      if (normalize(market.id) === normalized) return market;
     }
-
+    for (const market of markets) {
+      if (normalize(market.symbol) === normalized) return market;
+    }
+    for (const market of markets) {
+      const combo = `${market.base ?? ""}${market.quote ?? ""}${market.contract ? "PERP" : ""}`;
+      if (normalize(combo) === normalized) return market;
+    }
     return null;
   }
 
-  private normalizeTimeframe(interval: string): string {
-    const timeframeMap: Record<string, string> = {
-      "1m": "1m",
-      "5m": "5m", 
-      "15m": "15m",
-      "1h": "1h",
-      "4h": "4h",
-      "1d": "1d",
-    };
-    return timeframeMap[interval] || "1m";
-  }
+  // ---- Subscription APIs -------------------------------------------------
 
-  // Event subscription methods
   onAccount(callback: AccountListener): void {
     this.accountListeners.add(callback);
+    if (this.lastBalanceSnapshot) {
+      try {
+        callback(this.lastBalanceSnapshot);
+      } catch (error) {
+        this.logger("accountReplay", error);
+      }
+    }
+    void this.subscribeOnce("accountSubscribe", () => this.buildPositionTopic(true));
     this.startAccountPolling();
   }
 
   onOrders(callback: OrderListener): void {
     this.orderListeners.add(callback);
+    if (this.localOrders.size) {
+      try {
+        callback(Array.from(this.localOrders.values()).map((order) => ({ ...order })));
+      } catch (error) {
+        this.logger("ordersReplay", error);
+      }
+    }
+    void this.subscribeOnce("ordersSubscribe", () => this.buildOrderTopic(true));
     this.startOrderPolling();
   }
 
-  onDepth(callback: DepthListener): void {
-    this.depthListeners.add(callback);
+  onDepth(_callback: DepthListener): void {
+    this.depthListeners.add(_callback);
     this.startDepthPolling();
   }
 
-  onTicker(callback: TickerListener): void {
-    this.tickerListeners.add(callback);
+  onTicker(_callback: TickerListener): void {
+    this.tickerListeners.add(_callback);
     this.startTickerPolling();
   }
 
@@ -188,199 +224,201 @@ export class BackpackGateway {
     this.startKlinePolling(normalizedInterval);
   }
 
-  // Polling implementations
+  // ---- Polling -----------------------------------------------------------
+
   private startAccountPolling(): void {
     if (this.accountPollTimer) return;
-
     const poll = async () => {
       try {
-        const accountSnapshot = await this.fetchAccountSnapshot();
-
-        for (const listener of this.accountListeners) {
-          listener(accountSnapshot);
-        }
+        const snapshot = await this.fetchAccountSnapshot();
+        this.lastBalanceSnapshot = snapshot;
+        this.emitAccount(snapshot);
       } catch (error) {
         this.logger("accountPoll", error);
       }
     };
-    
-    poll(); // Initial fetch
-    this.accountPollTimer = setInterval(poll, 5000); // Poll every 5 seconds
+    void poll();
+    this.accountPollTimer = setInterval(poll, 5_000);
   }
 
   private startOrderPolling(): void {
     if (this.orderPollTimer) return;
-
     const poll = async () => {
       try {
-        const [openOrders, closedOrders] = await Promise.all([
+        const [openOrders, allOrders] = await Promise.all([
           this.exchange.fetchOpenOrders(this.marketSymbol),
-          this.exchange.fetchClosedOrders(this.marketSymbol, undefined, 50), // Last 50 closed orders
+          this.exchange.fetchOrders(this.marketSymbol, undefined, 200, {}),
         ]);
-        
-        const allOrders = [...openOrders, ...closedOrders];
-        const mappedOrders = allOrders.map(order => this.mapOrderToAsterOrder(order));
-        
-        for (const listener of this.orderListeners) {
-          listener(mappedOrders);
+        const active = new Map<string, AsterOrder>();
+        for (const entry of [...openOrders, ...allOrders]) {
+          const status = this.normalizeStatus(entry.status ?? (entry.info?.status as string));
+          if (this.isTerminalStatus(status)) continue;
+          const mapped = this.mapRestOrder(entry);
+          active.set(String(mapped.orderId), mapped);
         }
+        this.localOrders.clear();
+        for (const [id, order] of active.entries()) {
+          this.localOrders.set(id, order);
+        }
+        this.emitOrders();
       } catch (error) {
         this.logger("orderPoll", error);
       }
     };
-    
-    poll(); // Initial fetch
-    this.orderPollTimer = setInterval(poll, 2000); // Poll every 2 seconds
+    void poll();
+    this.orderPollTimer = setInterval(poll, 3_000);
   }
 
   private startDepthPolling(): void {
     if (this.depthPollTimer) return;
-    
     const poll = async () => {
       try {
         const orderbook = await this.exchange.fetchOrderBook(this.marketSymbol, 20);
         const depth = this.mapOrderBookToDepth(orderbook);
-        
-        for (const listener of this.depthListeners) {
-          listener(depth);
-        }
+        for (const listener of this.depthListeners) listener(depth);
       } catch (error) {
         this.logger("depthPoll", error);
       }
     };
-    
-    poll(); // Initial fetch
-    this.depthPollTimer = setInterval(poll, 1000); // Poll every 1 second
+    void poll();
+    this.depthPollTimer = setInterval(poll, 1_000);
   }
 
   private startTickerPolling(): void {
     if (this.tickerPollTimer) return;
-    
     const poll = async () => {
       try {
         const ticker = await this.exchange.fetchTicker(this.marketSymbol);
-        const asterTicker = this.mapTickerToAsterTicker(ticker);
-        
-        for (const listener of this.tickerListeners) {
-          listener(asterTicker);
-        }
+        const mapped = this.mapTickerToAsterTicker(ticker);
+        for (const listener of this.tickerListeners) listener(mapped);
       } catch (error) {
         this.logger("tickerPoll", error);
       }
     };
-    
-    poll(); // Initial fetch
-    this.tickerPollTimer = setInterval(poll, 2000); // Poll every 2 seconds
+    void poll();
+    this.tickerPollTimer = setInterval(poll, 2_000);
   }
 
   private startKlinePolling(interval: string): void {
     if (this.klinePollTimers.has(interval)) return;
-    
     const poll = async () => {
       try {
         const ohlcv = await this.exchange.fetchOHLCV(this.marketSymbol, interval, undefined, 100);
         const klines = (ohlcv as number[][])
-          .filter((c) => Array.isArray(c) && c.length >= 6)
-          .map((c) => this.mapOHLCVToKline([c[0], c[1], c[2], c[3], c[4], c[5]] as [number, number, number, number, number, number], interval));
-        
-        for (const listener of this.klineListeners) {
-          if (listener.interval === interval) {
-            listener.callback(klines);
-          }
+          .filter((row) => Array.isArray(row) && row.length >= 6)
+          .map((row) => this.mapOHLCVToKline(row as [number, number, number, number, number, number], interval));
+        for (const { interval: key, callback } of this.klineListeners) {
+          if (key === interval) callback(klines);
         }
       } catch (error) {
-        this.logger("klinePoll", error);
+        this.logger(`klinePoll:${interval}`, error);
       }
     };
-    
-    poll(); // Initial fetch
-    this.klinePollTimers.set(interval, setInterval(poll, 5000)); // Poll every 5 seconds
+    void poll();
+    this.klinePollTimers.set(interval, setInterval(poll, 5_000));
   }
 
-  // Order management
+  // ---- Order actions -----------------------------------------------------
+
   async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
     await this.ensureInitialized();
-    
-    // Only pass exchange-specific params in the last argument so we don't
-    // override ccxt's internal request mapping (e.g. side mapping for Backpack).
     const symbol = this.marketSymbol;
-    const type = this.mapOrderTypeToCcxt(params.type);
+    const normalizedType = this.normalizeOrderType(params.type);
     const side = params.side.toLowerCase();
     const amount = params.quantity;
-    const price = params.price;
+    let price = params.price;
 
     const extraParams: Record<string, unknown> = {};
-    if (params.stopPrice !== undefined) extraParams.stopPrice = params.stopPrice;
-    // Map GTX (post-only) to Backpack's postOnly boolean and use GTC as TIF
     if (params.timeInForce === "GTX") {
       extraParams.postOnly = true;
       extraParams.timeInForce = "GTC";
-    } else if (params.timeInForce !== undefined) {
-      extraParams.timeInForce = params.timeInForce; // GTC, IOC, FOK
+    } else if (params.timeInForce) {
+      extraParams.timeInForce = params.timeInForce;
     }
-    // Reduce-only string boolean -> boolean per OpenAPI
     if (params.reduceOnly !== undefined) {
       extraParams.reduceOnly = params.reduceOnly === "true";
     }
-    if (params.closePosition !== undefined) {
-      extraParams.closePosition = params.closePosition === "true";
+
+    let ccxtType: string;
+    if (normalizedType === "STOP_MARKET") {
+      ccxtType = "market";
+      price = undefined;
+      if (params.stopPrice !== undefined) {
+        extraParams.triggerPrice = params.stopPrice;
+        if (extraParams.triggerBy === undefined) {
+          extraParams.triggerBy = "MarkPrice";
+        }
+      }
+    } else if (normalizedType === "MARKET") {
+      ccxtType = "market";
+      price = undefined;
+    } else {
+      ccxtType = "limit";
     }
 
-    const order = await this.exchange.createOrder(
-      symbol,
-      type,
-      side,
-      amount,
-      price,
-      extraParams
-    );
-    
-    return this.mapOrderToAsterOrder(order);
+    if (params.stopPrice !== undefined && normalizedType !== "STOP_MARKET") {
+      extraParams.stopPrice = params.stopPrice;
+    }
+
+    const order = await this.exchange.createOrder(symbol, ccxtType, side, amount, price, extraParams);
+    const mapped = this.mapRestOrder(order as CcxtOrder);
+    this.localOrders.set(String(mapped.orderId), mapped);
+    this.emitOrders();
+    return mapped;
   }
 
   async cancelOrder(params: { orderId: number | string }): Promise<void> {
     await this.exchange.cancelOrder(params.orderId.toString(), this.marketSymbol);
+    this.localOrders.delete(String(params.orderId));
+    this.emitOrders();
   }
 
   async cancelOrders(params: { orderIdList: Array<number | string> }): Promise<void> {
     await Promise.all(
-      params.orderIdList.map(orderId => 
-        this.exchange.cancelOrder(orderId.toString(), this.marketSymbol)
-      )
+      params.orderIdList.map((orderId) => this.exchange.cancelOrder(String(orderId), this.marketSymbol))
     );
+    for (const orderId of params.orderIdList) {
+      this.localOrders.delete(String(orderId));
+    }
+    this.emitOrders();
   }
 
   async cancelAllOrders(): Promise<void> {
     try {
       if (typeof (this.exchange as any).cancelAllOrders === "function") {
         await (this.exchange as any).cancelAllOrders(this.marketSymbol);
+        this.localOrders.clear();
+        this.emitOrders();
         return;
       }
     } catch {
       // fall through to manual cancel
     }
     const open = await this.exchange.fetchOpenOrders(this.marketSymbol);
-    for (const o of open) {
-      await this.exchange.cancelOrder(o.id as string, this.marketSymbol);
+    for (const order of open) {
+      await this.exchange.cancelOrder(order.id as string, this.marketSymbol);
+      this.localOrders.delete(String(order.id));
     }
+    this.emitOrders();
   }
 
-  // Mapping functions
+  // ---- Mapping helpers ---------------------------------------------------
+
   private mapBalanceToAccountSnapshot(balance: Balances): AsterAccountSnapshot {
     return this.mapBalanceToAccountSnapshotWithPositions(balance, []);
   }
 
   private async fetchAccountSnapshot(): Promise<AsterAccountSnapshot> {
     await this.ensureInitialized();
-    const balancePromise = this.exchange.fetchBalance();
-    const positionsPromise = this.isContractMarket
-      ? this.exchange.fetchPositions([this.marketSymbol]).catch((error: unknown) => {
-          this.logger("fetchPositions", error);
-          return [];
-        })
-      : Promise.resolve([]);
-
-    const [balance, positions] = await Promise.all([balancePromise, positionsPromise]);
+    const [balance, positions] = await Promise.all([
+      this.exchange.fetchBalance(),
+      this.isContractMarket
+        ? this.exchange.fetchPositions([this.marketSymbol]).catch((error: unknown) => {
+            this.logger("fetchPositions", error);
+            return [];
+          })
+        : Promise.resolve([]),
+    ]);
     return this.mapBalanceToAccountSnapshotWithPositions(balance, positions ?? []);
   }
 
@@ -388,9 +426,8 @@ export class BackpackGateway {
     const now = Date.now();
     const assets = this.normalizeAssets(balance, now);
     const positions = this.normalizePositions(rawPositions, now);
-
     const totalWalletBalance = this.sumStrings(assets.map((asset) => asset.walletBalance));
-    const totalUnrealizedProfit = this.sumStrings(positions.map((position) => position.unrealizedProfit ?? "0"));
+    const totalUnrealized = this.sumStrings(positions.map((position) => position.unrealizedProfit ?? "0"));
     const availableBalance = this.sumStrings(assets.map((asset) => asset.availableBalance));
 
     const snapshot: AsterAccountSnapshot = {
@@ -399,170 +436,75 @@ export class BackpackGateway {
       canWithdraw: true,
       updateTime: now,
       totalWalletBalance,
-      totalUnrealizedProfit,
+      totalUnrealizedProfit: totalUnrealized,
       positions,
       assets,
+      availableBalance,
+      maxWithdrawAmount: availableBalance,
     };
 
-    snapshot.availableBalance = availableBalance;
-    snapshot.maxWithdrawAmount = availableBalance;
-
     if (this.isContractMarket) {
-      const totalMarginBalance = this.addStrings(totalWalletBalance, totalUnrealizedProfit);
+      const totalMarginBalance = this.addStrings(totalWalletBalance, totalUnrealized);
       snapshot.totalMarginBalance = totalMarginBalance;
       snapshot.totalCrossWalletBalance = totalWalletBalance;
-      snapshot.totalCrossUnPnl = totalUnrealizedProfit;
+      snapshot.totalCrossUnPnl = totalUnrealized;
     }
-
     return snapshot;
   }
 
   private normalizeAssets(balance: Balances, now: number): AsterAccountSnapshot["assets"] {
     const metaKeys = new Set(["free", "used", "total", "info", "timestamp", "datetime", "debt"]);
     const assets: AsterAccountSnapshot["assets"] = [];
-
     for (const [currency, value] of Object.entries(balance)) {
       if (metaKeys.has(currency)) continue;
       if (!value || typeof value !== "object") continue;
-
       const walletBalance = this.toStringAmount((value as any).total ?? (value as any).free ?? "0");
       const availableBalance = this.toStringAmount((value as any).free ?? "0");
-
-      assets.push({
-        asset: currency,
-        walletBalance,
-        availableBalance,
-        updateTime: now,
-      });
+      assets.push({ asset: currency, walletBalance, availableBalance, updateTime: now });
     }
-
     return assets;
   }
 
   private normalizePositions(rawPositions: any[], now: number): AsterAccountSnapshot["positions"] {
     if (!Array.isArray(rawPositions)) return [];
-
     const positions: AsterAccountSnapshot["positions"] = [];
-
-    for (const position of rawPositions) {
-      const info = position?.info ?? position ?? {};
-      const rawSymbol = position?.symbol ?? info.symbol ?? this.marketSymbol;
-      const rawContracts = position?.contracts ?? info.netExposureQuantity;
-      const derivedSide = (position?.side ?? info.side ?? this.deriveSideFromExposure(info)) ?? "long";
-      const rawSide = derivedSide.toString().toLowerCase();
-      const quantity = this.toNumber(rawContracts);
+    for (const raw of rawPositions) {
+      const info = raw?.info ?? raw ?? {};
+      const quantity = this.toNumber(raw?.contracts ?? info.netExposureQuantity ?? info.netQuantity);
       if (!quantity) continue;
-
-      const side = rawSide === "short" ? "short" : "long";
-      const signedQuantity = side === "short" ? -Math.abs(quantity) : Math.abs(quantity);
-
-      const normalized: AsterAccountPosition = {
-        symbol: rawSymbol,
-        positionAmt: signedQuantity.toString(),
-        entryPrice: this.toStringAmount(position?.entryPrice ?? info.entryPrice ?? "0"),
-        unrealizedProfit: this.toStringAmount(position?.unrealizedPnl ?? info.pnlUnrealized ?? "0"),
-        positionSide: side === "short" ? "SHORT" : "LONG",
+      const sideRaw = String(raw?.side ?? info.side ?? this.deriveSideFromExposure(info)).toLowerCase();
+      const isShort = sideRaw.includes("short") || quantity < 0;
+      const positionAmt = isShort ? -Math.abs(quantity) : Math.abs(quantity);
+      const entryPrice = this.toStringAmount(raw?.entryPrice ?? info.entryPrice ?? "0");
+      const unrealized = this.toStringAmount(raw?.unrealizedPnl ?? info.pnlUnrealized ?? "0");
+      const markPrice = this.toOptionalString(raw?.markPrice ?? info.markPrice);
+      const liquidationPrice = this.toOptionalString(raw?.liquidationPrice ?? info.estLiquidationPrice);
+      const leverage = this.toOptionalString(raw?.leverage ?? info.leverage);
+      positions.push({
+        symbol: this.symbol,
+        positionAmt: positionAmt.toString(),
+        entryPrice,
+        unrealizedProfit: unrealized,
+        positionSide: "BOTH",
         updateTime: now,
-      };
-
-      const markPrice = this.toOptionalString(position?.markPrice ?? info.markPrice);
-      if (markPrice !== undefined) normalized.markPrice = markPrice;
-
-      const liquidationPrice = this.toOptionalString(position?.liquidationPrice ?? info.estLiquidationPrice);
-      if (liquidationPrice !== undefined) normalized.liquidationPrice = liquidationPrice;
-
-      const initialMargin = this.toOptionalString(position?.initialMargin ?? info.initialMargin);
-      if (initialMargin !== undefined) normalized.initialMargin = initialMargin;
-
-      const maintMargin = this.toOptionalString(position?.maintenanceMargin ?? info.maintenanceMargin);
-      if (maintMargin !== undefined) normalized.maintMargin = maintMargin;
-
-      const leverage = this.toOptionalString(position?.leverage ?? info.leverage);
-      if (leverage !== undefined) normalized.leverage = leverage;
-
-      normalized.marginType = "CROSSED";
-
-      positions.push(normalized);
+        markPrice,
+        liquidationPrice,
+        leverage,
+        marginType: "CROSSED",
+      });
     }
-
     return positions;
-  }
-
-  private deriveSideFromExposure(info: Record<string, unknown>): "long" | "short" | "flat" {
-    const exposure = this.toNumber(info?.netExposureNotional ?? info?.netCost ?? info?.netQuantity);
-    if (!exposure) return "flat";
-    return exposure < 0 ? "short" : "long";
-  }
-
-  private toStringAmount(value: unknown): string {
-    if (value === undefined || value === null) return "0";
-    if (typeof value === "string") {
-      if (value.trim() === "") return "0";
-      return value;
-    }
-    if (typeof value === "number") {
-      if (!Number.isFinite(value)) return "0";
-      return value.toString();
-    }
-    return "0";
-  }
-
-  private toOptionalString(value: unknown): string | undefined {
-    const normalized = this.toStringAmount(value);
-    return normalized === "0" ? undefined : normalized;
-  }
-
-  private toNumber(value: unknown): number {
-    const asString = this.toStringAmount(value);
-    const parsed = Number(asString);
-    if (!Number.isFinite(parsed)) return 0;
-    return parsed;
-  }
-
-  private sumStrings(values: string[]): string {
-    let total = 0;
-    for (const value of values) {
-      const parsed = Number(value);
-      if (!Number.isFinite(parsed)) continue;
-      total += parsed;
-    }
-    return total.toString();
-  }
-
-  private addStrings(a: string, b: string): string {
-    const sum = Number(a) + Number(b);
-    if (!Number.isFinite(sum)) return "0";
-    return sum.toString();
-  }
-
-  private mapOrderToAsterOrder(order: CcxtOrder): AsterOrder {
-    const side = (order.side ?? "buy").toUpperCase() as "BUY" | "SELL";
-    const mappedType = this.mapCcxtOrderTypeToAster(order.type);
-    return {
-      orderId: String(order.id ?? ""),
-      clientOrderId: (order.clientOrderId as any as string) || "",
-      symbol: order.symbol || this.marketSymbol,
-      side,
-      type: mappedType,
-      status: (order.status as any as string) || "",
-      price: order.price?.toString() || "0",
-      origQty: order.amount?.toString() || "0",
-      executedQty: order.filled?.toString() || "0",
-      stopPrice: order.stopPrice?.toString() || "0",
-      time: order.timestamp || Date.now(),
-      updateTime: order.lastUpdateTimestamp || Date.now(),
-      reduceOnly: false,
-      closePosition: false,
-      avgPrice: order.average?.toString(),
-      cumQuote: order.cost?.toString(),
-    };
   }
 
   private mapOrderBookToDepth(orderbook: CcxtOrderBook): AsterDepth {
     return {
       lastUpdateId: orderbook.nonce || Date.now(),
-      bids: (orderbook.bids || []).filter((t) => t && t.length >= 2).map(([price, amount]) => [String(price ?? 0), String(amount ?? 0)]),
-      asks: (orderbook.asks || []).filter((t) => t && t.length >= 2).map(([price, amount]) => [String(price ?? 0), String(amount ?? 0)]),
+      bids: (orderbook.bids ?? [])
+        .filter((row) => row && row.length >= 2)
+        .map(([price, amount]) => [String(price ?? 0), String(amount ?? 0)]),
+      asks: (orderbook.asks ?? [])
+        .filter((row) => row && row.length >= 2)
+        .map(([price, amount]) => [String(price ?? 0), String(amount ?? 0)]),
       eventTime: orderbook.timestamp,
     };
   }
@@ -570,21 +512,24 @@ export class BackpackGateway {
   private mapTickerToAsterTicker(ticker: CcxtTicker): AsterTicker {
     return {
       symbol: ticker.symbol,
-      lastPrice: ticker.last?.toString() || "0",
-      openPrice: ticker.open?.toString() || "0",
-      highPrice: ticker.high?.toString() || "0",
-      lowPrice: ticker.low?.toString() || "0",
-      volume: ticker.baseVolume?.toString() || "0",
-      quoteVolume: ticker.quoteVolume?.toString() || "0",
+      lastPrice: ticker.last?.toString() ?? "0",
+      openPrice: ticker.open?.toString() ?? "0",
+      highPrice: ticker.high?.toString() ?? "0",
+      lowPrice: ticker.low?.toString() ?? "0",
+      volume: ticker.baseVolume?.toString() ?? "0",
+      quoteVolume: ticker.quoteVolume?.toString() ?? "0",
       eventTime: ticker.timestamp,
     };
   }
 
-  private mapOHLCVToKline(candle: [number, number, number, number, number, number], interval: string): AsterKline {
-    const [timestamp, open, high, low, close, volume] = candle;
+  private mapOHLCVToKline(
+    candle: [number, number, number, number, number, number],
+    interval: string
+  ): AsterKline {
+    const [openTime, open, high, low, close, volume] = candle;
     return {
-      openTime: timestamp,
-      closeTime: timestamp + this.getIntervalMs(interval),
+      openTime,
+      closeTime: openTime + this.intervalToMs(interval),
       open: open.toString(),
       high: high.toString(),
       low: low.toString(),
@@ -594,60 +539,575 @@ export class BackpackGateway {
     };
   }
 
-  private mapOrderTypeToCcxt(type: string): string {
-    const typeMap: Record<string, string> = {
-      "LIMIT": "limit",
-      "MARKET": "market",
-      "STOP_MARKET": "stop",
-      "TRAILING_STOP_MARKET": "trailing-stop",
+  private mapRestOrder(order: CcxtOrder): AsterOrder {
+    const info = (order.info ?? {}) as Record<string, unknown>;
+    const side = (order.side ?? "buy").toUpperCase() as "BUY" | "SELL";
+    let type = this.normalizeOrderType(order.type ?? (info.o as string)) as OrderType;
+    if (
+      order.triggerPrice != null ||
+      info.triggerPrice != null ||
+      info.stopLossTriggerPrice != null ||
+      info.Y != null ||
+      info.y != null
+    ) {
+      type = "STOP_MARKET";
+    }
+    const status = this.normalizeStatus(order.status ?? (info.status as string));
+    const price = this.pickString([order.price, info.price, info.p]);
+    const quantity = this.pickString([order.amount, info.quantity, info.triggerQuantity, info.q, info.Y]);
+    const executed = this.pickString([order.filled, info.executedQuantity, info.executedBaseQuantity, info.z]);
+    const stopPrice = this.pickString([order.stopPrice, info.triggerPrice, info.stopLossTriggerPrice, info.P]);
+    const avgPrice = this.pickString([order.average, info.avgPrice, info.L]);
+    const cumQuote = this.pickString([order.cost, info.executedQuoteQuantity, info.Z]);
+    const timestamp = order.timestamp ?? Date.now();
+    const reduceOnly = Boolean(order.reduceOnly ?? info.reduceOnly ?? info.r ?? false);
+
+    return {
+      orderId: String(order.id ?? ""),
+      clientOrderId: (order.clientOrderId as any as string) || "",
+      symbol: this.symbol,
+      side,
+      type,
+      status,
+      price,
+      origQty: quantity,
+      executedQty: executed,
+      stopPrice,
+      time: timestamp,
+      updateTime: order.lastUpdateTimestamp ?? timestamp,
+      reduceOnly,
+      closePosition: false,
+      avgPrice,
+      cumQuote,
     };
-    return typeMap[type] || "limit";
   }
 
-  private mapCcxtOrderTypeToAster(type: string | undefined): OrderType {
-    const typeMap: Record<string, OrderType> = {
-      "limit": "LIMIT",
-      "market": "MARKET",
-      "stop": "STOP_MARKET",
-      "trailing-stop": "TRAILING_STOP_MARKET",
+  private mapWsOrder(data: Record<string, unknown>): AsterOrder {
+    const sideRaw = String(data.S ?? "").toUpperCase();
+    const side: "BUY" | "SELL" = sideRaw === "BID" ? "BUY" : "SELL";
+    const triggerPresent = data.P != null || data.B != null;
+    const type = (triggerPresent ? "STOP_MARKET" : String(data.o ?? "LIMIT").toUpperCase()) as OrderType;
+    const status = this.normalizeStatus(data.X as string);
+    const price = this.pickString([data.p, data.P, "0"]);
+    const quantity = this.pickString([data.q, data.Y]);
+    const executed = this.pickString([data.z, data.l, data.Z]);
+    const stopPrice = this.pickString([data.P]);
+    const timestampMicro = Number(data.E ?? data.T ?? Date.now() * 1000);
+    const timestamp = Number.isFinite(timestampMicro) ? Math.floor(timestampMicro / 1000) : Date.now();
+    const reduceOnly = Boolean(data.r);
+    const avgPrice = this.pickString([data.L]);
+    const cumQuote = this.pickString([data.Z]);
+
+    return {
+      orderId: String(data.i ?? ""),
+      clientOrderId: data.c ? String(data.c) : "",
+      symbol: this.symbol,
+      side,
+      type,
+      status,
+      price,
+      origQty: quantity,
+      executedQty: executed,
+      stopPrice,
+      time: timestamp,
+      updateTime: timestamp,
+      reduceOnly,
+      closePosition: false,
+      avgPrice,
+      cumQuote,
     };
-    return type ? (typeMap[type] ?? "LIMIT") : "LIMIT";
   }
 
-  private getIntervalMs(interval: string): number {
-    const intervalMap: Record<string, number> = {
-      "1m": 60 * 1000,
-      "5m": 5 * 60 * 1000,
-      "15m": 15 * 60 * 1000,
-      "1h": 60 * 60 * 1000,
-      "4h": 4 * 60 * 60 * 1000,
-      "1d": 24 * 60 * 60 * 1000,
-    };
-    return intervalMap[interval] || 60 * 1000;
+  private emitOrders(): void {
+    const snapshot = Array.from(this.localOrders.values()).map((order) => ({ ...order }));
+    for (const listener of this.orderListeners) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.logger("emitOrders", error);
+      }
+    }
   }
 
-  // Cleanup
-  destroy(): void {
-    if (this.accountPollTimer) {
-      clearInterval(this.accountPollTimer);
-      this.accountPollTimer = null;
+  private mapWsPosition(data: Record<string, unknown>): AsterAccountPosition | null {
+    const quantityRaw = data.q ?? data.Q;
+    const qty = Number(this.toStringAmount(quantityRaw));
+    if (!Number.isFinite(qty)) return null;
+    const entryPrice = this.toStringAmount(data.B ?? data.entryPrice ?? "0");
+    const unrealized = this.toStringAmount(data.P ?? "0");
+    const markPrice = this.toOptionalString(data.M ?? data.markPrice);
+    const leverage = this.toOptionalString(data.f ?? data.leverage);
+    const updateTime = Number(data.E ?? data.T ?? Date.now());
+    const isShort = qty < 0;
+    const positionAmt = isShort ? (-Math.abs(qty)).toString() : Math.abs(qty).toString();
+
+    return {
+      symbol: this.symbol,
+      positionAmt,
+      entryPrice,
+      unrealizedProfit: unrealized,
+      positionSide: "BOTH",
+      updateTime: Number.isFinite(updateTime) ? Math.floor(updateTime / 1000) : Date.now(),
+      markPrice,
+      leverage,
+      marginType: "CROSSED",
+    };
+  }
+
+  private mergeWsPosition(position: AsterAccountPosition): void {
+    const snapshot: AsterAccountSnapshot = this.lastBalanceSnapshot
+      ? {
+          ...this.lastBalanceSnapshot,
+          positions: this.lastBalanceSnapshot.positions ? [...this.lastBalanceSnapshot.positions] : [],
+        }
+      : {
+          canTrade: true,
+          canDeposit: true,
+          canWithdraw: true,
+          updateTime: Date.now(),
+          totalWalletBalance: "0",
+          totalUnrealizedProfit: "0",
+          positions: [],
+          assets: [],
+          availableBalance: "0",
+          maxWithdrawAmount: "0",
+        };
+
+    const positions = snapshot.positions ?? [];
+    const idx = positions.findIndex((p) => p.symbol === position.symbol);
+    if (this.isNearlyZero(position.positionAmt)) {
+      if (idx >= 0) positions.splice(idx, 1);
+    } else if (idx >= 0) {
+    positions[idx] = position;
+  } else {
+    positions.push(position);
+  }
+
+  snapshot.positions = positions;
+  snapshot.totalUnrealizedProfit = this.sumStrings(
+    positions.map((p) => p.unrealizedProfit ?? "0")
+  );
+  snapshot.updateTime = Date.now();
+  this.lastBalanceSnapshot = snapshot;
+  if (process.env.BACKPACK_DEBUG === "1") {
+    console.debug("[BackpackGateway] positions", snapshot.positions);
+  }
+  this.emitAccount(snapshot);
+  }
+
+  private emitAccount(snapshot: AsterAccountSnapshot): void {
+    for (const listener of this.accountListeners) {
+      try {
+        listener(snapshot);
+      } catch (error) {
+        this.logger("emitAccount", error);
+      }
     }
-    if (this.orderPollTimer) {
-      clearInterval(this.orderPollTimer);
-      this.orderPollTimer = null;
+  }
+
+  // ---- WebSocket ---------------------------------------------------------
+
+  private ensurePrivateSocket(): void {
+    if (!this.apiKey || !this.apiSecret) return;
+    if (!this.marketId) return;
+    if (this.ws && (this.ws.readyState === WebSocketCtor.OPEN || this.ws.readyState === WebSocketCtor.CONNECTING)) {
+      return;
     }
-    if (this.depthPollTimer) {
-      clearInterval(this.depthPollTimer);
-      this.depthPollTimer = null;
+    if (this.wsConnecting) return;
+    this.connectPrivateSocket();
+  }
+
+  private connectPrivateSocket(): void {
+    this.wsConnecting = true;
+    this.detachWebSocket();
+    const socket = new WebSocketCtor("wss://ws.backpack.exchange");
+    this.ws = socket;
+
+    if ("addEventListener" in socket && typeof socket.addEventListener === "function") {
+      socket.addEventListener("open", this.handleWsOpen);
+      socket.addEventListener("close", this.handleWsClose);
+      socket.addEventListener("error", this.handleWsError);
+      socket.addEventListener("message", this.handleWsMessage);
+      this.wsCleanup = () => {
+        socket.removeEventListener("open", this.handleWsOpen);
+        socket.removeEventListener("close", this.handleWsClose);
+        socket.removeEventListener("error", this.handleWsError);
+        socket.removeEventListener("message", this.handleWsMessage);
+      };
+    } else if ("on" in socket && typeof (socket as any).on === "function") {
+      const nodeSocket = socket as any;
+      const off =
+        typeof nodeSocket.off === "function"
+          ? (event: string, handler: (...args: any[]) => void) => nodeSocket.off(event, handler)
+          : (event: string, handler: (...args: any[]) => void) => nodeSocket.removeListener(event, handler);
+      const wrappedMessage = (data: any) => this.handleWsMessage({ data });
+      nodeSocket.on("open", this.handleWsOpen);
+      nodeSocket.on("close", this.handleWsClose);
+      nodeSocket.on("error", this.handleWsError);
+      nodeSocket.on("message", wrappedMessage);
+      this.wsCleanup = () => {
+        off("open", this.handleWsOpen);
+        off("close", this.handleWsClose);
+        off("error", this.handleWsError);
+        off("message", wrappedMessage);
+      };
+    } else {
+      (socket as any).onopen = this.handleWsOpen;
+      (socket as any).onclose = this.handleWsClose;
+      (socket as any).onerror = this.handleWsError;
+      (socket as any).onmessage = this.handleWsMessage;
+      this.wsCleanup = () => {
+        (socket as any).onopen = null;
+        (socket as any).onclose = null;
+        (socket as any).onerror = null;
+        (socket as any).onmessage = null;
+      };
     }
-    if (this.tickerPollTimer) {
-      clearInterval(this.tickerPollTimer);
-      this.tickerPollTimer = null;
+  }
+
+  private handleWsOpen = (): void => {
+    this.wsConnecting = false;
+    this.wsReady = true;
+    this.startPing();
+    void this.resubscribeAllTopics();
+  };
+
+  private handleWsClose = (event: any): void => {
+    if (this.wsCleanup) {
+      try {
+        this.wsCleanup();
+      } catch {
+        /* ignore */
+      }
+      this.wsCleanup = null;
     }
-    
-    for (const timer of this.klinePollTimers.values()) {
-      clearInterval(timer);
+    this.wsConnecting = false;
+    this.wsReady = false;
+    this.ws = null;
+    this.stopPing();
+    this.scheduleReconnect();
+  };
+
+  private handleWsError = (_event: any): void => {
+    /* swallow non-fatal errors; reconnect handled by close */
+  };
+
+  private handleWsMessage = (event: any): void => {
+    try {
+      const payload = event?.data ?? event;
+      const raw =
+        typeof payload === "string"
+          ? payload
+          : Buffer.isBuffer(payload)
+          ? payload.toString("utf8")
+          : payload?.toString?.() ?? "";
+      if (!raw) return;
+      const message = JSON.parse(raw) as Record<string, unknown>;
+    const stream = String(message.stream ?? "");
+    const data = message.data as Record<string, unknown> | undefined;
+    if (process.env.BACKPACK_DEBUG === "1") {
+      console.debug("[BackpackGateway] wsMessage", {
+        stream,
+        data,
+        result: message.result,
+        symbol: this.symbol,
+        marketId: this.marketId,
+      });
     }
-    this.klinePollTimers.clear();
+      if (!data) return;
+      if (stream.startsWith("account.orderUpdate")) {
+        this.handleWsOrder(data);
+      } else if (stream.startsWith("account.positionUpdate")) {
+        this.handleWsPosition(data);
+      } else if (stream === "ping") {
+        this.sendPong();
+      }
+    } catch (error) {
+      this.logger("wsMessageParse", error);
+    }
+  };
+
+  private handleWsOrder(data: Record<string, unknown>): void {
+    const mapped = this.mapWsOrder(data);
+    if (process.env.BACKPACK_DEBUG === "1") {
+      console.debug("[BackpackGateway] wsOrder", mapped);
+    }
+    const status = mapped.status;
+    const id = mapped.orderId;
+    if (this.isTerminalStatus(status)) {
+      if (this.localOrders.delete(String(id))) {
+        this.emitOrders();
+      }
+      return;
+    }
+    this.localOrders.set(String(id), mapped);
+    this.emitOrders();
+  }
+
+  private handleWsPosition(data?: Record<string, unknown>): void {
+    if (data) {
+      const mapped = this.mapWsPosition(data);
+      if (mapped) {
+        this.mergeWsPosition(mapped);
+        return;
+      }
+    }
+    void this.refreshAccountSnapshot();
+  }
+
+  private async refreshAccountSnapshot(): Promise<void> {
+    try {
+      const snapshot = await this.fetchAccountSnapshot();
+      this.lastBalanceSnapshot = snapshot;
+      this.emitAccount(snapshot);
+    } catch (error) {
+      this.logger("refreshAccountSnapshot", error);
+    }
+  }
+
+  private async resubscribeAllTopics(): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocketCtor.OPEN) return;
+    if (!this.wsTopics.size) return;
+    for (const topic of this.wsTopics) {
+      await this.sendWsSubscription([topic], "SUBSCRIBE");
+    }
+  }
+
+  private subscribePrivateTopic(topic: string): void {
+    if (!topic || !this.apiKey || !this.apiSecret) return;
+    if (this.wsTopics.has(topic)) return;
+    this.wsTopics.add(topic);
+    if (this.wsReady && this.ws && this.ws.readyState === WebSocketCtor.OPEN) {
+      void this.sendWsSubscription([topic], "SUBSCRIBE");
+    }
+  }
+
+  private async sendWsSubscription(topics: string[], method: "SUBSCRIBE" | "UNSUBSCRIBE"): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocketCtor.OPEN) return;
+    if (!topics.length) return;
+    try {
+      const timestamp = Date.now().toString();
+      const payload = `instruction=${method.toLowerCase()}&timestamp=${timestamp}&window=${this.wsWindow}`;
+      const signature = await this.createSignature(payload);
+      const message = {
+        method,
+        params: topics,
+        signature: [this.apiKey, signature, timestamp, this.wsWindow],
+      };
+      if (process.env.BACKPACK_DEBUG === "1") {
+        this.logger("wsSubscribe", message);
+      }
+      this.ws.send(JSON.stringify(message));
+    } catch (error) {
+      this.logger("wsSubscribe", error);
+    }
+  }
+
+  private async subscribeOnce(context: string, topicFactory: () => string): Promise<void> {
+    try {
+      await this.ensureInitialized();
+      if (!this.apiKey || !this.apiSecret) return;
+      this.ensurePrivateSocket();
+      const baseTopic = topicFactory();
+      const idTopic = baseTopic === "account.orderUpdate" ? this.buildOrderTopic() : this.buildPositionTopic();
+      this.subscribePrivateTopic(baseTopic);
+      this.subscribePrivateTopic(idTopic);
+    } catch (error) {
+      this.logger(context, error);
+    }
+  }
+
+  private startPing(): void {
+    this.stopPing();
+    if (!this.ws || typeof this.ws.send !== "function") return;
+    this.wsPingTimer = setInterval(() => {
+      try {
+        if (this.ws && this.ws.readyState === WebSocketCtor.OPEN) {
+          this.ws.send(JSON.stringify({ method: "PING" }));
+        }
+      } catch (error) {
+        this.logger("wsPing", error);
+      }
+    }, WS_PING_INTERVAL);
+  }
+
+  private stopPing(): void {
+    if (this.wsPingTimer) {
+      clearInterval(this.wsPingTimer);
+      this.wsPingTimer = null;
+    }
+  }
+
+  private sendPong(): void {
+    try {
+      if (this.ws && this.ws.readyState === WebSocketCtor.OPEN) {
+        this.ws.send(JSON.stringify({ method: "PONG" }));
+      }
+    } catch (error) {
+      this.logger("wsPong", error);
+    }
+  }
+
+  private scheduleReconnect(): void {
+    if (this.wsReconnectTimer) return;
+    this.wsReconnectTimer = setTimeout(() => {
+      this.wsReconnectTimer = null;
+      this.ensurePrivateSocket();
+    }, WS_RECONNECT_DELAY);
+  }
+
+  private detachWebSocket(): void {
+    if (this.wsCleanup) {
+      try {
+        this.wsCleanup();
+      } catch {
+        /* ignore */
+      }
+      this.wsCleanup = null;
+    }
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+
+  private buildOrderTopic(symbolOnly = false): string {
+    const id = this.marketId || this.symbol.replace(/[^A-Z0-9_]/g, "_");
+    return symbolOnly ? "account.orderUpdate" : TRIGGER_TOPICS.orders(id);
+  }
+
+  private buildPositionTopic(symbolOnly = false): string {
+    const id = this.marketId || this.symbol.replace(/[^A-Z0-9_]/g, "_");
+    return symbolOnly ? "account.positionUpdate" : TRIGGER_TOPICS.positions(id);
+  }
+
+  private async createSignature(payload: string): Promise<string> {
+    if (!this.apiSecret) {
+      throw new Error("Backpack API secret is required for websocket authentication");
+    }
+    let secretBytes: Buffer;
+    try {
+      secretBytes = Buffer.from(this.apiSecret, "base64");
+    } catch {
+      secretBytes = Buffer.alloc(0);
+    }
+    if (!secretBytes.length) {
+      throw new Error("Backpack API secret must be base64 encoded 32-byte key");
+    }
+    if (secretBytes.length < 32) {
+      throw new Error("Backpack API secret must be base64 encoded 32-byte key");
+    }
+    const seed = secretBytes.length === 32 ? secretBytes : secretBytes.subarray(0, 32);
+    const signature = await sign(new TextEncoder().encode(payload), seed);
+    return Buffer.from(signature).toString("base64");
+  }
+
+  // ---- Utility methods ---------------------------------------------------
+
+  private normalizeTimeframe(interval: string): string {
+    const map: Record<string, string> = {
+      "1m": "1m",
+      "5m": "5m",
+      "15m": "15m",
+      "1h": "1h",
+      "4h": "4h",
+      "1d": "1d",
+    };
+    return map[interval] ?? "1m";
+  }
+
+  private intervalToMs(interval: string): number {
+    const map: Record<string, number> = {
+      "1m": 60_000,
+      "5m": 300_000,
+      "15m": 900_000,
+      "1h": 3_600_000,
+      "4h": 14_400_000,
+      "1d": 86_400_000,
+    };
+    return map[interval] ?? 60_000;
+  }
+
+  private deriveSideFromExposure(info: Record<string, unknown>): "long" | "short" | "flat" {
+    const exposure = this.toNumber(info.netExposureNotional ?? info.netCost ?? info.netQuantity);
+    if (!exposure) return "flat";
+    return exposure < 0 ? "short" : "long";
+  }
+
+  private toStringAmount(value: unknown): string {
+    if (value === undefined || value === null) return "0";
+    if (typeof value === "string") {
+      return value.trim() === "" ? "0" : value;
+    }
+    if (typeof value === "number") {
+      return Number.isFinite(value) ? value.toString() : "0";
+    }
+    return "0";
+  }
+
+  private toOptionalString(value: unknown): string | undefined {
+    const result = this.toStringAmount(value);
+    return result === "0" ? undefined : result;
+  }
+
+  private toNumber(value: unknown): number {
+    const parsed = Number(this.toStringAmount(value));
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+
+  private isNearlyZero(value: string, epsilon = 1e-9): boolean {
+    return Math.abs(Number(value)) < epsilon;
+  }
+
+  private sumStrings(values: string[]): string {
+    let total = 0;
+    for (const value of values) {
+      const parsed = Number(value);
+      if (Number.isFinite(parsed)) total += parsed;
+    }
+    return total.toString();
+  }
+
+  private addStrings(a: string, b: string): string {
+    const sum = Number(a) + Number(b);
+    return Number.isFinite(sum) ? sum.toString() : "0";
+  }
+
+  private normalizeStatus(status?: string): string {
+    if (!status) return "UNKNOWN";
+    const key = status.replace(/[^a-zA-Z]/g, "").toUpperCase();
+    return (
+      ORDER_STATUS_MAP[key] ??
+      status
+        .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+        .replace(/\s+/g, "_")
+        .toUpperCase()
+    );
+  }
+
+  private isTerminalStatus(status?: string): boolean {
+    if (!status) return false;
+    const normalized = status.toUpperCase();
+    return normalized === "FILLED" || normalized === "CANCELLED" || normalized === "EXPIRED" || normalized === "REJECTED" || normalized === "TRIGGER_FAILED";
+  }
+
+  private normalizeOrderType(type?: string): string {
+    if (!type) return "LIMIT";
+    const upper = type.toUpperCase();
+    if (upper.includes("STOP")) return "STOP_MARKET";
+    if (upper === "MARKET" || upper === "LIMIT") return upper;
+    return upper;
+  }
+
+  private pickString(values: Array<unknown>): string {
+    for (const value of values) {
+      if (value === undefined || value === null) continue;
+      const asString = this.toStringAmount(value);
+      if (asString !== "0" || Number(value) === 0) return asString;
+    }
+    return "0";
   }
 }

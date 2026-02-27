@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterAll } from "vitest";
 import type { ExchangeAdapter } from "../src/exchanges/adapter";
 import type { AsterOrder } from "../src/exchanges/types";
 import type { OrderLockMap, OrderTimerMap, OrderPendingMap } from "../src/core/order-coordinator";
@@ -11,6 +11,9 @@ import {
   marketClose,
   unlockOperating,
 } from "../src/core/order-coordinator";
+
+const originalTradeExchange = process.env.TRADE_EXCHANGE;
+const originalExchange = process.env.EXCHANGE;
 
 const baseOrder: AsterOrder = {
   orderId: 1,
@@ -47,6 +50,16 @@ function createMockExchange(overrides: Partial<ExchangeAdapter> = {}): ExchangeA
 }
 
 describe("order-coordinator", () => {
+  beforeEach(() => {
+    process.env.TRADE_EXCHANGE = "aster";
+    process.env.EXCHANGE = undefined;
+  });
+
+  afterAll(() => {
+    process.env.TRADE_EXCHANGE = originalTradeExchange;
+    process.env.EXCHANGE = originalExchange;
+  });
+
   it("deduplicates orders by type and side", async () => {
     const adapter = createMockExchange();
     const locks: OrderLockMap = {};

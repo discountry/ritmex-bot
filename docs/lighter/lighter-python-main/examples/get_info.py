@@ -75,7 +75,11 @@ async def transaction_apis(client: lighter.ApiClient):
     # use with a valid sequence index
     # await print_api(transaction_instance.tx, by="sequence_index", value="5")
     await print_api(transaction_instance.txs, index=0, limit=2)
-
+    
+async def funding_apis(client: lighter.ApiClient):
+    logging.info("FUNDING APIS")
+    account_instance = lighter.FundingApi(client)
+    await print_api(account_instance.funding_rates)
 
 async def main():
     client = lighter.ApiClient(configuration=lighter.Configuration(host="https://testnet.zklighter.elliot.ai"))
@@ -84,6 +88,7 @@ async def main():
     await candlestick_apis(client)
     await order_apis(client)
     await transaction_apis(client)
+    await funding_apis(client)
     await client.close()
 
 

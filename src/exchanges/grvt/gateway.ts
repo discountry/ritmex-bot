@@ -1162,7 +1162,7 @@ function mapTicker(response: IApiTickerResponse, symbol: string): AsterTicker | 
 }
 
 function mapKlines(response: IApiCandlestickResponse, symbol: string): AsterKline[] {
-  return (response.result ?? []).map((entry) => ({
+  return (response.result ?? []).reverse().map((entry) => ({
     openTime: nsToMs(entry.open_time ?? Date.now() * ONE_SECOND_IN_NANOSECONDS),
     closeTime: nsToMs(entry.close_time ?? Date.now() * ONE_SECOND_IN_NANOSECONDS),
     open: entry.open ?? "0",
@@ -1337,7 +1337,7 @@ function buildUnsignedOrder(params: {
 
 function buildTriggerMetadata(params: CreateOrderParams): GrvtUnsignedOrder["metadata"]["trigger"] | undefined {
   if (params.type === "STOP_MARKET") {
-    const triggerType = params.triggerType ?? (params.side === "BUY" ? "TAKE_PROFIT" : "STOP_LOSS");
+    const triggerType = params.triggerType ?? "STOP_LOSS";
     const stopPrice = params.stopPrice ?? params.activationPrice;
     if (!stopPrice) {
       throw new Error("GRVT stop orders require a stopPrice or activationPrice");

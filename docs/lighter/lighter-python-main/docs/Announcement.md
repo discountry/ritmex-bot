@@ -8,6 +8,7 @@ Name | Type | Description | Notes
 **title** | **str** |  | 
 **content** | **str** |  | 
 **created_at** | **int** |  | 
+**expired_at** | **int** |  | 
 
 ## Example
 

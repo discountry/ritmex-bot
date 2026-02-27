@@ -17,6 +17,15 @@ const (
 )
 
 const (
+	TxTypeEmpty             = 0
+	TxTypeL1Deposit         = 1
+	TxTypeL1ChangePubKey    = 2
+	TxTypeL1CreateMarket    = 3
+	TxTypeL1UpdateMarket    = 4
+	TxTypeL1CancelAllOrders = 5
+	TxTypeL1Withdraw        = 6
+	TxTypeL1CreateOrder     = 7
+
 	TxTypeL2ChangePubKey     = 8
 	TxTypeL2CreateSubAccount = 9
 	TxTypeL2CreatePublicPool = 10
@@ -41,6 +50,7 @@ const (
 
 	TxTypeL2CreateGroupedOrders = 28
 	TxTypeL2UpdateMargin        = 29
+	TxTypeL1BurnShares          = 30
 )
 
 // Order Type
@@ -83,23 +93,57 @@ const (
 	AbortScheduledCancelAll = 2
 )
 
+// Asset Margin Mode
 const (
-	HashLength int = 32
+	AssetMarginMode_Disabled = 0
+	AssetMarginMode_Enabled  = 1
+	AssetMarginMode_Max      = AssetMarginMode_Enabled
+)
 
+// Asset Route Type
+const (
+	AssetRouteType_Perps = 0
+	AssetRouteType_Spot  = 1
+)
+
+// Position Margin Mode
+const (
+	CrossMargin    = iota
+	IsolatedMargin = 1
+)
+
+// Margin Update Direction
+const (
+	RemoveFromIsolatedMargin = iota
+	AddToIsolatedMargin      = 1
+)
+
+const (
 	OneUSDC = 1000000
 
-	FeeTick            int64 = 1_000_000
-	MarginFractionTick int64 = 10_000
-	ShareTick          int64 = 10_000
+	FeeTick            int64  = 1_000_000
+	MarginFractionTick int64  = 10_000
+	ShareTick          uint16 = 10_000
 
 	MinAccountIndex       int64 = 0
 	MaxAccountIndex       int64 = 281474976710654 // (1 << 48) - 2
-	MinApiKeyIndex        uint8 = 0
-	MaxApiKeyIndex        uint8 = 254             // (1 << 8) - 2
 	MaxMasterAccountIndex int64 = 140737488355327 // (1 << 47) - 1
+	MinSubAccountIndex    int64 = 140737488355328 // (1 << 47)
+	MinApiKeyIndex        uint8 = 0
+	MaxApiKeyIndex        uint8 = 254 // (1 << 8) - 2
 
-	MinMarketIndex uint8 = 0
-	MaxMarketIndex uint8 = 254 // (1 << 8) - 2
+	MinMarketIndex      int16 = 0
+	MinPerpsMarketIndex int16 = 0
+	MaxPerpsMarketIndex int16 = 254 // (1 << 8) - 2
+	NilMarketIndex      int16 = 255
+	MinSpotMarketIndex  int16 = 2048 // (1 << 11)
+	MaxSpotMarketIndex  int16 = 4094 // (1 << 12) - 2
+
+	NativeAssetIndex = uint16(1)
+	USDCAssetIndex   = uint16(3)
+	MinAssetIndex    = 1
+	MaxAssetIndex    = (1 << 6) - 2
+	NilAssetIndex    = 0
 
 	MaxInvestedPublicPoolCount int64 = 16
 	InitialPoolShareValue      int64 = 1_000                                             // 0.001 USDC
@@ -124,7 +168,7 @@ const (
 	MaxClientOrderIndex int64 = (1 << 48) - 1
 
 	MinOrderIndex int64 = MaxClientOrderIndex + 1
-	MaxOrderIndex int64 = (1 << 56) - 1
+	MaxOrderIndex int64 = (1 << 60) - 1
 
 	MinOrderBaseAmount int64 = 1
 	MaxOrderBaseAmount int64 = (1 << 48) - 1
@@ -161,15 +205,4 @@ const (
 
 	MinWithdrawalAmount uint64 = 1
 	MaxWithdrawalAmount uint64 = MaxExchangeUSDC
-)
-
-// Margin Modes
-const (
-	CrossMargin    = iota
-	IsolatedMargin = 1
-)
-
-const (
-	RemoveFromIsolatedMargin = 0
-	AddToIsolatedMargin      = 1
 )

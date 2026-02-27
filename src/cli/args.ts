@@ -1,13 +1,23 @@
-export type StrategyId = "trend" | "maker" | "offset-maker";
+export type StrategyId = "trend" | "swing" | "guardian" | "maker" | "maker-points" | "offset-maker" | "liquidity-maker" | "basis" | "grid";
 
 export interface CliOptions {
   strategy?: StrategyId;
   silent: boolean;
   help: boolean;
-  exchange?: "aster" | "grvt" | "lighter" | "backpack";
+  exchange?: "aster" | "grvt" | "lighter" | "backpack" | "paradex" | "nado" | "standx";
 }
 
-const STRATEGY_VALUES = new Set<StrategyId>(["trend", "maker", "offset-maker"]);
+const STRATEGY_VALUES = new Set<StrategyId>([
+  "trend",
+  "swing",
+  "guardian",
+  "maker",
+  "maker-points",
+  "offset-maker",
+  "liquidity-maker",
+  "basis",
+  "grid",
+]);
 
 export function parseCliArgs(argv: string[] = process.argv.slice(2)): CliOptions {
   const options: CliOptions = { silent: false, help: false };
@@ -62,13 +72,25 @@ function assignStrategy(options: CliOptions, raw: string): void {
     options.strategy = normalized as StrategyId;
   } else if (normalized === "offset" || normalized === "offsetmaker" || normalized === "offset-maker") {
     options.strategy = "offset-maker";
+  } else if (normalized === "makerpoints" || normalized === "maker-points" || normalized === "maker_points") {
+    options.strategy = "maker-points";
+  } else if (normalized === "liquidity" || normalized === "liquiditymaker" || normalized === "liquidity-maker" || normalized === "liquidity_maker") {
+    options.strategy = "liquidity-maker";
   }
 }
 
 function assignExchange(options: CliOptions, raw: string): void {
   const normalized = raw.trim().toLowerCase();
   if (!normalized) return;
-  if (normalized === "aster" || normalized === "grvt" || normalized === "lighter" || normalized === "backpack") {
+  if (
+    normalized === "aster" ||
+    normalized === "grvt" ||
+    normalized === "lighter" ||
+    normalized === "backpack" ||
+    normalized === "paradex" ||
+    normalized === "nado" ||
+    normalized === "standx"
+  ) {
     options.exchange = normalized as CliOptions["exchange"];
   } else if (normalized === "gravity" || normalized === "grav" || normalized === "grv") {
     options.exchange = "grvt";
@@ -77,10 +99,11 @@ function assignExchange(options: CliOptions, raw: string): void {
 
 export function printCliHelp(): void {
   // eslint-disable-next-line no-console
-  console.log(`Usage: bun run index.ts [--strategy <trend|maker|offset-maker>] [--exchange <aster|grvt|lighter|backpack>] [--silent]\n\n` +
+  console.log(`Usage: bun run index.ts [--strategy <trend|swing|guardian|maker|maker-points|offset-maker|liquidity-maker|basis|grid>] [--exchange <aster|grvt|lighter|backpack|paradex|nado|standx>] [--silent]\n\n` +
     `Options:\n` +
     `  --strategy, -s    Automatically start the specified strategy without the interactive menu.\n` +
     `                    Aliases: offset, offset-maker for the offset maker engine.\n` +
+    `                    Aliases: liquidity, liquidity-maker for the liquidity maker engine.\n` +
     `  --exchange, -e    Choose exchange. Overrides EXCHANGE/TRADE_EXCHANGE environment variables.\n` +
     `  --silent, -q      Reduce console output. When used with --strategy, runs in silent daemon mode.\n` +
     `  --help, -h        Show this help message.\n`);

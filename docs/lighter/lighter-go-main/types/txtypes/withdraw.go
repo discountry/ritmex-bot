@@ -10,13 +10,13 @@ var _ TxInfo = (*L2WithdrawTxInfo)(nil)
 type L2WithdrawTxInfo struct {
 	FromAccountIndex int64
 	ApiKeyIndex      uint8
-
-	USDCAmount uint64 // USDCAmount is given with 6 decimals
-
-	ExpiredAt  int64
-	Nonce      int64
-	Sig        []byte
-	SignedHash string `json:"-"`
+	AssetIndex       int16
+	RouteType        uint8
+	Amount           uint64
+	ExpiredAt        int64
+	Nonce            int64
+	Sig              []byte
+	SignedHash       string `json:"-"`
 }
 
 func (txInfo *L2WithdrawTxInfo) Validate() error {
@@ -35,10 +35,24 @@ func (txInfo *L2WithdrawTxInfo) Validate() error {
 		return ErrApiKeyIndexTooHigh
 	}
 
-	if txInfo.USDCAmount == 0 {
+	// AssetIndex
+	if txInfo.AssetIndex < MinAssetIndex {
+		return ErrAssetIndexTooLow
+	}
+	if txInfo.AssetIndex > MaxAssetIndex {
+		return ErrAssetIndexTooHigh
+	}
+
+	// RouteType
+	if txInfo.RouteType != AssetRouteType_Perps && txInfo.RouteType != AssetRouteType_Spot {
+		return ErrRouteTypeInvalid
+	}
+
+	// Amount
+	if txInfo.Amount == 0 {
 		return ErrWithdrawalAmountTooLow
 	}
-	if txInfo.USDCAmount > MaxWithdrawalAmount {
+	if txInfo.Amount > MaxWithdrawalAmount {
 		return ErrWithdrawalAmountTooHigh
 	}
 
@@ -66,7 +80,7 @@ func (txInfo *L2WithdrawTxInfo) GetTxHash() string {
 }
 
 func (txInfo *L2WithdrawTxInfo) Hash(lighterChainId uint32, extra ...g.Element) (msgHash []byte, err error) {
-	elems := make([]g.Element, 0, 8)
+	elems := make([]g.Element, 0, 14)
 
 	elems = append(elems, g.FromUint32(lighterChainId))
 	elems = append(elems, g.FromUint32(TxTypeL2Withdraw))
@@ -75,8 +89,10 @@ func (txInfo *L2WithdrawTxInfo) Hash(lighterChainId uint32, extra ...g.Element) 
 
 	elems = append(elems, g.FromInt64(txInfo.FromAccountIndex))
 	elems = append(elems, g.FromUint32(uint32(txInfo.ApiKeyIndex)))
-	elems = append(elems, g.FromUint64(uint64(txInfo.USDCAmount)&0xFFFFFFFF)) //nolint:gosec
-	elems = append(elems, g.FromUint64(uint64(txInfo.USDCAmount)>>32))        //nolint:gosec
+	elems = append(elems, g.FromUint32(uint32(txInfo.AssetIndex)))
+	elems = append(elems, g.FromUint32(uint32(txInfo.RouteType)))
+	elems = append(elems, g.FromUint64(uint64(txInfo.Amount&0xFFFFFFFF)))
+	elems = append(elems, g.FromUint64(uint64(txInfo.Amount>>32)))
 
 	return p2.HashToQuinticExtension(elems).ToLittleEndianBytes(), nil
 }

@@ -46,6 +46,18 @@ export function decimalToScaled(value: number | string | bigint, decimals: numbe
   return sign === -1 ? -result : result;
 }
 
+export function scaleQuantityWithMinimum(value: number | string | bigint, decimals: number): bigint {
+  const scaled = decimalToScaled(value, decimals);
+  if (scaled !== 0n) {
+    return scaled;
+  }
+  const numeric = typeof value === "bigint" ? Number(value) : Number(value);
+  if (!Number.isFinite(numeric) || numeric === 0) {
+    return scaled;
+  }
+  return numeric < 0 ? -1n : 1n;
+}
+
 export function scaledToDecimalString(value: bigint | number | string, decimals: number): string {
   if (typeof value === "number") {
     if (!Number.isFinite(value)) throw new Error(`Invalid scaled number: ${value}`);

@@ -38,7 +38,7 @@ interface NextNonceResponse extends ApiResponseBase {
   nonce: number;
 }
 
-interface SendTxResponse extends ApiResponseBase {
+export interface SendTxResponse extends ApiResponseBase {
   tx_hash: string;
   predicted_execution_time_ms?: number;
 }
@@ -61,6 +61,7 @@ interface CandlesticksResponse extends ApiResponseBase {
 
 interface AccountResponse extends ApiResponseBase {
   account?: LighterAccountDetails;
+  accounts?: LighterAccountDetails[];
 }
 
 export interface LighterHttpClientOptions {
@@ -100,10 +101,12 @@ export class LighterHttpClient {
     return stats.map((entry) => ({
       market_id: entry.market_id,
       symbol: entry.symbol,
-      index_price: entry.index_price ?? entry.mark_price ?? entry.last_trade_price,
-      mark_price: entry.mark_price ?? entry.last_trade_price,
+      market_type: (entry as any).market_type,
+      index_price: (entry as any).index_price ?? entry.mark_price ?? entry.last_trade_price,
+      mid_price: (entry as any).mid_price,
+      mark_price: entry.mark_price ?? (entry as any).mid_price ?? entry.last_trade_price,
       last_trade_price: entry.last_trade_price,
-      open_interest: entry.open_interest ?? "0",
+      open_interest: (entry as any).open_interest ?? "0",
       daily_base_token_volume: entry.daily_base_token_volume,
       daily_quote_token_volume: entry.daily_quote_token_volume,
       daily_price_low: entry.daily_price_low,
@@ -136,7 +139,8 @@ export class LighterHttpClient {
       headers: authToken ? { Authorization: authToken } : undefined,
       tolerateNotFound: true,
     });
-    return response.account ?? null;
+    const account = response.account ?? (Array.isArray(response.accounts) ? response.accounts[0] : null);
+    return account ?? null;
   }
 
   async getCandlesticks(params: {

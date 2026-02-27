@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **id** | **str** |  | 
+**asset_id** | **int** |  | 
 **amount** | **str** |  | 
 **timestamp** | **int** |  | 
 **status** | **str** |  | 

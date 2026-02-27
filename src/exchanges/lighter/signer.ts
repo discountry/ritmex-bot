@@ -194,6 +194,7 @@ export class LighterSigner {
       triggerPrice: params.triggerPrice,
       orderExpiry: params.orderExpiry.toString(),
       nonce: params.nonce.toString(),
+      accountIndex: this.accountIndex.toString(),
     });
 
     const txInfo = String(result);
@@ -224,6 +225,7 @@ export class LighterSigner {
       marketIndex: params.marketIndex,
       orderIndex: params.orderIndex.toString(),
       nonce: params.nonce.toString(),
+      accountIndex: this.accountIndex.toString(),
     });
 
     const txInfo = String(result);
@@ -251,6 +253,7 @@ export class LighterSigner {
       timeInForce: params.timeInForce,
       scheduledTime: params.scheduledTime.toString(),
       nonce: params.nonce.toString(),
+      accountIndex: this.accountIndex.toString(),
     });
 
     const txInfo = String(result);
@@ -275,6 +278,7 @@ export class LighterSigner {
     const result = await this.bridge.call("create_auth_token", {
       apiKeyIndex: index,
       deadlineMs: Math.floor(deadlineMs / 1000),
+      accountIndex: this.accountIndex.toString(),
     });
     return String(result ?? "");
   }

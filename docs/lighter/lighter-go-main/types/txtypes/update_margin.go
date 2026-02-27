@@ -11,7 +11,7 @@ type L2UpdateMarginTxInfo struct {
 	AccountIndex int64
 	ApiKeyIndex  uint8
 
-	MarketIndex uint8
+	MarketIndex int16
 	USDCAmount  int64
 	Direction   uint8
 
@@ -50,20 +50,16 @@ func (txInfo *L2UpdateMarginTxInfo) Validate() error {
 	}
 
 	// MarketIndex
-	if txInfo.MarketIndex < MinMarketIndex {
-		return ErrMarketIndexTooLow
-	}
-	if txInfo.MarketIndex > MaxMarketIndex {
-		return ErrMarketIndexTooHigh
+	if txInfo.MarketIndex < MinPerpsMarketIndex || txInfo.MarketIndex > MaxPerpsMarketIndex {
+		return ErrInvalidMarketIndex
 	}
 
-	if txInfo.USDCAmount <= 0 {
+	if txInfo.USDCAmount == 0 {
 		return ErrTransferAmountTooLow
 	}
 	if txInfo.USDCAmount > MaxTransferAmount {
 		return ErrTransferAmountTooHigh
 	}
-
 	if txInfo.Direction != RemoveFromIsolatedMargin && txInfo.Direction != AddToIsolatedMargin {
 		return ErrInvalidUpdateMarginDirection
 	}

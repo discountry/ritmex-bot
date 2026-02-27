@@ -11,7 +11,7 @@ type L2CancelOrderTxInfo struct {
 	AccountIndex int64
 	ApiKeyIndex  uint8
 
-	MarketIndex uint8
+	MarketIndex int16
 	Index       int64 // Client Order Index or Order Index of the order to cancel
 
 	ExpiredAt  int64
@@ -50,11 +50,10 @@ func (txInfo *L2CancelOrderTxInfo) Validate() error {
 	}
 
 	// MarketIndex
-	if txInfo.MarketIndex < MinMarketIndex {
-		return ErrMarketIndexTooLow
-	}
-	if txInfo.MarketIndex > MaxMarketIndex {
-		return ErrMarketIndexTooHigh
+	isSpotMarket := txInfo.MarketIndex >= MinSpotMarketIndex && txInfo.MarketIndex <= MaxSpotMarketIndex
+	isPerpsMarket := txInfo.MarketIndex >= MinPerpsMarketIndex && txInfo.MarketIndex <= MaxPerpsMarketIndex
+	if !isSpotMarket && !isPerpsMarket {
+		return ErrInvalidMarketIndex
 	}
 
 	// Index

@@ -6,10 +6,10 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **referrals** | [**List[ReferralPointEntry]**](ReferralPointEntry.md) |  | 
-**user_total_points** | **int** |  | 
-**user_last_week_points** | **int** |  | 
-**user_total_referral_reward_points** | **int** |  | 
-**user_last_week_referral_reward_points** | **int** |  | 
+**user_total_points** | **float** |  | 
+**user_last_week_points** | **float** |  | 
+**user_total_referral_reward_points** | **float** |  | 
+**user_last_week_referral_reward_points** | **float** |  | 
 **reward_point_multiplier** | **str** |  | 
 
 ## Example

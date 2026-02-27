@@ -10,6 +10,10 @@ Name | Type | Description | Notes
 **high** | **float** |  | 
 **low** | **float** |  | 
 **close** | **float** |  | 
+**open_raw** | **float** |  | 
+**high_raw** | **float** |  | 
+**low_raw** | **float** |  | 
+**close_raw** | **float** |  | 
 **volume0** | **float** |  | 
 **volume1** | **float** |  | 
 **last_trade_id** | **int** |  | 

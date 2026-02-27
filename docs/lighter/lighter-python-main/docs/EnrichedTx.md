@@ -22,6 +22,7 @@ Name | Type | Description | Notes
 **executed_at** | **int** |  | 
 **sequence_index** | **int** |  | 
 **parent_hash** | **str** |  | 
+**api_key_index** | **int** |  | 
 **committed_at** | **int** |  | 
 **verified_at** | **int** |  | 
 

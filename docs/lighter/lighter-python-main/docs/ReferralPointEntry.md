@@ -6,10 +6,10 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **l1_address** | **str** |  | 
-**total_points** | **int** |  | 
-**week_points** | **int** |  | 
-**total_reward_points** | **int** |  | 
-**week_reward_points** | **int** |  | 
+**total_points** | **float** |  | 
+**week_points** | **float** |  | 
+**total_reward_points** | **float** |  | 
+**week_reward_points** | **float** |  | 
 **reward_point_multiplier** | **str** |  | 
 
 ## Example

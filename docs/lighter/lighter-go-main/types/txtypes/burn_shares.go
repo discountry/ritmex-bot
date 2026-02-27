@@ -49,7 +49,7 @@ func (txInfo *L2BurnSharesTxInfo) Validate() error {
 	}
 
 	// PublicPoolIndex
-	if txInfo.PublicPoolIndex < MinAccountIndex {
+	if txInfo.PublicPoolIndex < MinSubAccountIndex {
 		return ErrPublicPoolIndexTooLow
 	}
 	if txInfo.PublicPoolIndex > MaxAccountIndex {
@@ -73,7 +73,6 @@ func (txInfo *L2BurnSharesTxInfo) Validate() error {
 
 	return nil
 }
-
 func (txInfo *L2BurnSharesTxInfo) Hash(lighterChainId uint32, extra ...g.Element) (msgHash []byte, err error) {
 	elems := make([]g.Element, 0, 8)
 

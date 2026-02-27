@@ -2,34 +2,11 @@ package txtypes
 
 import (
 	"fmt"
-	"strings"
 
 	g "github.com/elliottech/poseidon_crypto/field/goldilocks"
 	p2 "github.com/elliottech/poseidon_crypto/hash/poseidon2_goldilocks"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
 )
-
-const (
-	templateChangePubKey = "Register Lighter Account\n\npubkey: 0x%s\nnonce: %s\naccount index: %s\napi key index: %s\nOnly sign this message for a trusted client!"
-)
-
-func getHex10FromUint64(value uint64) string {
-	v := hexutil.EncodeUint64(value)
-	v = strings.Replace(v, "0x", "", 1)
-
-	// Make sure result has fixed bytes
-	vBytes := []byte(v)
-	if len(vBytes) < 16 {
-		toAppend := make([]byte, 16-len(vBytes))
-		for i := range toAppend {
-			toAppend[i] = 48
-		}
-		vBytes = append(toAppend, vBytes...)
-	}
-
-	return fmt.Sprintf("0x%s", string(vBytes))
-}
 
 var _ TxInfo = (*L2ChangePubKeyTxInfo)(nil)
 
@@ -84,7 +61,7 @@ func (txInfo *L2ChangePubKeyTxInfo) Validate() error {
 		return ErrExpiredAtInvalid
 	}
 
-	if !IsValidPubKey(txInfo.PubKey) {
+	if !IsValidPubKeyLength(txInfo.PubKey) {
 		return ErrPubKeyInvalid
 	}
 
@@ -92,13 +69,18 @@ func (txInfo *L2ChangePubKeyTxInfo) Validate() error {
 }
 
 func (txInfo *L2ChangePubKeyTxInfo) GetL1SignatureBody() string {
-	signatureBody := fmt.Sprintf(templateChangePubKey,
+	signatureBody := fmt.Sprintf(
+		TemplateChangePubKey,
 		common.Bytes2Hex(txInfo.PubKey),
 		getHex10FromUint64(uint64(txInfo.Nonce)),
 		getHex10FromUint64(uint64(txInfo.AccountIndex)),
 		getHex10FromUint64(uint64(txInfo.ApiKeyIndex)),
 	)
 	return signatureBody
+}
+
+func (txInfo *L2ChangePubKeyTxInfo) GetL1AddressBySignature() common.Address {
+	return calculateL1AddressBySignature(txInfo.GetL1SignatureBody(), txInfo.L1Sig)
 }
 
 func (txInfo *L2ChangePubKeyTxInfo) Hash(lighterChainId uint32, extra ...g.Element) (msgHash []byte, err error) {

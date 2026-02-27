@@ -15,7 +15,7 @@ type L2UpdatePublicPoolTxInfo struct {
 
 	Status               uint8
 	OperatorFee          int64
-	MinOperatorShareRate int64
+	MinOperatorShareRate uint16
 
 	ExpiredAt  int64
 	Nonce      int64
@@ -71,9 +71,6 @@ func (txInfo *L2UpdatePublicPoolTxInfo) Validate() error {
 	}
 
 	// MinOperatorShareRate
-	if txInfo.MinOperatorShareRate < 0 {
-		return ErrPoolMinOperatorShareRateTooLow
-	}
 	if txInfo.MinOperatorShareRate > ShareTick {
 		return ErrPoolMinOperatorShareRateTooHigh
 	}
@@ -103,7 +100,7 @@ func (txInfo *L2UpdatePublicPoolTxInfo) Hash(lighterChainId uint32, extra ...g.E
 	elems = append(elems, g.FromInt64(txInfo.PublicPoolIndex))
 	elems = append(elems, g.FromUint32(uint32(txInfo.Status)))
 	elems = append(elems, g.FromInt64(txInfo.OperatorFee))
-	elems = append(elems, g.FromInt64(txInfo.MinOperatorShareRate))
+	elems = append(elems, g.FromUint32(uint32(txInfo.MinOperatorShareRate)))
 
 	return p2.HashToQuinticExtension(elems).ToLittleEndianBytes(), nil
 }

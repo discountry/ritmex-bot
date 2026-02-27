@@ -2,6 +2,7 @@ import type {
   AccountListener,
   DepthListener,
   ExchangeAdapter,
+  ExchangePrecision,
   KlineListener,
   OrderListener,
   TickerListener,
@@ -108,19 +109,36 @@ export class LighterExchangeAdapter implements ExchangeAdapter {
 
   async cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void> {
     await this.ensureInitialized("cancelOrder");
-    await this.gateway.cancelOrder({ orderId: params.orderId });
+    // Accept both clientOrderId and order_index as strings; forward as-is to preserve precision
+    await this.gateway.cancelOrder({ orderId: String(params.orderId) });
   }
 
   async cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void> {
     await this.ensureInitialized("cancelOrders");
     for (const orderId of params.orderIdList) {
-      await this.gateway.cancelOrder({ orderId });
+      await this.gateway.cancelOrder({ orderId: String(orderId) });
     }
   }
 
   async cancelAllOrders(_params: { symbol: string }): Promise<void> {
     await this.ensureInitialized("cancelAllOrders");
     await this.gateway.cancelAllOrders();
+  }
+
+  async getPrecision(): Promise<ExchangePrecision | null> {
+    try {
+      const precision = await this.gateway.getPrecision();
+      return {
+        priceTick: precision.priceTick,
+        qtyStep: precision.qtyStep,
+        priceDecimals: precision.priceDecimals,
+        sizeDecimals: precision.sizeDecimals,
+        marketId: precision.marketId ?? undefined,
+      };
+    } catch (error) {
+      this.logError("precision", error);
+      return null;
+    }
   }
 
   private ensureInitialized(context?: string): Promise<void> {
@@ -140,10 +158,20 @@ export class LighterExchangeAdapter implements ExchangeAdapter {
   }
 
   private logError(context: string, error: unknown): void {
-    if (process.env.LIGHTER_DEBUG === "1" || process.env.LIGHTER_DEBUG === "true") {
-      console.error(`[LighterExchangeAdapter] ${context} failed: ${extractMessage(error)}`);
+    if (process.env.LIGHTER_DEBUG !== "1" && process.env.LIGHTER_DEBUG !== "true") {
+      return;
     }
+    if (isSuccessfulResponse(error)) {
+      return; // success responses are noisy; ignore unless non-200
+    }
+    console.error(`[LighterExchangeAdapter] ${context} failed: ${extractMessage(error)}`);
   }
+}
+
+function isSuccessfulResponse(value: unknown): value is { code?: number } {
+  if (typeof value !== "object" || value == null) return false;
+  const code = (value as { code?: unknown }).code;
+  return typeof code === "number" && code === 200;
 }
 
 function resolveApiKeys(credentials: LighterCredentials): Record<number, string> {

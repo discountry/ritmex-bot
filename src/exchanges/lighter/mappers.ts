@@ -19,6 +19,9 @@ import type {
   LighterOrderBookSnapshot,
   LighterPosition,
 } from "./types";
+import { coerceBooleanFlag, normalizeBooleanFlag } from "./flags";
+import { normalizeOrderIdentity } from "./order-identity";
+import { normalizeOrderStatus } from "./status";
 
 export function toDepth(symbol: string, snapshot: LighterOrderBookSnapshot): AsterDepth {
   const toLevels = (levels: LighterOrderBookLevel[]): AsterDepthLevel[] =>
@@ -45,7 +48,7 @@ export function toTicker(symbol: string, stats: LighterMarketStats): AsterTicker
     volume: stats.daily_base_token_volume != null ? String(stats.daily_base_token_volume) : "0",
     quoteVolume: stats.daily_quote_token_volume != null ? String(stats.daily_quote_token_volume) : "0",
     priceChange: stats.daily_price_change != null ? String(stats.daily_price_change) : undefined,
-    markPrice: undefined,
+    markPrice: stats.mid_price ?? stats.mark_price ?? stats.index_price,
     weightedAvgPrice: undefined,
   } as AsterTicker;
 }
@@ -74,24 +77,43 @@ export function toOrders(symbol: string, orders: LighterOrder[]): AsterOrder[] {
 }
 
 export function lighterOrderToAster(symbol: string, order: LighterOrder): AsterOrder {
-  const side: OrderSide = order.is_ask || order.side?.toLowerCase() === "sell" || order.side?.toLowerCase() === "ask"
-    ? "SELL"
-    : "BUY";
+  const booleanIsAsk = normalizeBooleanFlag(order.is_ask);
+  const normalizedSide = order.side?.toLowerCase();
+  const side: OrderSide =
+    booleanIsAsk != null
+      ? booleanIsAsk
+        ? "SELL"
+        : "BUY"
+      : normalizedSide === "sell" || normalizedSide === "ask"
+        ? "SELL"
+        : "BUY";
+  const reduceOnly = coerceBooleanFlag(order.reduce_only, false);
+  const orderIndex =
+    normalizeOrderIdentity(order.order_id) ??
+    normalizeOrderIdentity(order.order_index) ??
+    normalizeOrderIdentity(order.client_order_index) ??
+    normalizeOrderIdentity(order.client_order_id) ??
+    "";
+  const clientIndex =
+    normalizeOrderIdentity(order.client_order_id) ??
+    normalizeOrderIdentity(order.client_order_index) ??
+    "";
   return {
-    orderId: order.order_index,
-    clientOrderId: String(order.client_order_index ?? order.order_index ?? ""),
+    // Use string order id to avoid precision loss; prefer on-chain order_index for cancellation
+    orderId: orderIndex,
+    clientOrderId: clientIndex || orderIndex,
     symbol,
     side,
     type: mapOrderType(order.type),
-    status: order.status ?? order.trigger_status ?? "UNKNOWN",
+    status: normalizeOrderStatus(order.status ?? order.trigger_status ?? "UNKNOWN"),
     price: order.price ?? "0",
     origQty: order.initial_base_amount ?? "0",
     executedQty: computeExecutedQty(order),
     stopPrice: order.trigger_price ?? "0",
     time: order.created_at ?? Date.now(),
     updateTime: order.updated_at ?? Date.now(),
-    reduceOnly: Boolean(order.reduce_only),
-    closePosition: Boolean(order.reduce_only ?? order.owner_account_index === undefined ? false : order.is_ask),
+    reduceOnly,
+    closePosition: reduceOnly,
     workingType: "MARK_PRICE",
     activationPrice: order.trigger_price,
   };
@@ -141,43 +163,102 @@ export function toAccountSnapshot(
   details: LighterAccountDetails,
   positions: LighterPosition[] = [],
   assets: AsterAccountAsset[] = [],
-  options?: { marketSymbol?: string | null; marketId?: number | null }
+  options?: {
+    marketSymbol?: string | null;
+    marketId?: number | null;
+    marketType?: string | null;
+    baseAssetSymbol?: string | null;
+    quoteAssetSymbol?: string | null;
+    baseAssetId?: number | null;
+    quoteAssetId?: number | null;
+  }
 ): AsterAccountSnapshot {
-  const targetSymbol = options?.marketSymbol?.toUpperCase();
-  const targetMarketId = options?.marketId;
+  const targetSymbol = options?.marketSymbol ?? null;
+  const targetMarketId =
+    options?.marketId != null && Number.isFinite(Number(options.marketId))
+      ? Number(options.marketId)
+      : null;
   const filteredPositions = positions.filter((position) => {
-    const marketMatches =
-      targetMarketId == null ||
-      (Number.isFinite(Number(position.market_id)) && Number(position.market_id) === Number(targetMarketId));
-    const symbolMatches =
-      !targetSymbol ||
-      (typeof position.symbol === "string" && position.symbol.toUpperCase() === targetSymbol);
-    return marketMatches && symbolMatches;
+    if (targetMarketId != null) {
+      const positionMarketId = Number(position.market_id);
+      if (Number.isFinite(positionMarketId)) {
+        return positionMarketId === targetMarketId;
+      }
+      return targetSymbol ? symbolsMatch(position.symbol, targetSymbol) : false;
+    }
+    if (targetSymbol) {
+      return symbolsMatch(position.symbol, targetSymbol);
+    }
+    return true;
   });
   const transformedPositions = filteredPositions.map((position) => lighterPositionToAster(symbol, position));
+  if (!transformedPositions.length && normalizeMarketType(options?.marketType) === "spot") {
+    const baseSymbol = options?.baseAssetSymbol ?? options?.marketSymbol ?? symbol;
+    const baseAsset = findAsset(assets, baseSymbol);
+    const baseSize = Number(baseAsset?.walletBalance ?? 0);
+    if (Number.isFinite(baseSize) && baseSize > 0) {
+      transformedPositions.push({
+        symbol,
+        positionAmt: baseSize.toString(),
+        entryPrice: "0",
+        unrealizedProfit: "0",
+        positionSide: "BOTH",
+        updateTime: Date.now(),
+      });
+    }
+  }
   const aggregateUnrealized = transformedPositions.reduce((acc, pos) => acc + Number(pos.unrealizedProfit ?? 0), 0);
-  const assetList = assets.length ? assets : defaultAsset(details);
+  const assetList = assets.length ? assets : defaultAsset(details, options?.quoteAssetSymbol ?? "USDC");
+  const totalWallet = computeTotalWalletBalance(assetList, details);
   return {
     canTrade: details.status !== 0,
     canDeposit: true,
     canWithdraw: true,
     updateTime: Date.now(),
-    totalWalletBalance: details.collateral ?? "0",
+    totalWalletBalance: totalWallet,
+    availableBalance: details.available_balance ?? undefined,
     totalUnrealizedProfit: aggregateUnrealized.toFixed(8),
     positions: transformedPositions,
     assets: assetList,
+    marketType: normalizeMarketType(options?.marketType),
+    baseAsset: options?.baseAssetSymbol ?? undefined,
+    quoteAsset: options?.quoteAssetSymbol ?? undefined,
+    baseAssetId: options?.baseAssetId ?? undefined,
+    quoteAssetId: options?.quoteAssetId ?? undefined,
   };
 }
 
-function defaultAsset(details: LighterAccountDetails): AsterAccountAsset[] {
+function defaultAsset(details: LighterAccountDetails, quoteAsset: string): AsterAccountAsset[] {
   return [
     {
-      asset: "USDC",
+      asset: quoteAsset || "USDC",
       walletBalance: details.collateral ?? "0",
       availableBalance: details.available_balance ?? details.collateral ?? "0",
       updateTime: Date.now(),
     },
   ];
+}
+
+function computeTotalWalletBalance(assets: AsterAccountAsset[], details: LighterAccountDetails): string {
+  const sum = assets.reduce((acc, asset) => acc + Number(asset.walletBalance ?? 0), 0);
+  if (Number.isFinite(sum) && sum > 0) {
+    return sum.toString();
+  }
+  return details.total_asset_value ?? details.collateral ?? "0";
+}
+
+function findAsset(assets: AsterAccountAsset[], target: string | undefined | null): AsterAccountAsset | undefined {
+  if (!target) return undefined;
+  const normalizedTarget = target.toUpperCase().split(/[-:/]/)[0];
+  return assets.find((asset) => asset.asset.toUpperCase().split(/[-:/]/)[0] === normalizedTarget);
+}
+
+function normalizeMarketType(value: string | null | undefined): "perp" | "spot" | undefined {
+  if (!value) return undefined;
+  const normalized = value.toLowerCase();
+  if (normalized === "spot") return "spot";
+  if (normalized === "perp" || normalized === "perpetual" || normalized === "futures") return "perp";
+  return undefined;
 }
 
 function lighterPositionToAster(symbol: string, position: LighterPosition): AsterAccountPosition {
@@ -199,4 +280,24 @@ function lighterPositionToAster(symbol: string, position: LighterPosition): Aste
     marginType: position.margin_mode === 1 ? "ISOLATED" : "CROSS",
     markPrice: undefined,
   };
+}
+
+function symbolsMatch(source: string | null | undefined, target: string | null | undefined): boolean {
+  if (!source || !target) return false;
+  const sourceForms = normalizeSymbolForms(source);
+  const targetForms = normalizeSymbolForms(target);
+  if (!sourceForms.length || !targetForms.length) return false;
+  return sourceForms.some((value) => targetForms.includes(value));
+}
+
+function normalizeSymbolForms(value: string): string[] {
+  const upper = value.toUpperCase();
+  const sanitized = upper.replace(/[^A-Z0-9]/g, "");
+  const parts = upper.split(/[-:/]/).filter(Boolean);
+  const base = parts.length ? parts[0] : "";
+  const forms = new Set<string>();
+  if (upper) forms.add(upper);
+  if (sanitized) forms.add(sanitized);
+  if (base) forms.add(base);
+  return Array.from(forms);
 }

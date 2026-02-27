@@ -48,11 +48,10 @@ func (txInfo *L2CreateOrderTxInfo) Validate() error {
 	}
 
 	// MarketIndex
-	if txInfo.MarketIndex < MinMarketIndex {
-		return ErrMarketIndexTooLow
-	}
-	if txInfo.MarketIndex > MaxMarketIndex {
-		return ErrMarketIndexTooHigh
+	isSpotMarket := txInfo.MarketIndex >= MinSpotMarketIndex && txInfo.MarketIndex <= MaxSpotMarketIndex
+	isPerpsMarket := txInfo.MarketIndex >= MinPerpsMarketIndex && txInfo.MarketIndex <= MaxPerpsMarketIndex
+	if !isSpotMarket && !isPerpsMarket {
+		return ErrInvalidMarketIndex
 	}
 
 	// ClientOrderIndex
@@ -89,14 +88,17 @@ func (txInfo *L2CreateOrderTxInfo) Validate() error {
 		return ErrIsAskInvalid
 	}
 
+	// Type
 	if txInfo.TimeInForce != ImmediateOrCancel && txInfo.TimeInForce != GoodTillTime && txInfo.TimeInForce != PostOnly {
 		return ErrOrderTimeInForceInvalid
 	}
 
-	if txInfo.ReduceOnly != 0 && txInfo.ReduceOnly != 1 {
+	// ReduceOnly
+	if (txInfo.ReduceOnly != 0 && txInfo.ReduceOnly != 1) || (isSpotMarket && txInfo.ReduceOnly == 1) {
 		return ErrOrderReduceOnlyInvalid
 	}
 
+	// OrderExpiry
 	if (txInfo.OrderExpiry < MinOrderExpiry || txInfo.OrderExpiry > MaxOrderExpiry) && txInfo.OrderExpiry != NilOrderExpiry {
 		return ErrOrderExpiryInvalid
 	}
@@ -119,7 +121,9 @@ func (txInfo *L2CreateOrderTxInfo) Validate() error {
 			return ErrOrderExpiryInvalid
 		}
 	case StopLossOrder, TakeProfitOrder:
-		if txInfo.TimeInForce != ImmediateOrCancel {
+		if !isPerpsMarket {
+			return ErrOrderTypeInvalid
+		} else if txInfo.TimeInForce != ImmediateOrCancel {
 			return ErrOrderTimeInForceInvalid
 		} else if txInfo.TriggerPrice == NilOrderTriggerPrice {
 			return ErrOrderTriggerPriceInvalid
@@ -127,7 +131,9 @@ func (txInfo *L2CreateOrderTxInfo) Validate() error {
 			return ErrOrderExpiryInvalid
 		}
 	case StopLossLimitOrder, TakeProfitLimitOrder:
-		if txInfo.TriggerPrice == NilOrderTriggerPrice {
+		if !isPerpsMarket {
+			return ErrOrderTypeInvalid
+		} else if txInfo.TriggerPrice == NilOrderTriggerPrice {
 			return ErrOrderTriggerPriceInvalid
 		} else if txInfo.OrderExpiry == NilOrderExpiry {
 			return ErrOrderExpiryInvalid

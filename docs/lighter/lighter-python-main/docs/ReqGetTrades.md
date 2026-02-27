@@ -14,7 +14,10 @@ Name | Type | Description | Notes
 **cursor** | **str** |  | [optional] 
 **var_from** | **int** |  | [optional] [default to -1]
 **ask_filter** | **int** |  | [optional] 
+**role** | **str** |  | [optional] [default to 'all']
+**type** | **str** |  | [optional] [default to 'all']
 **limit** | **int** |  | 
+**aggregate** | **bool** |  | [optional] [default to False]
 
 ## Example
 

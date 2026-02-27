@@ -6,14 +6,36 @@ import type {
   AsterDepth,
   AsterKline,
   AsterOrder,
+  AsterSpotAccount,
+  AsterSpotAggTrade,
+  AsterSpotBookTicker,
+  AsterSpotCommissionRate,
+  AsterSpotDepth,
+  AsterSpotExchangeInfo,
+  AsterSpotHistoricalTrade,
+  AsterSpotKline,
+  AsterSpotPriceTicker,
+  AsterSpotTicker24h,
+  AsterSpotTrade,
+  AsterSpotUserTrade,
   AsterTicker,
+  AsterFuturesExchangeInfo,
+  AsterFuturesSymbolInfo,
+  CancelSpotOrderParams,
   CreateOrderParams,
+  CreateSpotOrderParams,
   PositionSide,
+  QuerySpotOrderParams,
+  SpotAllOrdersParams,
+  SpotOpenOrdersParams,
+  SpotUserTradesParams,
 } from "../types";
+import { decimalsOf } from "../../utils/math";
 
 process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
 
-const REST_BASE = "https://fapi.asterdex.com";
+const FUTURES_REST_BASE = "https://fapi.asterdex.com";
+const SPOT_REST_BASE = "https://sapi.asterdex.com";
 const WS_PUBLIC_URL = "wss://fstream.asterdex.com/ws";
 const WS_LISTEN_KEY_URL = "wss://fstream.asterdex.com/ws/";
 
@@ -25,12 +47,506 @@ const KLINE_REFRESH_INTERVAL_MS = 60_000;
 const LISTEN_KEY_KEEPALIVE_MS = 30 * 60 * 1000;
 const RECONNECT_DELAY_MS = 2000;
 const POSITION_SYNC_INTERVAL_MS = 5000;
+const EXCHANGE_INFO_CACHE_TTL_MS = 60 * 60 * 1000;
 
 function requireEnv(value: string | undefined, key: string): string {
   if (!value) {
     throw new Error(`Missing required environment variable ${key}`);
   }
   return value;
+}
+
+function serialize(params: Record<string, unknown>): string {
+  return Object.keys(params)
+    .filter((key) => params[key] !== undefined && params[key] !== null)
+    .sort()
+    .map((key) => `${key}=${encodeURIComponent(String(params[key]))}`)
+    .join("&");
+}
+
+export class AsterSpotRestClient {
+  private readonly apiKey?: string;
+  private readonly apiSecret?: string;
+
+  constructor(options: { apiKey?: string; apiSecret?: string } = {}) {
+    this.apiKey = options.apiKey ?? process.env.ASTER_API_KEY;
+    this.apiSecret = options.apiSecret ?? process.env.ASTER_API_SECRET;
+  }
+
+  async ping(): Promise<void> {
+    await this.request<void>({ path: "/api/v1/ping", method: "GET" });
+  }
+
+  async getServerTime(): Promise<{ serverTime: number }> {
+    return this.request<{ serverTime: number }>({ path: "/api/v1/time", method: "GET" });
+  }
+
+  async getExchangeInfo(): Promise<AsterSpotExchangeInfo> {
+    return this.request<AsterSpotExchangeInfo>({ path: "/api/v1/exchangeInfo", method: "GET" });
+  }
+
+  async getDepth(symbol: string, limit?: number): Promise<AsterSpotDepth> {
+    const payload = await this.request<AsterSpotDepth>({
+      path: "/api/v1/depth",
+      method: "GET",
+      params: { symbol: symbol.toUpperCase(), limit },
+    });
+    return {
+      lastUpdateId: Number(payload.lastUpdateId),
+      E: payload.E,
+      T: payload.T,
+      bids: (payload.bids ?? []).map(([price, qty]) => [String(price), String(qty)]) as AsterSpotDepth["bids"],
+      asks: (payload.asks ?? []).map(([price, qty]) => [String(price), String(qty)]) as AsterSpotDepth["asks"],
+    };
+  }
+
+  async getTrades(symbol: string, limit?: number): Promise<AsterSpotTrade[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/trades",
+      method: "GET",
+      params: { symbol: symbol.toUpperCase(), limit },
+    });
+    return payload.map((item) => ({
+      id: Number(item.id),
+      price: String(item.price),
+      qty: String(item.qty),
+      baseQty: item.baseQty !== undefined ? String(item.baseQty) : undefined,
+      quoteQty: item.quoteQty !== undefined ? String(item.quoteQty) : undefined,
+      time: Number(item.time ?? Date.now()),
+      isBuyerMaker: Boolean(item.isBuyerMaker),
+    }));
+  }
+
+  async getHistoricalTrades(params: { symbol: string; limit?: number; fromId?: number }): Promise<AsterSpotHistoricalTrade[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/historicalTrades",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        limit: params.limit,
+        fromId: params.fromId,
+      },
+      requiresApiKey: true,
+    });
+    return payload.map((item) => ({
+      id: Number(item.id),
+      price: String(item.price),
+      qty: String(item.qty),
+      baseQty: item.baseQty !== undefined ? String(item.baseQty) : undefined,
+      quoteQty: item.quoteQty !== undefined ? String(item.quoteQty) : undefined,
+      time: Number(item.time ?? Date.now()),
+      isBuyerMaker: Boolean(item.isBuyerMaker),
+      isBestMatch: item.isBestMatch !== undefined ? Boolean(item.isBestMatch) : undefined,
+    }));
+  }
+
+  async getAggTrades(params: {
+    symbol: string;
+    fromId?: number;
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+  }): Promise<AsterSpotAggTrade[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/aggTrades",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        fromId: params.fromId,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        limit: params.limit,
+      },
+    });
+    return payload.map((item) => ({
+      a: Number(item.a),
+      p: String(item.p),
+      q: String(item.q),
+      f: Number(item.f),
+      l: Number(item.l),
+      T: Number(item.T),
+      m: Boolean(item.m),
+      M: item.M !== undefined ? Boolean(item.M) : undefined,
+    }));
+  }
+
+  async getKlines(params: {
+    symbol: string;
+    interval: string;
+    startTime?: number;
+    endTime?: number;
+    limit?: number;
+  }): Promise<AsterSpotKline[]> {
+    const payload = await this.request<any[]>({
+      path: "/api/v1/klines",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        interval: params.interval,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        limit: params.limit,
+      },
+    });
+    return payload.map((entry) => ({
+      openTime: Number(entry[0]),
+      open: String(entry[1]),
+      high: String(entry[2]),
+      low: String(entry[3]),
+      close: String(entry[4]),
+      volume: String(entry[5]),
+      closeTime: Number(entry[6]),
+      quoteAssetVolume: String(entry[7]),
+      numberOfTrades: Number(entry[8] ?? 0),
+      takerBuyBaseAssetVolume: String(entry[9] ?? "0"),
+      takerBuyQuoteAssetVolume: String(entry[10] ?? "0"),
+    }));
+  }
+
+  async getTicker24h(symbol?: string): Promise<AsterSpotTicker24h | AsterSpotTicker24h[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/ticker/24hr",
+      method: "GET",
+      params: symbol ? { symbol: symbol.toUpperCase() } : undefined,
+    });
+    return this.normalizeTicker24h(payload);
+  }
+
+  async getTickerPrice(symbol?: string): Promise<AsterSpotPriceTicker | AsterSpotPriceTicker[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/ticker/price",
+      method: "GET",
+      params: symbol ? { symbol: symbol.toUpperCase() } : undefined,
+    });
+    return Array.isArray(payload) ? payload.map((item) => this.normalizePriceTicker(item)) : this.normalizePriceTicker(payload);
+  }
+
+  async getBookTicker(symbol?: string): Promise<AsterSpotBookTicker | AsterSpotBookTicker[]> {
+    const payload = await this.request<any>({
+      path: "/api/v1/ticker/bookTicker",
+      method: "GET",
+      params: symbol ? { symbol: symbol.toUpperCase() } : undefined,
+    });
+    return Array.isArray(payload) ? payload.map((item) => this.normalizeBookTicker(item)) : this.normalizeBookTicker(payload);
+  }
+
+  async getCommissionRate(symbol: string, params: { recvWindow?: number } = {}): Promise<AsterSpotCommissionRate> {
+    const payload = await this.request<AsterSpotCommissionRate>({
+      path: "/api/v1/commissionRate",
+      method: "GET",
+      params: { symbol: symbol.toUpperCase(), recvWindow: params.recvWindow },
+      signed: true,
+    });
+    return {
+      symbol: payload.symbol,
+      makerCommissionRate: String(payload.makerCommissionRate),
+      takerCommissionRate: String(payload.takerCommissionRate),
+    };
+  }
+
+  async createOrder(params: CreateSpotOrderParams): Promise<AsterOrder> {
+    const response = await this.request<any>({
+      path: "/api/v1/order",
+      method: "POST",
+      params: this.normalizeSpotOrderParams(params),
+      signed: true,
+      sendInBody: true,
+    });
+    return toOrderFromRest(response);
+  }
+
+  async cancelOrder(params: CancelSpotOrderParams): Promise<AsterOrder> {
+    const response = await this.request<any>({
+      path: "/api/v1/order",
+      method: "DELETE",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        orderId: params.orderId,
+        origClientOrderId: params.origClientOrderId,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return toOrderFromRest(response);
+  }
+
+  async getOrder(params: QuerySpotOrderParams): Promise<AsterOrder> {
+    const response = await this.request<any>({
+      path: "/api/v1/order",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        orderId: params.orderId,
+        origClientOrderId: params.origClientOrderId,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return toOrderFromRest(response);
+  }
+
+  async getOpenOrders(params: SpotOpenOrdersParams = {}): Promise<AsterOrder[]> {
+    const response = await this.request<any[]>({
+      path: "/api/v1/openOrders",
+      method: "GET",
+      params: {
+        symbol: params.symbol ? params.symbol.toUpperCase() : undefined,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return response.map(toOrderFromRest);
+  }
+
+  async cancelAllOpenOrders(params: SpotOpenOrdersParams & { symbol: string }): Promise<{ code: number; msg: string }> {
+    const payload: Record<string, unknown> = {
+      symbol: params.symbol.toUpperCase(),
+      recvWindow: params.recvWindow,
+    };
+    if (params.orderIdList && params.orderIdList.length) {
+      payload.orderIdList = `[${params.orderIdList
+        .map((id) => (typeof id === "string" ? id.trim() : String(id)))
+        .join(",")}]`;
+    }
+    if (params.origClientOrderIdList && params.origClientOrderIdList.length) {
+      payload.origClientOrderIdList = JSON.stringify(params.origClientOrderIdList);
+    }
+    return this.request<{ code: number; msg: string }>({
+      path: "/api/v1/allOpenOrders",
+      method: "DELETE",
+      params: payload,
+      signed: true,
+    });
+  }
+
+  async getAllOrders(params: SpotAllOrdersParams): Promise<AsterOrder[]> {
+    const response = await this.request<any[]>({
+      path: "/api/v1/allOrders",
+      method: "GET",
+      params: {
+        symbol: params.symbol.toUpperCase(),
+        orderId: params.orderId,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        limit: params.limit,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return response.map(toOrderFromRest);
+  }
+
+  async getAccount(params: { recvWindow?: number } = {}): Promise<AsterSpotAccount> {
+    const payload = await this.request<AsterSpotAccount>({
+      path: "/api/v1/account",
+      method: "GET",
+      params: { recvWindow: params.recvWindow },
+      signed: true,
+    });
+    return {
+      ...payload,
+      balances: (payload.balances ?? []).map((balance) => ({
+        asset: balance.asset,
+        free: String(balance.free ?? "0"),
+        locked: String(balance.locked ?? "0"),
+      })),
+    };
+  }
+
+  async getUserTrades(params: SpotUserTradesParams = {}): Promise<AsterSpotUserTrade[]> {
+    const response = await this.request<any[]>({
+      path: "/api/v1/userTrades",
+      method: "GET",
+      params: {
+        symbol: params.symbol ? params.symbol.toUpperCase() : undefined,
+        orderId: params.orderId,
+        startTime: params.startTime,
+        endTime: params.endTime,
+        fromId: params.fromId,
+        limit: params.limit,
+        recvWindow: params.recvWindow,
+      },
+      signed: true,
+    });
+    return response.map((item) => ({
+      symbol: item.symbol,
+      id: Number(item.id),
+      orderId: Number(item.orderId),
+      side: item.side,
+      price: String(item.price),
+      qty: String(item.qty),
+      quoteQty: item.quoteQty !== undefined ? String(item.quoteQty) : undefined,
+      commission: String(item.commission ?? "0"),
+      commissionAsset: String(item.commissionAsset ?? ""),
+      time: Number(item.time ?? Date.now()),
+      counterpartyId: item.counterpartyId !== undefined ? Number(item.counterpartyId) : undefined,
+      maker: Boolean(item.maker),
+      buyer: Boolean(item.buyer),
+    }));
+  }
+
+  private normalizeTicker24h(payload: any): AsterSpotTicker24h | AsterSpotTicker24h[] {
+    const mapOne = (entry: any): AsterSpotTicker24h => ({
+      symbol: entry.symbol,
+      priceChange: String(entry.priceChange),
+      priceChangePercent: String(entry.priceChangePercent),
+      weightedAvgPrice: String(entry.weightedAvgPrice),
+      prevClosePrice: String(entry.prevClosePrice),
+      lastPrice: String(entry.lastPrice),
+      lastQty: String(entry.lastQty),
+      bidPrice: String(entry.bidPrice),
+      bidQty: String(entry.bidQty),
+      askPrice: String(entry.askPrice),
+      askQty: String(entry.askQty),
+      openPrice: String(entry.openPrice),
+      highPrice: String(entry.highPrice),
+      lowPrice: String(entry.lowPrice),
+      volume: String(entry.volume),
+      quoteVolume: String(entry.quoteVolume),
+      openTime: Number(entry.openTime ?? 0),
+      closeTime: Number(entry.closeTime ?? 0),
+      firstId: Number(entry.firstId ?? 0),
+      lastId: Number(entry.lastId ?? 0),
+      count: Number(entry.count ?? 0),
+      baseAsset: entry.baseAsset,
+      quoteAsset: entry.quoteAsset,
+    });
+    return Array.isArray(payload) ? payload.map((entry) => mapOne(entry)) : mapOne(payload);
+  }
+
+  private normalizePriceTicker(entry: any): AsterSpotPriceTicker {
+    return {
+      symbol: entry.symbol,
+      price: String(entry.price),
+      time: entry.time !== undefined ? Number(entry.time) : undefined,
+    };
+  }
+
+  private normalizeBookTicker(entry: any): AsterSpotBookTicker {
+    return {
+      symbol: entry.symbol,
+      bidPrice: String(entry.bidPrice),
+      bidQty: String(entry.bidQty),
+      askPrice: String(entry.askPrice),
+      askQty: String(entry.askQty),
+      time: entry.time !== undefined ? Number(entry.time) : undefined,
+    };
+  }
+
+  private normalizeSpotOrderParams(params: CreateSpotOrderParams): Record<string, unknown> {
+    const payload: Record<string, unknown> = {
+      symbol: params.symbol.toUpperCase(),
+      side: params.side,
+      type: params.type,
+      timeInForce: params.timeInForce,
+      quantity: params.quantity !== undefined ? params.quantity : undefined,
+      quoteOrderQty: params.quoteOrderQty !== undefined ? params.quoteOrderQty : undefined,
+      price: params.price !== undefined ? params.price : undefined,
+      newClientOrderId: params.newClientOrderId,
+      stopPrice: params.stopPrice !== undefined ? params.stopPrice : undefined,
+      recvWindow: params.recvWindow,
+    };
+    return payload;
+  }
+
+  private ensureApiKey(): string {
+    if (!this.apiKey) {
+      throw new Error("[AsterSpotRestClient] Missing API key");
+    }
+    return this.apiKey;
+  }
+
+  private ensureCredentials(): { apiKey: string; apiSecret: string } {
+    const apiKey = this.ensureApiKey();
+    const apiSecret = this.apiSecret;
+    if (!apiSecret) {
+      throw new Error("[AsterSpotRestClient] Missing API secret");
+    }
+    return { apiKey, apiSecret };
+  }
+
+  private cleanParams(params: Record<string, unknown> | undefined): Record<string, unknown> {
+    const source = params ?? {};
+    const cleaned: Record<string, unknown> = {};
+    for (const key of Object.keys(source)) {
+      const value = (source as Record<string, unknown>)[key];
+      if (value === undefined || value === null) continue;
+      cleaned[key] = value;
+    }
+    return cleaned;
+  }
+
+  private async request<T>({
+    path,
+    method,
+    params,
+    signed = false,
+    sendInBody,
+    requiresApiKey = false,
+  }: {
+    path: string;
+    method: "GET" | "POST" | "DELETE" | "PUT";
+    params?: Record<string, unknown>;
+    signed?: boolean;
+    sendInBody?: boolean;
+    requiresApiKey?: boolean;
+  }): Promise<T> {
+    const cleaned = this.cleanParams(params);
+    const headers: Record<string, string> = {};
+    let url = `${SPOT_REST_BASE}${path}`;
+    const useBody = sendInBody ?? (method !== "GET" && method !== "DELETE");
+    let body: string | undefined;
+    if (requiresApiKey || signed) {
+      headers["X-MBX-APIKEY"] = this.ensureApiKey();
+    }
+    if (signed) {
+      if (cleaned.timestamp === undefined) cleaned.timestamp = Date.now();
+      if (cleaned.recvWindow === undefined) cleaned.recvWindow = 5000;
+      const { apiSecret } = this.ensureCredentials();
+      const serialized = serialize(cleaned);
+      const signature = crypto.createHmac("sha256", apiSecret).update(serialized).digest("hex");
+      if (useBody) {
+        body = serialized ? `${serialized}&signature=${signature}` : `signature=${signature}`;
+      } else {
+        const query = serialized ? `${serialized}&signature=${signature}` : `signature=${signature}`;
+        url += url.includes("?") ? `&${query}` : `?${query}`;
+      }
+    } else {
+      const query = serialize(cleaned);
+      if (query) {
+        if (useBody) {
+          body = query;
+        } else {
+          url += url.includes("?") ? `&${query}` : `?${query}`;
+        }
+      }
+    }
+
+    const init: RequestInit = { method, headers };
+    if (useBody) {
+      init.body = body ?? "";
+      headers["Content-Type"] = "application/x-www-form-urlencoded";
+    }
+
+    let response: Response;
+    try {
+      response = await fetch(url, init);
+    } catch (error) {
+      throw new Error(`[AsterSpotRestClient] 请求失败 ${String(error)}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${text}`);
+    }
+    if (!text) {
+      return undefined as T;
+    }
+    try {
+      return JSON.parse(text) as T;
+    } catch (error) {
+      throw new Error(`[AsterSpotRestClient] 无法解析响应: ${text.slice(0, 200)}`);
+    }
+  }
 }
 
 function toDepth(streamSymbol: string, data: any): AsterDepth {
@@ -265,8 +781,51 @@ export class AsterRestClient {
     return raw.map(toPositionFromRisk);
   }
 
+  async getExchangeInfo(): Promise<AsterFuturesExchangeInfo> {
+    const url = `${FUTURES_REST_BASE}/fapi/v1/exchangeInfo`;
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 获取交易规则失败 ${String(error)}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${text}`);
+    }
+    try {
+      return JSON.parse(text) as AsterFuturesExchangeInfo;
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 无法解析交易规则响应: ${text.slice(0, 200)}`);
+    }
+  }
+
   async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
-    const payload: Record<string, unknown> = { ...params };
+    // Sanitize and normalize params for Aster futures API. Paradex-specific flags
+    // like reduceOnly/closePosition on STOP/TRAILING should not leak here.
+    const payload: Record<string, unknown> = {};
+    payload.symbol = String(params.symbol).toUpperCase();
+    payload.side = params.side;
+    payload.type = params.type;
+    if (params.timeInForce !== undefined) payload.timeInForce = params.timeInForce;
+    if (params.price !== undefined) payload.price = params.price;
+    if (params.stopPrice !== undefined) payload.stopPrice = params.stopPrice;
+    if (params.activationPrice !== undefined) payload.activationPrice = params.activationPrice;
+    if (params.callbackRate !== undefined) payload.callbackRate = params.callbackRate;
+    if (params.quantity !== undefined) payload.quantity = Math.abs(params.quantity);
+
+    // Aster rejects reduceOnly/closePosition for certain order types (e.g. STOP/TRAILING).
+    // Keep the behavior exchange-specific by stripping them here for Aster.
+    const type = String(params.type).toUpperCase();
+    const isStopOrTrailing = type === "STOP_MARKET" || type === "TRAILING_STOP_MARKET";
+    const supportsClosePosition = type === "STOP_MARKET" || type === "TAKE_PROFIT_MARKET";
+    if (!isStopOrTrailing) {
+      if (params.reduceOnly !== undefined) payload.reduceOnly = params.reduceOnly;
+    }
+    if (supportsClosePosition) {
+      if (params.closePosition !== undefined) payload.closePosition = params.closePosition;
+    }
+
     const response = await this.signedRequest<any>({ path: "/fapi/v1/order", method: "POST", params: payload });
     return toOrderFromRest(response);
   }
@@ -296,7 +855,7 @@ export class AsterRestClient {
 
   async getKlines(symbol: string, interval: string, limit = DEFAULT_KLINE_LIMIT): Promise<AsterKline[]> {
     const upper = symbol.toUpperCase();
-    const url = `${REST_BASE}/fapi/v1/continuousKlines?pair=${upper}&contractType=PERPETUAL&interval=${encodeURIComponent(interval)}&limit=${limit}`;
+    const url = `${FUTURES_REST_BASE}/fapi/v1/continuousKlines?pair=${upper}&contractType=PERPETUAL&interval=${encodeURIComponent(interval)}&limit=${limit}`;
     let response: Response;
     try {
       response = await fetch(url);
@@ -312,6 +871,36 @@ export class AsterRestClient {
       return payload.map((entry) => fromRestKline(entry, interval, upper));
     } catch (error) {
       throw new Error(`[AsterRestClient] 无法解析K线响应: ${text.slice(0, 200)}`);
+    }
+  }
+
+  async getPremiumIndex(symbol: string): Promise<{
+    symbol: string;
+    markPrice?: string;
+    indexPrice?: string;
+    lastFundingRate?: string;
+    fundingRate?: string;
+    nextFundingTime?: number;
+    time?: number;
+  }> {
+    const upper = symbol.toUpperCase();
+    const url = `${FUTURES_REST_BASE}/fapi/v1/premiumIndex?symbol=${encodeURIComponent(upper)}`;
+    let response: Response;
+    try {
+      response = await fetch(url);
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 获取资金费率失败 ${String(error)}`);
+    }
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} ${text}`);
+    }
+    try {
+      const payload = JSON.parse(text) as any;
+      // The response shape mirrors Binance: { symbol, markPrice, indexPrice, lastFundingRate, nextFundingTime, time }
+      return payload;
+    } catch (error) {
+      throw new Error(`[AsterRestClient] 无法解析资金费率响应: ${text.slice(0, 200)}`);
     }
   }
 
@@ -331,9 +920,9 @@ export class AsterRestClient {
   private async signedRequest<T>({ path, method, params }: { path: string; method: string; params: Record<string, unknown> }): Promise<T> {
     const timestamp = Date.now();
     const payload = { ...params, timestamp, recvWindow: 5000 };
-    const query = this.serialize(payload);
+    const query = serialize(payload);
     const signature = crypto.createHmac("sha256", this.apiSecret).update(query).digest("hex");
-    const url = `${REST_BASE}${path}?${query}&signature=${signature}`;
+    const url = `${FUTURES_REST_BASE}${path}?${query}&signature=${signature}`;
     const init: RequestInit = {
       method,
       headers: {
@@ -358,13 +947,6 @@ export class AsterRestClient {
     }
   }
 
-  private serialize(params: Record<string, unknown>): string {
-    return Object.keys(params)
-      .filter((key) => params[key] !== undefined && params[key] !== null)
-      .sort()
-      .map((key) => `${key}=${encodeURIComponent(String(params[key]))}`)
-      .join("&");
-  }
 }
 
 type DepthHandler = (depth: AsterDepth) => void;
@@ -745,6 +1327,18 @@ export class AsterGateway {
   private readonly klineInitialFetches = new Map<string, Promise<void>>();
   private initialized = false;
   private initializing: Promise<void> | null = null;
+  private readonly precisionCache = new Map<
+    string,
+    {
+      priceTick: number;
+      qtyStep: number;
+      priceDecimals?: number;
+      sizeDecimals?: number;
+    }
+  >();
+  private exchangeInfo: AsterFuturesExchangeInfo | null = null;
+  private exchangeInfoFetchedAt = 0;
+  private exchangeInfoPromise: Promise<AsterFuturesExchangeInfo> | null = null;
 
   constructor(options: { apiKey?: string; apiSecret?: string } = {}) {
     this.rest = new AsterRestClient(options);
@@ -991,10 +1585,40 @@ export class AsterGateway {
   }
 
   async createOrder(params: CreateOrderParams): Promise<AsterOrder> {
-    const order = await this.rest.createOrder(params);
+    const normalized = await this.normalizeOrderParams(params);
+    const order = await this.rest.createOrder(normalized);
     mergeOrderSnapshot(this.openOrders, order);
     this.ordersEvent.emit(Array.from(this.openOrders.values()));
     return order;
+  }
+
+  async getPrecision(symbol: string): Promise<{
+    priceTick: number;
+    qtyStep: number;
+    priceDecimals?: number;
+    sizeDecimals?: number;
+  } | null> {
+    const upper = String(symbol).toUpperCase();
+    const cached = this.precisionCache.get(upper);
+    if (cached) return cached;
+    let exchangeInfo: AsterFuturesExchangeInfo;
+    try {
+      exchangeInfo = await this.loadExchangeInfo();
+    } catch (error) {
+      console.error("[AsterGateway] 获取交易规则失败", error);
+      return null;
+    }
+    const symbols = exchangeInfo?.symbols ?? [];
+    const match = symbols.find((item) => {
+      if (!item) return false;
+      const symbolName = typeof item.symbol === "string" ? item.symbol.toUpperCase() : "";
+      const pairName = typeof item.pair === "string" ? item.pair.toUpperCase() : "";
+      return symbolName === upper || pairName === upper;
+    });
+    if (!match) return null;
+    const precision = this.extractSymbolPrecision(match);
+    this.precisionCache.set(upper, precision);
+    return precision;
   }
 
   async cancelOrder(params: { symbol: string; orderId?: number; origClientOrderId?: string }): Promise<void> {
@@ -1017,5 +1641,148 @@ export class AsterGateway {
       }
     }
     this.ordersEvent.emit(Array.from(this.openOrders.values()));
+  }
+
+  private async normalizeOrderParams(params: CreateOrderParams): Promise<CreateOrderParams> {
+    const symbol = String(params.symbol).toUpperCase();
+    const precision = await this.getPrecision(symbol);
+    if (!precision) {
+      return { ...params, symbol };
+    }
+    const { priceTick, qtyStep, priceDecimals, sizeDecimals } = precision;
+    const normalized: CreateOrderParams = { ...params, symbol };
+    if (normalized.price !== undefined) {
+      normalized.price = this.quantizePrice(normalized.price, priceTick, priceDecimals);
+    }
+    if (normalized.stopPrice !== undefined) {
+      normalized.stopPrice = this.quantizePrice(normalized.stopPrice, priceTick, priceDecimals);
+    }
+    if (normalized.activationPrice !== undefined) {
+      normalized.activationPrice = this.quantizePrice(normalized.activationPrice, priceTick, priceDecimals);
+    }
+    if (normalized.quantity !== undefined) {
+      normalized.quantity = this.quantizeQuantity(Math.abs(normalized.quantity), qtyStep, sizeDecimals);
+    }
+    return normalized;
+  }
+
+  private async loadExchangeInfo(): Promise<AsterFuturesExchangeInfo> {
+    const now = Date.now();
+    if (this.exchangeInfo && now - this.exchangeInfoFetchedAt <= EXCHANGE_INFO_CACHE_TTL_MS) {
+      return this.exchangeInfo;
+    }
+    if (this.exchangeInfoPromise) {
+      return this.exchangeInfoPromise;
+    }
+    this.exchangeInfoPromise = this.rest
+      .getExchangeInfo()
+      .then((info) => {
+        this.exchangeInfo = info;
+        this.exchangeInfoFetchedAt = Date.now();
+        this.exchangeInfoPromise = null;
+        return info;
+      })
+      .catch((error) => {
+        this.exchangeInfoPromise = null;
+        throw error;
+      });
+    return this.exchangeInfoPromise;
+  }
+
+  private extractSymbolPrecision(symbolInfo: AsterFuturesSymbolInfo): {
+    priceTick: number;
+    qtyStep: number;
+    priceDecimals?: number;
+    sizeDecimals?: number;
+  } {
+    const filters = symbolInfo.filters ?? [];
+    const normalizeFilterType = (type: string) =>
+      filters.find((item) => typeof item.filterType === "string" && item.filterType.toUpperCase() === type);
+    const parseNumber = (value: unknown): number | undefined => {
+      if (typeof value === "number" && Number.isFinite(value)) return value;
+      if (typeof value === "string") {
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      }
+      return undefined;
+    };
+    const priceFilter = normalizeFilterType("PRICE_FILTER");
+    const lotFilter = normalizeFilterType("LOT_SIZE");
+    const marketLotFilter = normalizeFilterType("MARKET_LOT_SIZE");
+    const tickSize = parseNumber(priceFilter?.tickSize);
+    const stepSize = parseNumber(lotFilter?.stepSize ?? marketLotFilter?.stepSize);
+    const priceDecimals =
+      typeof symbolInfo.pricePrecision === "number" && Number.isFinite(symbolInfo.pricePrecision)
+        ? symbolInfo.pricePrecision
+        : typeof symbolInfo.quotePrecision === "number" && Number.isFinite(symbolInfo.quotePrecision)
+          ? symbolInfo.quotePrecision
+          : undefined;
+    const sizeDecimals =
+      typeof symbolInfo.quantityPrecision === "number" && Number.isFinite(symbolInfo.quantityPrecision)
+        ? symbolInfo.quantityPrecision
+        : typeof symbolInfo.baseAssetPrecision === "number" && Number.isFinite(symbolInfo.baseAssetPrecision)
+          ? symbolInfo.baseAssetPrecision
+          : undefined;
+    return {
+      priceTick: this.ensurePositivePrecision(tickSize, priceDecimals),
+      qtyStep: this.ensurePositivePrecision(stepSize, sizeDecimals),
+      priceDecimals,
+      sizeDecimals,
+    };
+  }
+
+  private ensurePositivePrecision(value: number | undefined, decimals?: number): number {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      const digits = Math.max(0, decimals ?? decimalsOf(value));
+      return Number(value.toFixed(digits));
+    }
+    if (typeof decimals === "number" && decimals >= 0) {
+      const fallback = Math.pow(10, -decimals);
+      const digits = Math.max(0, decimals);
+      return Number(fallback.toFixed(digits));
+    }
+    return 0;
+  }
+
+  private quantizePrice(value: number, tick: number, decimals?: number): number {
+    if (!Number.isFinite(value)) return value;
+    let result = value;
+    if (Number.isFinite(tick) && tick > 0) {
+      const ratio = value / tick;
+      const rounded = Math.round(ratio);
+      const quantized = rounded * tick;
+      const digits = Math.max(0, decimals ?? decimalsOf(tick));
+      result = Number(quantized.toFixed(digits));
+    } else if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(value.toFixed(decimals));
+    }
+    if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(result.toFixed(decimals));
+    }
+    return result;
+  }
+
+  private quantizeQuantity(value: number, step: number, decimals?: number): number {
+    if (!Number.isFinite(value)) return value;
+    const absValue = Math.abs(value);
+    let result = absValue;
+    if (Number.isFinite(step) && step > 0) {
+      const ratio = absValue / step;
+      const floored = Math.floor(ratio + 1e-12) * step;
+      const digits = Math.max(0, decimals ?? decimalsOf(step));
+      result = Number(floored.toFixed(digits));
+      if (result <= 0 && absValue > 0) {
+        const fallback = Number(step.toFixed(digits));
+        if (fallback > 0) {
+          result = fallback;
+        }
+      }
+    } else if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(absValue.toFixed(decimals));
+    }
+    if (typeof decimals === "number" && decimals >= 0) {
+      result = Number(result.toFixed(decimals));
+    }
+    return result;
   }
 }

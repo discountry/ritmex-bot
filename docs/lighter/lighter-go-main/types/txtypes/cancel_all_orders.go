@@ -69,7 +69,7 @@ func (txInfo *L2CancelAllOrdersTxInfo) Validate() error {
 		}
 	case AbortScheduledCancelAll:
 		if txInfo.Time != 0 {
-			return ErrCancelAllTimeIsNotInRange
+			return ErrCancelAllTimeisNotNill
 		}
 	default:
 		return ErrInvalidCancelAllTimeInForce

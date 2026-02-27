@@ -55,11 +55,8 @@ func (txInfo *L2CreateGroupedOrdersTxInfo) Validate() error {
 	}
 
 	// MarketIndex for first order
-	if txInfo.Orders[0].MarketIndex < MinMarketIndex {
-		return ErrMarketIndexTooLow
-	}
-	if txInfo.Orders[0].MarketIndex > MaxMarketIndex {
-		return ErrMarketIndexTooHigh
+	if txInfo.Orders[0].MarketIndex < MinPerpsMarketIndex || txInfo.Orders[0].MarketIndex > MaxPerpsMarketIndex {
+		return ErrInvalidMarketIndex
 	}
 
 	// Perform range checks for all orders

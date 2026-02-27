@@ -15,6 +15,16 @@ class StrOrErr(ctypes.Structure):
     _fields_ = [("str", ctypes.c_char_p), ("err", ctypes.c_char_p)]
 
 
+class SignedTxResponse(ctypes.Structure):
+    _fields_ = [
+        ("txType", ctypes.c_uint8),
+        ("txInfo", ctypes.c_char_p),
+        ("txHash", ctypes.c_char_p),
+        ("messageToSign", ctypes.c_char_p),
+        ("err", ctypes.c_char_p),
+    ]
+
+
 def _resolve_signer_path() -> str:
     base = os.path.abspath(os.path.dirname(__file__))
     signers_dir = os.path.join(base, "signers")
@@ -57,35 +67,54 @@ except OSError as exc:  # pragma: no cover - runtime environment guard
 LIB.CreateClient.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int, ctypes.c_int, ctypes.c_longlong]
 LIB.CreateClient.restype = ctypes.c_char_p
 
-LIB.SwitchAPIKey.argtypes = [ctypes.c_int]
-LIB.SwitchAPIKey.restype = ctypes.c_char_p
-
+# New signer exports: SwitchAPIKey removed; apiKeyIndex is passed to every call
 LIB.SignCreateOrder.argtypes = [
-    ctypes.c_int,
-    ctypes.c_longlong,
-    ctypes.c_longlong,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_int,
-    ctypes.c_longlong,
-    ctypes.c_longlong,
+    ctypes.c_int,  # marketIndex
+    ctypes.c_longlong,  # clientOrderIndex
+    ctypes.c_longlong,  # baseAmount
+    ctypes.c_int,  # price
+    ctypes.c_int,  # isAsk
+    ctypes.c_int,  # orderType
+    ctypes.c_int,  # timeInForce
+    ctypes.c_int,  # reduceOnly
+    ctypes.c_int,  # triggerPrice
+    ctypes.c_longlong,  # orderExpiry
+    ctypes.c_longlong,  # nonce
+    ctypes.c_int,  # apiKeyIndex
+    ctypes.c_longlong,  # accountIndex
 ]
-LIB.SignCreateOrder.restype = StrOrErr
+LIB.SignCreateOrder.restype = SignedTxResponse
 
-LIB.SignCancelOrder.argtypes = [ctypes.c_int, ctypes.c_longlong, ctypes.c_longlong]
-LIB.SignCancelOrder.restype = StrOrErr
+LIB.SignCancelOrder.argtypes = [
+    ctypes.c_int,  # marketIndex
+    ctypes.c_longlong,  # orderIndex
+    ctypes.c_longlong,  # nonce
+    ctypes.c_int,  # apiKeyIndex
+    ctypes.c_longlong,  # accountIndex
+]
+LIB.SignCancelOrder.restype = SignedTxResponse
 
-LIB.SignCancelAllOrders.argtypes = [ctypes.c_int, ctypes.c_longlong, ctypes.c_longlong]
-LIB.SignCancelAllOrders.restype = StrOrErr
+LIB.SignCancelAllOrders.argtypes = [
+    ctypes.c_int,  # timeInForce
+    ctypes.c_longlong,  # scheduledTime
+    ctypes.c_longlong,  # nonce
+    ctypes.c_int,  # apiKeyIndex
+    ctypes.c_longlong,  # accountIndex
+]
+LIB.SignCancelAllOrders.restype = SignedTxResponse
 
-LIB.CreateAuthToken.argtypes = [ctypes.c_longlong]
+LIB.CreateAuthToken.argtypes = [ctypes.c_longlong, ctypes.c_int, ctypes.c_longlong]
 LIB.CreateAuthToken.restype = StrOrErr
 
 
 def _unwrap(result: StrOrErr) -> Dict[str, Any]:
+    if isinstance(result, SignedTxResponse):
+        if result.err:
+            return {"error": ctypes.string_at(result.err).decode("utf-8", errors="replace")}
+        tx_info = ctypes.string_at(result.txInfo).decode("utf-8", errors="replace") if result.txInfo else None
+        tx_hash = ctypes.string_at(result.txHash).decode("utf-8", errors="replace") if result.txHash else None
+        msg = ctypes.string_at(result.messageToSign).decode("utf-8", errors="replace") if result.messageToSign else None
+        return {"result": tx_info, "txHash": tx_hash, "messageToSign": msg}
     if result.err:
         return {"error": ctypes.string_at(result.err).decode("utf-8", errors="replace")}
     if result.str:
@@ -119,9 +148,6 @@ def _ensure_client(params: Dict[str, Any]) -> Dict[str, Any]:
     if config is None:
         return {"error": "client_not_initialized"}
 
-    if api_key_index in _INITIALISED_KEYS:
-        return {"result": "ok"}
-
     err_ptr = LIB.CreateClient(
         config["baseUrl"].encode("utf-8"),
         config["privateKey"].encode("utf-8"),
@@ -132,14 +158,13 @@ def _ensure_client(params: Dict[str, Any]) -> Dict[str, Any]:
     outcome = _maybe_error(err_ptr)
     if "error" in outcome:
         return outcome
-
     _INITIALISED_KEYS.add(api_key_index)
     return {"result": "ok"}
 
 
 def _switch_api_key(api_key_index: int) -> Dict[str, Any]:
-    err_ptr = LIB.SwitchAPIKey(ctypes.c_int(api_key_index))
-    return _maybe_error(err_ptr)
+    # No-op with new signer (apiKeyIndex is passed to each call)
+    return {"result": "ok"}
 
 
 def handle_create_client(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -152,10 +177,6 @@ def handle_sign_create_order(params: Dict[str, Any]) -> Dict[str, Any]:
         return ensure
 
     api_key_index = int(params["apiKeyIndex"])
-    switched = _switch_api_key(api_key_index)
-    if "error" in switched:
-        return switched
-
     expiry = int(params["orderExpiry"])
     result = LIB.SignCreateOrder(
         ctypes.c_int(int(params["marketIndex"])),
@@ -169,6 +190,8 @@ def handle_sign_create_order(params: Dict[str, Any]) -> Dict[str, Any]:
         ctypes.c_int(int(params["triggerPrice"])),
         ctypes.c_longlong(expiry),
         ctypes.c_longlong(int(params["nonce"])),
+        ctypes.c_int(api_key_index),
+        ctypes.c_longlong(int(params["accountIndex"])),
     )
     return _unwrap(result)
 
@@ -179,14 +202,12 @@ def handle_sign_cancel_order(params: Dict[str, Any]) -> Dict[str, Any]:
         return ensure
 
     api_key_index = int(params["apiKeyIndex"])
-    switched = _switch_api_key(api_key_index)
-    if "error" in switched:
-        return switched
-
     result = LIB.SignCancelOrder(
         ctypes.c_int(int(params["marketIndex"])),
         ctypes.c_longlong(int(params["orderIndex"])),
         ctypes.c_longlong(int(params["nonce"])),
+        ctypes.c_int(api_key_index),
+        ctypes.c_longlong(int(params["accountIndex"])),
     )
     return _unwrap(result)
 
@@ -197,14 +218,12 @@ def handle_sign_cancel_all(params: Dict[str, Any]) -> Dict[str, Any]:
         return ensure
 
     api_key_index = int(params["apiKeyIndex"])
-    switched = _switch_api_key(api_key_index)
-    if "error" in switched:
-        return switched
-
     result = LIB.SignCancelAllOrders(
         ctypes.c_int(int(params["timeInForce"])),
         ctypes.c_longlong(int(params["scheduledTime"])),
         ctypes.c_longlong(int(params["nonce"])),
+        ctypes.c_int(api_key_index),
+        ctypes.c_longlong(int(params["accountIndex"])),
     )
     return _unwrap(result)
 
@@ -215,11 +234,12 @@ def handle_create_auth_token(params: Dict[str, Any]) -> Dict[str, Any]:
         return ensure
 
     api_key_index = int(params["apiKeyIndex"])
-    switched = _switch_api_key(api_key_index)
-    if "error" in switched:
-        return switched
 
-    result = LIB.CreateAuthToken(ctypes.c_longlong(int(params["deadlineMs"])))
+    result = LIB.CreateAuthToken(
+        ctypes.c_longlong(int(params["deadlineMs"])),
+        ctypes.c_int(api_key_index),
+        ctypes.c_longlong(int(params["accountIndex"])),
+    )
     return _unwrap(result)
 
 

@@ -7,7 +7,8 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **code** | **int** |  | 
 **message** | **str** |  | [optional] 
-**order_book_details** | [**List[OrderBookDetail]**](OrderBookDetail.md) |  | 
+**order_book_details** | [**List[PerpsOrderBookDetail]**](PerpsOrderBookDetail.md) |  | 
+**spot_order_book_details** | [**List[SpotOrderBookDetail]**](SpotOrderBookDetail.md) |  | 
 
 ## Example
 

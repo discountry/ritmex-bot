@@ -14,6 +14,8 @@ Name | Type | Description | Notes
 **usd_amount** | **str** |  | 
 **ask_id** | **int** |  | 
 **bid_id** | **int** |  | 
+**ask_client_id** | **int** |  | 
+**bid_client_id** | **int** |  | 
 **ask_account_id** | **int** |  | 
 **bid_account_id** | **int** |  | 
 **is_maker_ask** | **bool** |  | 

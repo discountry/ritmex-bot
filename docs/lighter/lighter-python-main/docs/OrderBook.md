@@ -7,12 +7,16 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **symbol** | **str** |  | 
 **market_id** | **int** |  | 
+**market_type** | **str** |  | 
+**base_asset_id** | **int** |  | 
+**quote_asset_id** | **int** |  | 
 **status** | **str** |  | 
 **taker_fee** | **str** |  | 
 **maker_fee** | **str** |  | 
 **liquidation_fee** | **str** |  | 
 **min_base_amount** | **str** |  | 
 **min_quote_amount** | **str** |  | 
+**order_quote_limit** | **str** |  | 
 **supported_size_decimals** | **int** |  | 
 **supported_price_decimals** | **int** |  | 
 **supported_quote_decimals** | **int** |  | 

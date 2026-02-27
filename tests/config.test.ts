@@ -42,5 +42,11 @@ describe("resolveSymbolFromEnv", () => {
 
     expect(resolveSymbolFromEnv("grvt")).toBe("ETHUSDT");
   });
-});
 
+  it("supports standx symbol defaults when explicit exchange id is provided", () => {
+    delete process.env.EXCHANGE;
+    process.env.STANDX_SYMBOL = "ETH-USD";
+
+    expect(resolveSymbolFromEnv("standx")).toBe("ETH-USD");
+  });
+});

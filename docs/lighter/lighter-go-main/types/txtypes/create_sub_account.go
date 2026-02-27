@@ -34,7 +34,7 @@ func (txInfo *L2CreateSubAccountTxInfo) Validate() error {
 	if txInfo.AccountIndex < MinAccountIndex {
 		return ErrFromAccountIndexTooLow
 	}
-	if txInfo.AccountIndex > MaxAccountIndex {
+	if txInfo.AccountIndex > MaxMasterAccountIndex {
 		return ErrFromAccountIndexTooHigh
 	}
 

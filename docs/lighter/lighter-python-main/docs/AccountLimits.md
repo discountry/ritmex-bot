@@ -8,7 +8,9 @@ Name | Type | Description | Notes
 **code** | **int** |  | 
 **message** | **str** |  | [optional] 
 **max_llp_percentage** | **int** |  | 
+**max_llp_amount** | **str** |  | 
 **user_tier** | **str** |  | 
+**can_create_public_pool** | **bool** |  | 
 
 ## Example
 

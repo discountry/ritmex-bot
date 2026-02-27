@@ -122,7 +122,13 @@ export class BackpackExchangeAdapter implements ExchangeAdapter {
       this.initPromise = this.gateway
         .ensureInitialized(this.symbol)
         .then((value) => {
-          this.clearRetry();
+      if (process.env.BACKPACK_DEBUG === "1") {
+        console.error(`[BackpackExchangeAdapter] initialize succeeded`);
+      }
+      if (process.env.BACKPACK_DEBUG === "1") {
+        console.error(`[BackpackExchangeAdapter] initialize succeeded`);
+      }
+      this.clearRetry();
           return value;
         })
         .catch((error) => {

@@ -6,6 +6,7 @@ Method | HTTP request | Description
 ------------- | ------------- | -------------
 [**account_active_orders**](OrderApi.md#account_active_orders) | **GET** /api/v1/accountActiveOrders | accountActiveOrders
 [**account_inactive_orders**](OrderApi.md#account_inactive_orders) | **GET** /api/v1/accountInactiveOrders | accountInactiveOrders
+[**asset_details**](OrderApi.md#asset_details) | **GET** /api/v1/assetDetails | assetDetails
 [**exchange_stats**](OrderApi.md#exchange_stats) | **GET** /api/v1/exchangeStats | exchangeStats
 [**export**](OrderApi.md#export) | **GET** /api/v1/export | export
 [**order_book_details**](OrderApi.md#order_book_details) | **GET** /api/v1/orderBookDetails | orderBookDetails
@@ -173,6 +174,75 @@ No authorization required
 
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
+# **asset_details**
+> AssetDetails asset_details(asset_id=asset_id)
+
+assetDetails
+
+Get asset details
+
+### Example
+
+
+```python
+import lighter
+from lighter.models.asset_details import AssetDetails
+from lighter.rest import ApiException
+from pprint import pprint
+
+# Defining the host is optional and defaults to https://mainnet.zklighter.elliot.ai
+# See configuration.py for a list of all supported configuration parameters.
+configuration = lighter.Configuration(
+    host = "https://mainnet.zklighter.elliot.ai"
+)
+
+
+# Enter a context with an instance of the API client
+async with lighter.ApiClient(configuration) as api_client:
+    # Create an instance of the API class
+    api_instance = lighter.OrderApi(api_client)
+    asset_id = 0 # int |  (optional) (default to 0)
+
+    try:
+        # assetDetails
+        api_response = await api_instance.asset_details(asset_id=asset_id)
+        print("The response of OrderApi->asset_details:\n")
+        pprint(api_response)
+    except Exception as e:
+        print("Exception when calling OrderApi->asset_details: %s\n" % e)
+```
+
+
+
+### Parameters
+
+
+Name | Type | Description  | Notes
+------------- | ------------- | ------------- | -------------
+ **asset_id** | **int**|  | [optional] [default to 0]
+
+### Return type
+
+[**AssetDetails**](AssetDetails.md)
+
+### Authorization
+
+No authorization required
+
+### HTTP request headers
+
+ - **Content-Type**: Not defined
+ - **Accept**: application/json
+
+### HTTP response details
+
+| Status code | Description | Response headers |
+|-------------|-------------|------------------|
+**200** | A successful response. |  -  |
+**400** | Bad request |  -  |
+
+[[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
+
 # **exchange_stats**
 > ExchangeStats exchange_stats()
 
@@ -316,7 +386,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **order_book_details**
-> OrderBookDetails order_book_details(market_id=market_id)
+> OrderBookDetails order_book_details(market_id=market_id, filter=filter)
 
 orderBookDetails
 
@@ -343,10 +413,11 @@ async with lighter.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = lighter.OrderApi(api_client)
     market_id = 255 # int |  (optional) (default to 255)
+    filter = all # str |  (optional) (default to all)
 
     try:
         # orderBookDetails
-        api_response = await api_instance.order_book_details(market_id=market_id)
+        api_response = await api_instance.order_book_details(market_id=market_id, filter=filter)
         print("The response of OrderApi->order_book_details:\n")
         pprint(api_response)
     except Exception as e:
@@ -361,6 +432,7 @@ async with lighter.ApiClient(configuration) as api_client:
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **market_id** | **int**|  | [optional] [default to 255]
+ **filter** | **str**|  | [optional] [default to all]
 
 ### Return type
 
@@ -456,7 +528,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **order_books**
-> OrderBooks order_books(market_id=market_id)
+> OrderBooks order_books(market_id=market_id, filter=filter)
 
 orderBooks
 
@@ -483,10 +555,11 @@ async with lighter.ApiClient(configuration) as api_client:
     # Create an instance of the API class
     api_instance = lighter.OrderApi(api_client)
     market_id = 255 # int |  (optional) (default to 255)
+    filter = all # str |  (optional) (default to all)
 
     try:
         # orderBooks
-        api_response = await api_instance.order_books(market_id=market_id)
+        api_response = await api_instance.order_books(market_id=market_id, filter=filter)
         print("The response of OrderApi->order_books:\n")
         pprint(api_response)
     except Exception as e:
@@ -501,6 +574,7 @@ async with lighter.ApiClient(configuration) as api_client:
 Name | Type | Description  | Notes
 ------------- | ------------- | ------------- | -------------
  **market_id** | **int**|  | [optional] [default to 255]
+ **filter** | **str**|  | [optional] [default to all]
 
 ### Return type
 
@@ -596,7 +670,7 @@ No authorization required
 [[Back to top]](#) [[Back to API list]](../README.md#documentation-for-api-endpoints) [[Back to Model list]](../README.md#documentation-for-models) [[Back to README]](../README.md)
 
 # **trades**
-> Trades trades(sort_by, limit, authorization=authorization, auth=auth, market_id=market_id, account_index=account_index, order_index=order_index, sort_dir=sort_dir, cursor=cursor, var_from=var_from, ask_filter=ask_filter)
+> Trades trades(sort_by, limit, authorization=authorization, auth=auth, market_id=market_id, account_index=account_index, order_index=order_index, sort_dir=sort_dir, cursor=cursor, var_from=var_from, ask_filter=ask_filter, role=role, type=type, aggregate=aggregate)
 
 trades
 
@@ -633,10 +707,13 @@ async with lighter.ApiClient(configuration) as api_client:
     cursor = 'cursor_example' # str |  (optional)
     var_from = -1 # int |  (optional) (default to -1)
     ask_filter = -1 # int |  (optional) (default to -1)
+    role = all # str |  (optional) (default to all)
+    type = all # str |  (optional) (default to all)
+    aggregate = False # bool |  (optional) (default to False)
 
     try:
         # trades
-        api_response = await api_instance.trades(sort_by, limit, authorization=authorization, auth=auth, market_id=market_id, account_index=account_index, order_index=order_index, sort_dir=sort_dir, cursor=cursor, var_from=var_from, ask_filter=ask_filter)
+        api_response = await api_instance.trades(sort_by, limit, authorization=authorization, auth=auth, market_id=market_id, account_index=account_index, order_index=order_index, sort_dir=sort_dir, cursor=cursor, var_from=var_from, ask_filter=ask_filter, role=role, type=type, aggregate=aggregate)
         print("The response of OrderApi->trades:\n")
         pprint(api_response)
     except Exception as e:
@@ -661,6 +738,9 @@ Name | Type | Description  | Notes
  **cursor** | **str**|  | [optional] 
  **var_from** | **int**|  | [optional] [default to -1]
  **ask_filter** | **int**|  | [optional] [default to -1]
+ **role** | **str**|  | [optional] [default to all]
+ **type** | **str**|  | [optional] [default to all]
+ **aggregate** | **bool**|  | [optional] [default to False]
 
 ### Return type
 

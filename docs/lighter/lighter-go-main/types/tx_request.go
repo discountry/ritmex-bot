@@ -28,17 +28,22 @@ type ChangePubKeyReq struct {
 
 type TransferTxReq struct {
 	ToAccountIndex int64
-	USDCAmount     int64
-	Fee            int64
+	AssetIndex     int16
+	FromRouteType  uint8
+	ToRouteType    uint8
+	Amount         int64
+	USDCFee        int64
 	Memo           [32]byte
 }
 
 type WithdrawTxReq struct {
-	USDCAmount uint64
+	AssetIndex int16
+	RouteType  uint8
+	Amount     uint64
 }
 
 type CreateOrderTxReq struct {
-	MarketIndex      uint8
+	MarketIndex      int16
 	ClientOrderIndex int64
 	BaseAmount       int64
 	Price            uint32
@@ -56,7 +61,7 @@ type CreateGroupedOrdersTxReq struct {
 }
 
 type ModifyOrderTxReq struct {
-	MarketIndex  uint8
+	MarketIndex  int16
 	Index        int64
 	BaseAmount   int64
 	Price        uint32
@@ -64,7 +69,7 @@ type ModifyOrderTxReq struct {
 }
 
 type CancelOrderTxReq struct {
-	MarketIndex uint8
+	MarketIndex int16
 	Index       int64
 }
 
@@ -76,14 +81,14 @@ type CancelAllOrdersTxReq struct {
 type CreatePublicPoolTxReq struct {
 	OperatorFee          int64
 	InitialTotalShares   int64
-	MinOperatorShareRate int64
+	MinOperatorShareRate uint16
 }
 
 type UpdatePublicPoolTxReq struct {
 	PublicPoolIndex      int64
 	Status               uint8
 	OperatorFee          int64
-	MinOperatorShareRate int64
+	MinOperatorShareRate uint16
 }
 
 type MintSharesTxReq struct {
@@ -97,13 +102,13 @@ type BurnSharesTxReq struct {
 }
 
 type UpdateLeverageTxReq struct {
-	MarketIndex           uint8
+	MarketIndex           int16
 	InitialMarginFraction uint16
 	MarginMode            uint8
 }
 
 type UpdateMarginTxReq struct {
-	MarketIndex uint8
+	MarketIndex int16
 	USDCAmount  int64
 	Direction   uint8
 }
@@ -468,8 +473,11 @@ func ConvertTransferTx(tx *TransferTxReq, ops *TransactOpts) *txtypes.L2Transfer
 		FromAccountIndex: *ops.FromAccountIndex,
 		ApiKeyIndex:      *ops.ApiKeyIndex,
 		ToAccountIndex:   tx.ToAccountIndex,
-		USDCAmount:       tx.USDCAmount,
-		Fee:              tx.Fee,
+		AssetIndex:       tx.AssetIndex,
+		FromRouteType:    tx.FromRouteType,
+		ToRouteType:      tx.ToRouteType,
+		Amount:           tx.Amount,
+		USDCFee:          tx.USDCFee,
 		Memo:             tx.Memo,
 		ExpiredAt:        ops.ExpiredAt,
 		Nonce:            *ops.Nonce,
@@ -563,7 +571,9 @@ func ConvertWithdrawTx(tx *WithdrawTxReq, ops *TransactOpts) *txtypes.L2Withdraw
 	return &txtypes.L2WithdrawTxInfo{
 		FromAccountIndex: *ops.FromAccountIndex,
 		ApiKeyIndex:      *ops.ApiKeyIndex,
-		USDCAmount:       tx.USDCAmount,
+		AssetIndex:       tx.AssetIndex,
+		RouteType:        tx.RouteType,
+		Amount:           tx.Amount,
 		ExpiredAt:        ops.ExpiredAt,
 		Nonce:            *ops.Nonce,
 	}
@@ -641,6 +651,7 @@ func ConvertUpdateLeverageTx(tx *UpdateLeverageTxReq, ops *TransactOpts) *txtype
 		ApiKeyIndex:           *ops.ApiKeyIndex,
 		MarketIndex:           tx.MarketIndex,
 		InitialMarginFraction: tx.InitialMarginFraction,
+		MarginMode:            tx.MarginMode,
 		ExpiredAt:             ops.ExpiredAt,
 		Nonce:                 *ops.Nonce,
 	}

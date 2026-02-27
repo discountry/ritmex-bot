@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **market_id** | **int** |  | [optional] 
+**filter** | **str** |  | [optional] [default to 'all']
 
 ## Example
 

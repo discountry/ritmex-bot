@@ -35,6 +35,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import { t } from "../i18n";
 
 export interface TrendEngineSnapshot {
   ready: boolean;
@@ -123,12 +124,14 @@ export class TrendEngine {
     .digest("hex");
 
   private readonly listeners = new Map<TrendEngineEvent, Set<TrendEngineListener>>();
+  private precisionSync: Promise<void> | null = null;
 
   constructor(private readonly config: TradingConfig, private readonly exchange: ExchangeAdapter) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
     this.rateLimit = new RateLimitController(this.config.pollIntervalMs, (type, detail) =>
       this.tradeLog.push(type, detail)
     );
+    this.syncPrecision();
     this.bootstrap();
   }
 
@@ -173,8 +176,8 @@ export class TrendEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅账户失败: ${String(error)}`,
-        processFail: (error) => `账户推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.accountFail", { error: String(error) }),
+        processFail: (error) => t("log.process.accountError", { error: extractMessage(error) }),
       }
     );
 
@@ -207,8 +210,8 @@ export class TrendEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅订单失败: ${String(error)}`,
-        processFail: (error) => `订单推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.orderFail", { error: String(error) }),
+        processFail: (error) => t("log.process.orderError", { error: extractMessage(error) }),
       }
     );
 
@@ -220,8 +223,8 @@ export class TrendEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅深度失败: ${String(error)}`,
-        processFail: (error) => `深度推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.depthFail", { error: String(error) }),
+        processFail: (error) => t("log.process.depthError", { error: extractMessage(error) }),
       }
     );
 
@@ -233,8 +236,8 @@ export class TrendEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`,
-        processFail: (error) => `价格推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.tickerFail", { error: String(error) }),
+        processFail: (error) => t("log.process.tickerError", { error: extractMessage(error) }),
       }
     );
 
@@ -249,8 +252,8 @@ export class TrendEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅K线失败: ${String(error)}`,
-        processFail: (error) => `K线推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.kline.subscribeFail", { error: String(error) }),
+        processFail: (error) => t("log.kline.processError", { error: extractMessage(error) }),
       }
     );
   }
@@ -285,7 +288,12 @@ export class TrendEngine {
         const closes = this.klineSnapshot.slice(-5).map((k) => Number(k.close).toFixed(2));
         this.tradeLog.push(
           "info",
-          `K线不足 ${count}/${minKlines}，最近收盘(${closes.length}): ${closes.join(", ")}`
+          t("log.trend.klineInsufficient", {
+            count,
+            min: minKlines,
+            recentCount: closes.length,
+            recent: closes.join(", "),
+          })
         );
         this.klineInsufficientLogged = true;
       }
@@ -295,7 +303,7 @@ export class TrendEngine {
       const closes = this.klineSnapshot.slice(-5).map((k) => Number(k.close).toFixed(2));
       this.tradeLog.push(
         "info",
-        `K线就绪 ${count} 根，可计算 SMA30。最近收盘: ${closes.join(", ")}`
+        t("log.trend.klineReady", { count, recent: closes.join(", ") })
       );
       this.klineReadyLogged = true;
     }
@@ -359,16 +367,16 @@ export class TrendEngine {
         hadRateLimit = true;
         this.rateLimit.registerRateLimit("trend");
         await this.enforceRateLimitStop();
-        this.tradeLog.push("warn", `TrendEngine 429: ${String(error)}`);
+        this.tradeLog.push("warn", t("log.trend.rateLimit429", { error: String(error) }));
       } else {
-        this.tradeLog.push("error", `策略循环异常: ${String(error)}`);
+        this.tradeLog.push("error", t("log.trend.loopError", { error: String(error) }));
       }
       this.emitUpdate();
     } finally {
       try {
         this.rateLimit.onCycleComplete(hadRateLimit);
       } catch (rateLimitError) {
-        this.tradeLog.push("error", `限频控制器状态更新失败: ${String(rateLimitError)}`);
+        this.tradeLog.push("error", t("log.trend.rateLimitUpdateError", { error: String(rateLimitError) }));
       } finally {
         this.processing = false;
       }
@@ -393,11 +401,15 @@ export class TrendEngine {
     if (hasPosition) {
       this.tradeLog.push(
         "info",
-        `检测到已有持仓: ${position.positionAmt > 0 ? "多" : "空"} ${Math.abs(position.positionAmt).toFixed(4)} @ ${position.entryPrice.toFixed(2)}`
+        t("log.trend.detectPosition", {
+          direction: position.positionAmt > 0 ? t("common.direction.long") : t("common.direction.short"),
+          amount: Math.abs(position.positionAmt).toFixed(4),
+          price: position.entryPrice.toFixed(2),
+        })
       );
     }
     if (this.openOrders.length > 0) {
-      this.tradeLog.push("info", `检测到已有挂单 ${this.openOrders.length} 笔，将按策略规则接管`);
+      this.tradeLog.push("info", t("log.trend.detectOrders", { count: this.openOrders.length }));
     }
     this.startupLogged = true;
   }
@@ -413,12 +425,12 @@ export class TrendEngine {
     // 止损后的冷却期：60s 内不允许基于 SMA 穿越再次入场
     if (this.lastStopLossAt != null && now - this.lastStopLossAt < 60_000) {
       const remaining = Math.max(0, 60_000 - (now - this.lastStopLossAt));
-      this.tradeLog.push("info", `止损后冷却中 ${(remaining / 1000).toFixed(0)}s，忽略入场信号`);
+      this.tradeLog.push("info", t("log.trend.stopCooldown", { seconds: (remaining / 1000).toFixed(0) }));
       return;
     }
     // 同一分钟只允许一次入场
     if (this.lastEntryMinute != null && this.lastEntryMinute === currentMinute) {
-      this.tradeLog.push("info", "本分钟已入场，忽略新的 SMA 入场信号");
+      this.tradeLog.push("info", t("log.trend.alreadyEntered"));
       return;
     }
     if (
@@ -429,7 +441,10 @@ export class TrendEngine {
       if (now - this.lastBollingerBlockLogged > 15_000) {
         this.tradeLog.push(
           "info",
-          `布林带宽度不足：${Number(currentBandwidth).toFixed(4)} < ${this.config.minBollingerBandwidth}，忽略入场信号`
+          t("log.trend.bandwidthBlocked", {
+            bandwidth: Number(currentBandwidth).toFixed(4),
+            minBandwidth: this.config.minBollingerBandwidth,
+          })
         );
         this.lastBollingerBlockLogged = now;
       }
@@ -448,22 +463,22 @@ export class TrendEngine {
         this.openOrders = [];
       } catch (err) {
         if (isUnknownOrderError(err)) {
-          this.tradeLog.push("order", "撤单时部分订单已不存在，忽略");
+          this.tradeLog.push("order", t("log.trend.cancelMissing"));
           this.cancelAllRequested = true;
           // 与成功撤单路径保持一致，立即清空本地缓存，等待订单流推送重建
           this.pendingCancelOrders.clear();
           this.openOrders = [];
         } else {
-          this.tradeLog.push("error", `撤销挂单失败: ${String(err)}`);
+          this.tradeLog.push("error", t("log.trend.cancelFail", { error: String(err) }));
           this.cancelAllRequested = false;
         }
       }
     }
     if (this.lastPrice > currentSma && currentPrice < currentSma) {
-      await this.submitMarketOrder("SELL", currentPrice, "下穿SMA30，市价开空");
+      await this.submitMarketOrder("SELL", currentPrice, t("log.trend.crossDown"));
       this.lastEntryMinute = currentMinute;
     } else if (this.lastPrice < currentSma && currentPrice > currentSma) {
-      await this.submitMarketOrder("BUY", currentPrice, "上穿SMA30，市价开多");
+      await this.submitMarketOrder("BUY", currentPrice, t("log.trend.crossUp"));
       this.lastEntryMinute = currentMinute;
     }
   }
@@ -491,7 +506,7 @@ export class TrendEngine {
       this.tradeLog.push("open", `${reason}: ${side} @ ${price}`);
       this.lastOpenPlan = { side, price };
     } catch (err) {
-      this.tradeLog.push("error", `市价下单失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.trend.marketOrderFail", { error: String(err) }));
     }
   }
 
@@ -502,7 +517,7 @@ export class TrendEngine {
     const hasEntryPrice = Number.isFinite(position.entryPrice) && Math.abs(position.entryPrice) > 1e-8;
     if (!hasEntryPrice) {
       if (!this.entryPricePendingLogged) {
-        this.tradeLog.push("info", "持仓均价尚未同步，等待交易所账户快照更新后再执行风控");
+        this.tradeLog.push("info", t("log.trend.entryPricePending"));
         this.entryPricePendingLogged = true;
       }
       return { closed: false, pnl: position.unrealizedProfit };
@@ -695,7 +710,7 @@ export class TrendEngine {
             orderIdSet.forEach((id) => this.pendingCancelOrders.add(id));
           } catch (err) {
             if (isUnknownOrderError(err)) {
-              this.tradeLog.push("order", "止损前撤单发现订单已不存在");
+              this.tradeLog.push("order", t("log.trend.stopPreCancelMissing"));
                 // 清理本地缓存，避免重复对同一订单执行撤单
                 for (const id of orderIdSet) {
                   this.pendingCancelOrders.delete(id);
@@ -718,7 +733,12 @@ export class TrendEngine {
           if (pctDiff > limitPct) {
             this.tradeLog.push(
               "info",
-              `市价平仓保护触发：closePx=${Number(closeSidePrice).toFixed(2)} mark=${mark.toFixed(2)} 偏离 ${(pctDiff * 100).toFixed(2)}% > ${(limitPct * 100).toFixed(2)}%`
+              t("log.trend.marketCloseGuard", {
+                closePx: Number(closeSidePrice).toFixed(2),
+                mark: mark.toFixed(2),
+                pctDiff: (pctDiff * 100).toFixed(2),
+                limitPct: (limitPct * 100).toFixed(2),
+              })
             );
             return { closed: false, pnl };
           }
@@ -741,18 +761,18 @@ export class TrendEngine {
                 : this.depthSnapshot?.asks?.[0]?.[0]
             ) || null,
             maxPct: this.config.maxCloseSlippagePct,
-        },
-        { qtyStep: this.config.qtyStep }
+          },
+          { qtyStep: this.config.qtyStep }
         );
         result.closed = true;
-        this.tradeLog.push("close", `止损平仓: ${direction === "long" ? "SELL" : "BUY"}`);
+        this.tradeLog.push("close", t("log.trend.stopClose", { side: direction === "long" ? "SELL" : "BUY" }));
         // 记录止损时间以便短期内抑制再次入场
         this.lastStopLossAt = Date.now();
       } catch (err) {
         if (isUnknownOrderError(err)) {
-          this.tradeLog.push("order", "止损平仓时目标订单已不存在");
+          this.tradeLog.push("order", t("log.trend.targetStopMissing"));
         } else {
-          this.tradeLog.push("error", `止损平仓失败: ${String(err)}`);
+          this.tradeLog.push("error", t("log.trend.stopCloseFail", { error: String(err) }));
         }
         return result;
       }
@@ -781,7 +801,11 @@ export class TrendEngine {
     }
     try {
       const position = getPosition(this.accountSnapshot, this.config.symbol);
-      const quantity = Math.abs(position.positionAmt) || this.config.tradeAmount;
+      const quantity = Math.abs(position.positionAmt);
+      const minQty = this.config.qtyStep > 0 ? this.config.qtyStep / 2 : 1e-12;
+      if (quantity <= minQty) {
+        return;
+      }
       await placeStopLossOrder(
         this.exchange,
         this.config.symbol,
@@ -802,7 +826,7 @@ export class TrendEngine {
       );
       this.lastStopAttempt = { side, price: stopPrice, at: Date.now() };
     } catch (err) {
-      this.tradeLog.push("error", `挂止损单失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.trend.placeStopFail", { error: String(err) }));
       // 记录尝试以避免在错误被抛回时立即再次重复尝试
       this.lastStopAttempt = { side, price: stopPrice, at: Date.now() };
     }
@@ -827,17 +851,21 @@ export class TrendEngine {
       await this.exchange.cancelOrder({ symbol: this.config.symbol, orderId: currentOrder.orderId });
     } catch (err) {
       if (isUnknownOrderError(err)) {
-        this.tradeLog.push("order", "原止损单已不存在，跳过撤销");
+        this.tradeLog.push("order", t("log.trend.stopMissingSkip"));
         // 订单已不存在，移除本地记录，防止后续重复匹配
         this.openOrders = this.openOrders.filter((o) => o.orderId !== currentOrder.orderId);
       } else {
-        this.tradeLog.push("error", `取消原止损单失败: ${String(err)}`);
+        this.tradeLog.push("error", t("log.trend.cancelStopFail", { error: String(err) }));
       }
     }
     // 仅在成功创建新止损单后记录“移动止损”日志
     try {
       const position = getPosition(this.accountSnapshot, this.config.symbol);
-      const quantity = Math.abs(position.positionAmt) || this.config.tradeAmount;
+      const quantity = Math.abs(position.positionAmt);
+      const minQty = this.config.qtyStep > 0 ? this.config.qtyStep / 2 : 1e-12;
+      if (quantity <= minQty) {
+        return;
+      }
       const order = await placeStopLossOrder(
         this.exchange,
         this.config.symbol,
@@ -857,14 +885,26 @@ export class TrendEngine {
         { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
       );
       if (order) {
-        this.tradeLog.push("stop", `移动止损到 ${formatPriceToString(nextStopPrice, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick))))}`);
+        this.tradeLog.push(
+          "stop",
+          t("log.trend.moveStop", {
+            price: formatPriceToString(
+              nextStopPrice,
+              Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)))
+            ),
+          })
+        );
       }
     } catch (err) {
-      this.tradeLog.push("error", `移动止损失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.trend.moveStopFail", { error: String(err) }));
       // 回滚策略：尝试用原价恢复止损，以避免出现短时间内无止损保护
       try {
         const position = getPosition(this.accountSnapshot, this.config.symbol);
-        const quantity = Math.abs(position.positionAmt) || this.config.tradeAmount;
+        const quantity = Math.abs(position.positionAmt);
+        const minQty = this.config.qtyStep > 0 ? this.config.qtyStep / 2 : 1e-12;
+        if (quantity <= minQty) {
+          return;
+        }
         const restoreInvalid =
           (side === "SELL" && existingStopPrice >= lastPrice) ||
           (side === "BUY" && existingStopPrice <= lastPrice);
@@ -888,11 +928,19 @@ export class TrendEngine {
             { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
           );
           if (restored) {
-            this.tradeLog.push("order", `恢复原止损 @ ${formatPriceToString(existingStopPrice, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick))))}`);
+            this.tradeLog.push(
+              "order",
+              t("log.trend.restoreStop", {
+                price: formatPriceToString(
+                  existingStopPrice,
+                  Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)))
+                ),
+              })
+            );
           }
         }
       } catch (recoverErr) {
-        this.tradeLog.push("error", `恢复原止损失败: ${String(recoverErr)}`);
+        this.tradeLog.push("error", t("log.trend.restoreStopFail", { error: String(recoverErr) }));
       }
     }
   }
@@ -925,18 +973,54 @@ export class TrendEngine {
         { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
       );
     } catch (err) {
-      this.tradeLog.push("error", `挂动态止盈失败: ${String(err)}`);
+      this.tradeLog.push("error", t("log.trend.trailingFail", { error: String(err) }));
     }
+  }
+
+  private syncPrecision(): void {
+    if (this.precisionSync) return;
+    const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
+    if (!getPrecision) return;
+    this.precisionSync = getPrecision()
+      .then((precision) => {
+        if (!precision) return;
+        let updated = false;
+        if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
+          const delta = Math.abs(precision.priceTick - this.config.priceTick);
+          if (delta > 1e-12) {
+            this.config.priceTick = precision.priceTick;
+            updated = true;
+          }
+        }
+        if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
+          const delta = Math.abs(precision.qtyStep - this.config.qtyStep);
+          if (delta > 1e-12) {
+            this.config.qtyStep = precision.qtyStep;
+            updated = true;
+          }
+        }
+        if (updated) {
+          this.tradeLog.push(
+            "info",
+            t("log.trend.precisionSynced", { priceTick: precision.priceTick, qtyStep: precision.qtyStep })
+          );
+        }
+      })
+      .catch((error) => {
+        this.tradeLog.push("error", t("log.trend.precisionFailed", { error: extractMessage(error) }));
+        this.precisionSync = null;
+        setTimeout(() => this.syncPrecision(), 2000);
+      });
   }
 
   private emitUpdate(): void {
     try {
       const snapshot = this.buildSnapshot();
       this.events.emit("update", snapshot, (error) => {
-        this.tradeLog.push("error", `更新回调处理异常: ${String(error)}`);
+        this.tradeLog.push("error", t("log.trend.updateHandlerError", { error: String(error) }));
       });
     } catch (err) {
-      this.tradeLog.push("error", `快照或更新分发异常: ${String(err)}`);
+      this.tradeLog.push("error", t("log.trend.snapshotDispatchError", { error: String(err) }));
     }
   }
 

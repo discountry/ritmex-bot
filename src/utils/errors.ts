@@ -1,4 +1,10 @@
 export function isUnknownOrderError(error: unknown): boolean {
+  if (!error) return false;
+  if (typeof error === "object" && error !== null && "code" in error) {
+    const code = Number((error as { code?: unknown }).code);
+    // Nado: 2020: Order with the provided digest ... could not be found.
+    if (Number.isFinite(code) && code === 2020) return true;
+  }
   const message = extractMessage(error);
   if (!message) return false;
   const upper = message.toUpperCase();
@@ -7,7 +13,9 @@ export function isUnknownOrderError(error: unknown): boolean {
     upper.includes("CODE\":-2011") ||
     upper.includes("ORDER_ID_NOT_FOUND") ||
     upper.includes("ORDER_IS_CLOSED") ||
-    upper.includes("COULD NOT FIND ORDER")
+    upper.includes("COULD NOT FIND ORDER") ||
+    upper.includes("ORDER WITH THE PROVIDED DIGEST") ||
+    (upper.includes("COULD NOT BE FOUND") && upper.includes("ORDER"))
   );
 }
 
@@ -51,5 +59,29 @@ export function isInsufficientBalanceError(error: unknown): boolean {
     message.includes("NOT_ENOUGH_BALANCE") ||
     message.includes("INSUFFICIENT_BALANCE") ||
     message.includes("NOT ENOUGH")
+  );
+}
+
+export function isPrecisionError(error: unknown): boolean {
+  const message = extractMessage(error).toUpperCase();
+  return (
+    message.includes("PRECISION") ||
+    message.includes("TICK_SIZE") ||
+    message.includes("TICKSIZE") ||
+    message.includes("STEP_SIZE") ||
+    message.includes("STEPSIZE") ||
+    message.includes("LOT_SIZE") ||
+    message.includes("LOTSIZE") ||
+    message.includes("INVALID_QUANTITY") ||
+    message.includes("INVALID QUANTITY") ||
+    message.includes("QUANTITY_INVALID") ||
+    message.includes("INVALID_PRICE") ||
+    message.includes("INVALID PRICE") ||
+    message.includes("PRICE_INVALID") ||
+    message.includes("QTY_STEP") ||
+    message.includes("PRICE_TICK") ||
+    message.includes("DECIMAL") ||
+    message.includes("FILTER_FAILURE") ||
+    message.includes("NOTIONAL")
   );
 }

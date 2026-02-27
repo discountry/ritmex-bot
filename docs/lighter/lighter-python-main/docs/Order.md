@@ -36,6 +36,8 @@ Name | Type | Description | Notes
 **to_cancel_order_id_0** | **str** |  | 
 **block_height** | **int** |  | 
 **timestamp** | **int** |  | 
+**created_at** | **int** |  | 
+**updated_at** | **int** |  | 
 
 ## Example
 

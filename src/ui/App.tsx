@@ -1,36 +1,68 @@
 import React, { useMemo, useState } from "react";
 import { Box, Text, useInput } from "ink";
 import { TrendApp } from "./TrendApp";
+import { SwingApp } from "./SwingApp";
+import { GuardianApp } from "./GuardianApp";
 import { MakerApp } from "./MakerApp";
+import { MakerPointsApp } from "./MakerPointsApp";
 import { OffsetMakerApp } from "./OffsetMakerApp";
+import { LiquidityMakerApp } from "./LiquidityMakerApp";
+import { GridApp } from "./GridApp";
+import { BasisApp } from "./BasisApp";
+import { isBasisStrategyEnabled } from "../config";
 import { loadCopyrightFragments, verifyCopyrightIntegrity } from "../utils/copyright";
 import { resolveExchangeId } from "../exchanges/create-adapter";
+import { t } from "../i18n";
 
 interface StrategyOption {
-  id: "trend" | "maker" | "offset-maker";
+  id: "trend" | "swing" | "guardian" | "maker" | "maker-points" | "offset-maker" | "liquidity-maker" | "basis" | "grid";
   label: string;
   description: string;
   component: React.ComponentType<{ onExit: () => void }>;
 }
 
-const STRATEGIES: StrategyOption[] = [
+const BASE_STRATEGIES: StrategyOption[] = [
   {
     id: "trend",
-    label: "趋势跟随策略 (SMA30)",
-    description: "监控均线信号，自动进出场并维护止损/止盈",
+    label: t("app.strategy.trend.label"),
+    description: t("app.strategy.trend.desc"),
     component: TrendApp,
   },
   {
+    id: "swing",
+    label: t("app.strategy.swing.label"),
+    description: t("app.strategy.swing.desc"),
+    component: SwingApp,
+  },
+  {
+    id: "guardian",
+    label: t("app.strategy.guardian.label"),
+    description: t("app.strategy.guardian.desc"),
+    component: GuardianApp,
+  },
+  {
     id: "maker",
-    label: "做市刷单策略",
-    description: "双边挂单提供流动性，自动追价与风控止损",
+    label: t("app.strategy.maker.label"),
+    description: t("app.strategy.maker.desc"),
     component: MakerApp,
   },
   {
+    id: "grid",
+    label: t("app.strategy.grid.label"),
+    description: t("app.strategy.grid.desc"),
+    component: GridApp,
+  },
+  {
     id: "offset-maker",
-    label: "偏移做市策略",
-    description: "根据盘口深度自动偏移挂单并在极端不平衡时撤退",
+    label: t("app.strategy.offset.label"),
+    description: t("app.strategy.offset.desc"),
     component: OffsetMakerApp,
+  },
+  {
+    id: "liquidity-maker",
+    label: t("app.strategy.liquidityMaker.label"),
+    description: t("app.strategy.liquidityMaker.desc"),
+    component: LiquidityMakerApp,
   },
 ];
 
@@ -42,7 +74,28 @@ export function App() {
   const copyright = useMemo(() => loadCopyrightFragments(), []);
   const integrityOk = useMemo(() => verifyCopyrightIntegrity(), []);
   const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const strategies = useMemo(() => STRATEGIES, []);
+  const strategies = useMemo(() => {
+    const next: StrategyOption[] = [...BASE_STRATEGIES];
+    if (exchangeId === "standx") {
+      const gridIndex = next.findIndex((s) => s.id === "grid");
+      const insertAt = gridIndex === -1 ? next.length : gridIndex;
+      next.splice(insertAt, 0, {
+        id: "maker-points" as const,
+        label: t("app.strategy.makerPoints.label"),
+        description: t("app.strategy.makerPoints.desc"),
+        component: MakerPointsApp,
+      });
+    }
+    if (isBasisStrategyEnabled()) {
+      next.push({
+        id: "basis" as const,
+        label: t("app.strategy.basis.label"),
+        description: t("app.strategy.basis.desc"),
+        component: BasisApp,
+      });
+    }
+    return next;
+  }, [exchangeId]);
 
   useInput(
     (input, key) => {
@@ -70,13 +123,13 @@ export function App() {
     <Box flexDirection="column" paddingX={1} paddingY={1}>
       <Text color="gray">{copyright.bannerText}</Text>
       {integrityOk ? null : (
-        <Text color="red">警告: 版权校验失败，当前版本可能被篡改。</Text>
+        <Text color="red">{t("app.integrity.warning")}</Text>
       )}
       <Box height={1}>
         <Text color="gray">────────────────────────────────────────────────────</Text>
       </Box>
-      <Text color="cyanBright">请选择要运行的策略</Text>
-      <Text color="gray">使用 ↑/↓ 选择，回车开始，Ctrl+C 退出。</Text>
+      <Text color="cyanBright">{t("app.pickStrategy")}</Text>
+      <Text color="gray">{t("app.pickHint")}</Text>
       <Box flexDirection="column" marginTop={1}>
         {strategies.map((strategy, index) => {
           const active = index === cursor;

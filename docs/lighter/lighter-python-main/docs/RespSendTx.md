@@ -9,6 +9,7 @@ Name | Type | Description | Notes
 **message** | **str** |  | [optional] 
 **tx_hash** | **str** |  | 
 **predicted_execution_time_ms** | **int** |  | 
+**volume_quota_remaining** | **int** |  | 
 
 ## Example
 

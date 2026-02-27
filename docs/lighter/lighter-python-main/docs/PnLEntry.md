@@ -7,8 +7,11 @@ Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **timestamp** | **int** |  | 
 **trade_pnl** | **float** |  | 
+**trade_spot_pnl** | **float** |  | 
 **inflow** | **float** |  | 
 **outflow** | **float** |  | 
+**spot_outflow** | **float** |  | 
+**spot_inflow** | **float** |  | 
 **pool_pnl** | **float** |  | 
 **pool_inflow** | **float** |  | 
 **pool_outflow** | **float** |  | 

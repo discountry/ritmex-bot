@@ -6,6 +6,7 @@
 Name | Type | Description | Notes
 ------------ | ------------- | ------------- | -------------
 **id** | **str** |  | 
+**asset_id** | **int** |  | 
 **amount** | **str** |  | 
 **timestamp** | **int** |  | 
 **type** | **str** |  | 
@@ -13,6 +14,8 @@ Name | Type | Description | Notes
 **to_l1_address** | **str** |  | 
 **from_account_index** | **int** |  | 
 **to_account_index** | **int** |  | 
+**from_route** | **str** |  | 
+**to_route** | **str** |  | 
 **tx_hash** | **str** |  | 
 
 ## Example

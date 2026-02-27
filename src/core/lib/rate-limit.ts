@@ -1,4 +1,5 @@
 import type { LogHandler } from "../order-coordinator";
+import { t } from "../../i18n";
 
 type RateLimitState = "normal" | "degraded" | "paused";
 
@@ -32,13 +33,13 @@ export class RateLimitController {
   private suppressEntries(source?: string): void {
     if (this.entriesSuppressed) return;
     this.entriesSuppressed = true;
-    this.log("info", `${source ? `${source} ` : ""}限频期间暂停新开仓`);
+    this.log("info", t("rate.limit.suppress", { source: source ? `${source} ` : "" }));
   }
 
   private allowEntries(): void {
     if (!this.entriesSuppressed) return;
     this.entriesSuppressed = false;
-    this.log("info", "限频恢复，允许重新开仓");
+    this.log("info", t("rate.limit.resumeEntries"));
   }
 
   beforeCycle(): RateLimitDecision {
@@ -47,7 +48,7 @@ export class RateLimitController {
       if (this.pausedUntil != null && now >= this.pausedUntil) {
         this.state = "degraded";
         this.pausedUntil = null;
-        this.log("info", "限频暂停结束，继续以降频模式运行");
+        this.log("info", t("rate.limit.pausedEnd"));
       } else {
         this.lastCycleAt = now;
         return "paused";
@@ -69,7 +70,7 @@ export class RateLimitController {
       this.state = "degraded";
       this.log(
         "warn",
-        `${source ? `${source} ` : ""}触发 429，降频至 ${(this.currentInterval() / 1000).toFixed(2)}s`
+        t("rate.limit.hit", { source: source ? `${source} ` : "", interval: (this.currentInterval() / 1000).toFixed(2) })
       );
       this.lastCycleAt = now;
       this.suppressEntries(source);
@@ -80,7 +81,7 @@ export class RateLimitController {
       this.pausedUntil = now + this.pauseMs;
       this.log(
         "warn",
-        `${source ? `${source} ` : ""}连续 429，暂停请求 ${(this.pauseMs / 1000).toFixed(0)}s`
+        t("rate.limit.consecutive", { source: source ? `${source} ` : "", seconds: (this.pauseMs / 1000).toFixed(0) })
       );
       this.suppressEntries(source);
       return;
@@ -88,7 +89,7 @@ export class RateLimitController {
     this.pausedUntil = now + this.pauseMs;
     this.log(
       "warn",
-      `${source ? `${source} ` : ""}限频仍在持续，延长暂停 ${(this.pauseMs / 1000).toFixed(0)}s`
+      t("rate.limit.still", { source: source ? `${source} ` : "", seconds: (this.pauseMs / 1000).toFixed(0) })
     );
     this.suppressEntries(source);
   }
@@ -99,7 +100,7 @@ export class RateLimitController {
       const now = Date.now();
       if (now - this.lastRateLimitAt >= this.recoveryMs) {
         this.state = "normal";
-        this.log("info", "限频恢复，重置为正常请求频率");
+        this.log("info", t("rate.limit.reset"));
         this.allowEntries();
         this.lastRateLimitAt = 0;
       }
@@ -119,4 +120,3 @@ export class RateLimitController {
     return this.baseInterval;
   }
 }
-

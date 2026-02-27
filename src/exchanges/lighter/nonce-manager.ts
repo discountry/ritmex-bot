@@ -67,6 +67,20 @@ export class HttpNonceManager implements LighterNonceManager {
     this.slots.set(apiKeyIndex, { apiKeyIndex, next: nonce, lastIssued: null });
   }
 
+  nextFor(apiKeyIndex: number): { apiKeyIndex: number; nonce: bigint } {
+    if (!this.slots.size) {
+      throw new Error("Nonce manager not initialized");
+    }
+    const slot = this.slots.get(apiKeyIndex);
+    if (!slot) {
+      throw new Error(`Nonce slot for API key index ${apiKeyIndex} is not initialized`);
+    }
+    const nonce = slot.next;
+    slot.lastIssued = nonce;
+    slot.next = nonce + 1n;
+    return { apiKeyIndex, nonce };
+  }
+
   private async refreshAll(force: boolean): Promise<void> {
     await Promise.all(
       this.apiKeyIndices.map(async (index) => {

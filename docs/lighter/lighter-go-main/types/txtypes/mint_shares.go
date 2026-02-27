@@ -49,7 +49,7 @@ func (txInfo *L2MintSharesTxInfo) Validate() error {
 	}
 
 	// PublicPoolIndex
-	if txInfo.PublicPoolIndex < MinAccountIndex {
+	if txInfo.PublicPoolIndex < MinSubAccountIndex {
 		return ErrPublicPoolIndexTooLow
 	}
 	if txInfo.PublicPoolIndex > MaxAccountIndex {

@@ -4,6 +4,7 @@ import { AsterExchangeAdapter } from "../src/exchanges/aster-adapter";
 import { GrvtExchangeAdapter } from "../src/exchanges/grvt/adapter";
 import { BackpackExchangeAdapter } from "../src/exchanges/backpack/adapter";
 import { ParadexExchangeAdapter } from "../src/exchanges/paradex/adapter";
+import { StandxExchangeAdapter } from "../src/exchanges/standx/adapter";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -30,6 +31,7 @@ describe("exchange factory", () => {
     expect(resolveExchangeId("ASTER")).toBe("aster");
     expect(resolveExchangeId("BACKPACK")).toBe("backpack");
     expect(resolveExchangeId("PaRaDeX")).toBe("paradex");
+    expect(resolveExchangeId("StandX")).toBe("standx");
   });
 
   it("creates grvt adapter when EXCHANGE=grvt", () => {
@@ -66,5 +68,15 @@ describe("exchange factory", () => {
     const adapter = createExchangeAdapter({ symbol: "BTC/USDC" });
     expect(adapter).toBeInstanceOf(ParadexExchangeAdapter);
     expect(adapter.id).toBe("paradex");
+  });
+
+  it("creates standx adapter when EXCHANGE=standx", () => {
+    process.env.EXCHANGE = "standx";
+    process.env.STANDX_TOKEN = "token";
+    process.env.STANDX_SYMBOL = "BTC-USD";
+
+    const adapter = createExchangeAdapter({ symbol: "BTC-USD" });
+    expect(adapter).toBeInstanceOf(StandxExchangeAdapter);
+    expect(adapter.id).toBe("standx");
   });
 });
