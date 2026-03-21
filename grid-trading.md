@@ -1,21 +1,25 @@
-# 网格交易策略使用教程
+# Grid Trading Strategy Guide
 
-本文介绍如何在 Ritmex Bot 中使用全新的网格交易策略。我们将以 ASTERUSDT 永续合约为例，演示从环境配置到运行监控的完整流程，并对关键参数、风控机制、常见问题做出说明。
+This guide explains how to use the grid trading strategy in Ritmex Bot. We will use an ASTERUSDT perpetual contract as a worked example and walk through the full flow from environment configuration to live monitoring. Key parameters, risk controls, and common questions are all covered.
 
-## 环境配置
+---
 
-1. 复制 `.env.example` 到 `.env`
+## Environment Configuration
+
+1. Copy `.env.example` to `.env`
    ```bash
    cp .env.example .env
    ```
-2. 配置 Aster 交易所 API：
+
+2. Configure the Aster exchange API:
    ```env
    EXCHANGE=aster
-   ASTER_API_KEY=你的API密钥
-   ASTER_API_SECRET=你的API密钥
+   ASTER_API_KEY=your_api_key
+   ASTER_API_SECRET=your_api_secret
    TRADE_SYMBOL=ASTERUSDT
    ```
-3. 设置基础精度与网格参数（示例使用 1.50 ~ 2.50 区间，20 条网格，单笔 5 手，最大仓位 50 手）：
+
+3. Set precision and grid parameters. The example below uses a 1.50–2.50 price range, 20 grid levels, 5 contracts per order, and a 50-contract maximum position:
    ```env
    PRICE_TICK=0.0001
    QTY_STEP=0.01
@@ -30,71 +34,92 @@
    GRID_DIRECTION=both
    GRID_STOP_LOSS_PCT=0.02
    GRID_RESTART_TRIGGER_PCT=0.02
-GRID_AUTO_RESTART_ENABLED=true
-GRID_MAX_CLOSE_SLIPPAGE_PCT=0.05
-```
+   GRID_AUTO_RESTART_ENABLED=true
+   GRID_MAX_CLOSE_SLIPPAGE_PCT=0.05
+   ```
 
-- `GRID_ORDER_SIZE` 与 `GRID_MAX_POSITION_SIZE` 需遵循「最大仓位 ÷ 单笔数量 ≥ 网格数」的原则，这样策略才能补齐全部挂单。本例 50 ÷ 5 = 10，但网格数为 20，意味着策略只会在离现价最近的上下各 10 个位置挂单，与仓位上限保持一致。
+> **Important:** `GRID_ORDER_SIZE` and `GRID_MAX_POSITION_SIZE` must satisfy the rule: `max_position ÷ order_size ≥ grid_levels`. In this example, 50 ÷ 5 = 10, which is less than 20 grid levels — so the strategy will only place orders at the 10 nearest levels above and below the current price, keeping total exposure within the position cap.
 
-## 网格机制概览
+---
 
-- **几何等比网格**：所有网格价格基于上下边界按等比方式分布。
-- **基于现价的挂单排序**：重启或行情驱动时，会优先在现价附近补挂，避免远端挂单未成交。
-- **双向模式**：`GRID_DIRECTION=both` 表示买卖两侧都开仓；设置为 `long` 或 `short` 则只在对应方向发起新仓，反方向挂单会自动带上 `reduceOnly`。
-- **风控**：
-  - 跌破下界 * (1 - STOP_LOSS_PCT) 或突破上界 * (1 + STOP_LOSS_PCT) 时，策略撤销所有限价单并用市价平仓。
-  - 若 `GRID_AUTO_RESTART_ENABLED=true`，当价格回到边界内 `RESTART_TRIGGER_PCT` 范围时会自动重启网格。
-- **持仓限制**：`GRID_MAX_POSITION_SIZE` 是总持仓上限，用于控制网格在极端走势中不会累积过量仓位。
+## How the Grid Works
 
-## 运行命令
+- **Geometric (equal-ratio) spacing** — all grid price levels are distributed proportionally between the upper and lower bounds.
+- **Current-price-first order placement** — on start-up or market-driven refresh, orders are filled in closest-to-current-price order to avoid stale far-end fills.
+- **Directional mode** — `GRID_DIRECTION=both` opens positions on both the buy and sell sides. Setting it to `long` or `short` restricts new opens to that side only; orders on the opposite side are automatically marked `reduceOnly`.
+- **Risk controls:**
+  - If price falls below `lower_bound × (1 - STOP_LOSS_PCT)` **or** rises above `upper_bound × (1 + STOP_LOSS_PCT)`, the strategy cancels all limit orders and closes the position at market.
+  - When `GRID_AUTO_RESTART_ENABLED=true`, the grid will restart automatically once price returns inside the boundary by `RESTART_TRIGGER_PCT`.
+- **Position cap** — `GRID_MAX_POSITION_SIZE` is a hard ceiling on total held contracts, preventing the grid from accumulating an oversized position during a sustained directional move.
 
-安装依赖后，使用 CLI 直接启动网格策略：
+---
+
+## Running the Strategy
+
+After installing dependencies, launch the grid strategy directly from the CLI:
+
 ```bash
 bun install
 bun run index.ts --strategy grid --exchange aster
 ```
 
-若要在 Ink Dashboard 中运行并交互，直接执行：
+To run inside the interactive Ink dashboard instead:
+
 ```bash
 bun start
 ```
-然后在菜单中选择 “基础网格策略”。
 
-## 监控与调优
+Then select **"Basic Grid Strategy"** from the menu.
 
-界面主要包括：
-- 当前买一/卖一、开仓方向、挂单/持仓概况。
-- 最近日志（订单状态、风控触发等）。
-- 触发止损后会清空网格并记录原因。
+---
 
-调参建议：
-1. **缩短区间**：想拉高单格盈利，可缩小上下边界并减少网格数。
-2. **更精细挂单**：适当提高 `GRID_LEVELS` 并降低 `GRID_ORDER_SIZE`，但同时记得调大 `GRID_MAX_POSITION_SIZE`。
-3. **调节平仓容忍度**：`GRID_MAX_CLOSE_SLIPPAGE_PCT` 控制平仓单相对标记价的最大偏移，确保 reduce-only 订单不会被交易所拒绝。
-4. **只做单边**：若只想高抛低吸不反手，可设 `GRID_DIRECTION=long`，卖单会变成 `reduceOnly`。
+## Monitoring and Tuning
 
-## 中断恢复行为
+The dashboard shows:
 
-策略重启后会：
-- 重新订阅账户、订单、深度、ticker；
-- 基于当前持仓和开放订单重新计算网格，只补挂缺失部分；
-- 在仓位额度允许的情况下持续追踪价位。
+- Current best bid/ask, position direction, open-order summary, and position overview.
+- A scrolling log of order status updates and risk-control events.
+- A record of stop-loss triggers with the reason logged.
 
-因此就算进程断掉，只要交易所回放的账号/订单快照完整，网格会从中断前的状态继续运行。若停机前手动撤过单，新启动时系统会把不在网格计划中的挂单一并清理。
+**Tuning recommendations:**
 
-## 常见问题
+1. **Tighten the range** — to increase the profit captured per grid step, reduce the gap between the upper and lower bounds and decrease the number of levels.
+2. **Add more levels** — increase `GRID_LEVELS` and lower `GRID_ORDER_SIZE` proportionally; remember to raise `GRID_MAX_POSITION_SIZE` accordingly so all levels can be filled.
+3. **Adjust close tolerance** — `GRID_MAX_CLOSE_SLIPPAGE_PCT` controls the maximum allowed deviation from the mark price when closing, ensuring `reduceOnly` orders are not rejected by the exchange.
+4. **Single-direction mode** — if you only want to "sell high, buy low" without holding a net short position, set `GRID_DIRECTION=long`; sell orders will automatically become `reduceOnly`.
 
-### Q: 为什么只有靠近现价的几个网格有订单？
-A: 每笔网格单都会占用一定仓位上限。当 `GRID_MAX_POSITION_SIZE / GRID_ORDER_SIZE < GRID_LEVELS` 时，只会展示足以满足仓位限制的那几条网格。调整任一参数即可扩大覆盖面。
+---
 
-### Q: 价格突破上界后为何立即平仓？
-A: 这是止损保护触发，避免庄外行情继续拉扯，默认 2% 触发后网格会全部撤单，并用市价平掉现有仓位。
+## Restart and Recovery Behaviour
 
-### Q: 想要手动调仓怎么办？
-A: 暂停策略（Ctrl+C 或 dashboard 退出）后手动操作，完成后再启动，策略会以新的仓位/挂单为基准重新布网。
+After a restart, the strategy will:
 
-## 小结
+- Re-subscribe to account, order, depth, and ticker streams.
+- Recompute the grid from the current position and open-order snapshot, placing only the **missing** orders rather than rebuilding the entire grid from scratch.
+- Continue tracking price levels as long as the position cap allows.
 
-通过上述配置，你就可以在 ASTERUSDT 合约上运行一个自动化的等比网格策略。请务必先在沙盒或小仓位测试，确保参数适应当前波动性和手续费结构，再逐步提升资金规模。
+This means that even if the process crashes, the grid will resume from where it left off as long as the exchange snapshot is intact. If you manually cancelled any orders before the restart, the strategy will clean up any stale orders that fall outside the current grid plan on its next startup.
 
-祝交易顺利！
+---
+
+## FAQ
+
+**Q: Why do only a few grid levels near the current price have orders?**
+
+Each grid order consumes a portion of the position cap. When `GRID_MAX_POSITION_SIZE / GRID_ORDER_SIZE < GRID_LEVELS`, only enough levels to stay within the position limit are populated. Adjust either parameter to increase coverage.
+
+**Q: Why does the strategy close immediately when price breaks above the upper boundary?**
+
+This is the stop-loss protection triggering. Once the 2% buffer beyond the boundary is breached, the grid cancels all limit orders and closes the position at market to prevent runaway exposure.
+
+**Q: How do I manually adjust my position?**
+
+Stop the strategy (Ctrl+C or exit the dashboard), make your manual adjustments on the exchange, then restart. The strategy will base its new grid layout on the updated position and open-order state.
+
+---
+
+## Summary
+
+With the configuration above you can run an automated geometric grid strategy on the ASTERUSDT perpetual contract. Always test in sandbox or with a small allocation first to ensure the parameters suit the current volatility profile and fee structure before scaling up capital.
+
+Good luck trading!

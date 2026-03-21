@@ -1,298 +1,251 @@
 # ritmex-bot
 
-> For English users, please see [README_en.md](README_en.md).
-
-Please set `LANG=en` in `.env` for English interface.
-
 A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend engine, a Guardian stop sentinel, and two market-making modes. It offers instant restarts, realtime market data, structured logging, and an Ink-based CLI dashboard.
 
-基于 Bun 的多交易所永续合约量化终端，内置趋势跟随（SMA30）、Guardian 防守与做市策略，支持快速恢复、实时行情订阅、日志追踪与 CLI 仪表盘。
+## CLI Command Mode (`ritmex-bot`)
+`ritmex-bot` provides an agent-friendly command interface for exchange capability checks, market data, account/position queries, order operations, and strategy execution.
 
-如果您希望获取优惠并支持本项目，请考虑使用以下注册链接：
+- It keeps the current environment-variable system intact: no renaming and no new required keys.
+- `--symbol` is passed through exactly as provided (no symbol normalization).
+- It supports `--dry-run` simulation and `--json` structured output for automation.
 
-* [Lighter 手续费优惠注册链接](https://app.lighter.xyz/?referral=111909FA)
-* [Aster 手续费优惠注册链接](https://www.asterdex.com/zh-CN/referral/4665f3)
-* [StandX 手续费优惠注册链接](https://standx.com/referral?code=xingxingjun)
-* [Binance 手续费优惠注册链接](https://www.binance.com/join?ref=KNKCA9XC)
-* [GRVT 手续费优惠注册链接](https://grvt.io/exchange/sign-up?ref=sea)
-* [Nado 手续费优惠注册链接](https://app.nado.xyz?join=LKbIUs5)
-* [Backpack 手续费优惠注册链接](https://backpack.exchange/join/ritmex)
-* [edgex 手续费优惠注册链接](https://pro.edgex.exchange/referral/BULL)
-* [Paradex 手续费优惠注册链接](https://paradex.io/ref/xingxingjun)
-* [Apex 手续费优惠注册链接](https://join.omni.apex.exchange/SEA)
+Full guide: [CLI User Guide](cli-guide.md)
 
-## CLI 命令模式（ritmex-bot）
-`ritmex-bot` 支持 Agent 友好的结构化命令调用，覆盖交易所能力查询、行情、账户、仓位、下单、撤单与策略启动。
+## Documentation
+- [CLI User Guide](cli-guide.md)
+- [Grid Trading Strategy Guide](grid-trading.md)
 
-- 保持现有环境变量体系，不新增也不改名，只读取当前执行环境中的变量。
-- `--symbol` 原样透传，不对交易对做统一改写。
-- 支持 `--dry-run` 模拟执行与 `--json` 结构化输出，便于自动化系统集成。
+## Highlights
+- **Live data & risk sync** via websockets with REST fallbacks and full reconciliation on restart.
+- **Trend strategy** featuring SMA30 entries, fixed stop loss, trailing stop, Bollinger bandwidth gate, and profit-lock stepping.
+- **Guardian strategy** that never opens trades but mirrors your live exposure, ensuring every position has a synced stop loss and trailing stop.
+- **Market-making loop** with dual-sided quote chasing, loss caps, and automatic order healing.
+- **Modular architecture** decoupling engines, exchange adapters, and the Ink CLI for easy venue or strategy extensions.
 
-### 安装当前项目 Skill（skills add）
-```bash
-npx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
-```
-如需指定分支，可追加 `--ref <branch-or-tag>`。
-
-完整文档请见：[ritmex-bot CLI 使用手册（中文）](cli-guide.md)
-
-## 文档索引
-- [ritmex-bot CLI 使用手册（中文）](cli-guide.md)
-- [ritmex-bot CLI User Guide (English)](cli-guide.en.md)
-- [简明上手指南（零基础）](simple-readme.md)
-- [基础网格策略使用教程](grid-trading.md)
-
-## 核心特性
-- **实时行情与风控**：Websocket + REST 自动同步账户、挂单与仓位，断线后自动恢复。
-- **趋势策略**：SMA30 穿越入场，内置止损、移动止盈、布林带带宽过滤与步进锁盈。
-- **Guardian 策略**：不主动开单，实时监听账户仓位并强制补挂/移动止损与动态止盈，防止裸奔。
-- **做市策略**：支持双边追价、风险阈值控制与订单自愈。
-- **模块化架构**：策略引擎、交易所适配器与 Ink CLI 相互解耦，新增交易所或策略更容易。
-
-## 支持的交易所
-| 交易所 | 合约类型 | 必填环境变量 | 备注 |
+## Supported Exchanges
+| Exchange | Contract Type | Required Environment Variables | Notes |
 | --- | --- | --- | --- |
-| Aster | USDT 永续 | `ASTER_API_KEY`, `ASTER_API_SECRET` | 默认交易所；兼容脚本引导
-| StandX | USD 永续 | `STANDX_TOKEN` | 使用 JWT Token 登录，优先走 WebSocket 推送
-| GRVT | USDT 永续 | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID` | `GRVT_ENV` 可切换 `prod`/`testnet`
-| Lighter | zkLighter 永续 | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | 默认 `LIGHTER_ENV=testnet`
-| Backpack | USDC 永续 | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | `BACKPACK_SANDBOX=true` 启用沙盒
-| Paradex | StarkEx 永续 | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | `PARADEX_SANDBOX=true` 使用测试网
-| Nado | USDC 永续 | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | `NADO_ENV` 可切换 `inkMainnet`/`inkTestnet`
+| Aster | USDT perpetuals | `ASTER_API_KEY`, `ASTER_API_SECRET` | Default venue |
+| StandX | USD perpetuals | `STANDX_TOKEN` | Uses JWT token auth; prefer websocket streams |
+| GRVT | USDT perpetuals | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID` | Switch `GRVT_ENV` between `prod` and `testnet` |
+| Lighter | zkLighter perpetuals | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | Defaults to `LIGHTER_ENV=testnet` |
+| Backpack | USDC perpetuals | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | Set `BACKPACK_SANDBOX=true` for the sandbox |
+| Paradex | StarkEx perpetuals | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | Toggle `PARADEX_SANDBOX=true` for the testnet |
+| Nado | USDC perpetuals | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | Switch `NADO_ENV` between `inkMainnet` and `inkTestnet` |
 
-## 系统要求
-- Bun ≥ 1.2（需同时包含 `bun`、`bunx` 命令）
-- macOS、Linux 或 Windows (推荐 WSL)
-- Node.js 仅在部分工具链场景需要，可选
+## Requirements
+- Bun >= 1.2 (both `bun` and `bunx` on PATH)
+- macOS, Linux, or Windows via WSL (native Windows works but WSL is recommended)
+- Node.js is optional unless your tooling requires it
 
-## 快速上手
-### 一键脚本（macOS / Linux / WSL）
-```bash
-curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh | bash
-```
-脚本会安装 Bun、项目依赖，收集 Aster API 凭证，生成 `.env` 并启动 CLI。运行前请准备好对应交易所的 API Key/Secret。
-
-### 手动安装
-1. **获取代码**
+## Quick Start
+1. **Clone the repository**
    ```bash
-   git clone https://github.com/discountry/ritmex-bot.git
+   git clone <your-fork-url>
    cd ritmex-bot
    ```
-   不便使用 Git 时，可在仓库页面下载 ZIP 后手动解压。
-2. **安装 Bun**
-   - macOS / Linux：`curl -fsSL https://bun.sh/install | bash`
-   - Windows PowerShell：`powershell -c "irm bun.sh/install.ps1 | iex"`
-   安装完成后重新打开终端，确认 `bun -v` 正常输出版本号。
-3. **安装依赖**
+2. **Install Bun**
+   - macOS / Linux: `curl -fsSL https://bun.sh/install | bash`
+   - Windows PowerShell: `powershell -c "irm bun.sh/install.ps1 | iex"`
+   Re-open the terminal and verify `bun -v` prints a version.
+3. **Install dependencies**
    ```bash
    bun install
    ```
-4. **复制环境变量模板并填写**
+4. **Create your environment file**
    ```bash
    cp .env.example .env
    ```
-   按下文指南修改 `.env`，至少需要正确配置一个交易所的凭证。
-5. **运行 CLI**
+   Edit `.env` with the exchange credentials and overrides you plan to use.
+5. **Launch the CLI**
    ```bash
    bun run index.ts
    ```
-   方向键选择策略并回车启动；`Esc` 返回菜单，`Ctrl+C` 退出。
+   Use the arrow keys to pick a strategy, `Enter` to start, `Esc` to go back, and `Ctrl+C` to exit.
 
-## 通用环境变量
-`.env.example` 提供了所有默认键值，下表概括最常用参数：
+## Shared Configuration
+`.env.example` captures all defaults; the most common settings are summarised below.
 
-| 变量 | 说明 |
+| Variable | Purpose |
 | --- | --- |
-| `EXCHANGE` | 选择交易所（`aster`/`binance`/`standx`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`） |
-| `TRADE_SYMBOL` | 交易对（默认 `BTCUSDT`） |
-| `TRADE_AMOUNT` | 单笔下单数量（标的资产计） |
-| `LOSS_LIMIT` | 单笔最大亏损触发的强平额度（USDT） |
-| `TRAILING_PROFIT` / `TRAILING_CALLBACK_RATE` | 动态止盈触发值（USDT）与回撤百分比 |
-| `PROFIT_LOCK_TRIGGER_USD` / `PROFIT_LOCK_OFFSET_USD` | 浮盈超过阈值后上调止损的触发金额与偏移 |
-| `BOLLINGER_*` | 趋势策略布林带过滤参数 |
-| `PRICE_TICK` / `QTY_STEP` | 交易所要求的最小报价与数量精度 |
-| `POLL_INTERVAL_MS` | 趋势策略循环间隔（毫秒） |
-| `MAX_CLOSE_SLIPPAGE_PCT` | 平仓时相对标记价允许的最大偏差 |
-| `MAKER_*` | 做市策略专属参数（追价阈值、报价偏移、刷新频率等） |
+| `EXCHANGE` | Choose the venue (`aster` / `binance` / `standx` / `grvt` / `lighter` / `backpack` / `paradex` / `nado`) |
+| `TRADE_SYMBOL` | Contract symbol (defaults to `BTCUSDT`) |
+| `TRADE_AMOUNT` | Order size in base asset units |
+| `LOSS_LIMIT` | Max per-trade loss in USDT before forced close |
+| `TRAILING_PROFIT` / `TRAILING_CALLBACK_RATE` | Trailing stop trigger (USDT) and pullback percentage |
+| `PROFIT_LOCK_TRIGGER_USD` / `PROFIT_LOCK_OFFSET_USD` | Profit lock trigger and offset thresholds |
+| `BOLLINGER_*` | Bollinger bandwidth filters for the trend engine |
+| `PRICE_TICK` / `QTY_STEP` | Exchange precision filters for price and quantity |
+| `POLL_INTERVAL_MS` | Trend engine polling cadence in milliseconds |
+| `MAX_CLOSE_SLIPPAGE_PCT` | Allowed deviation vs mark price when closing |
+| `MAKER_*` | Maker-specific knobs (quote offsets, refresh cadence, slippage guard, etc.) |
 
-> 可通过命令行临时覆盖交易所与策略（优先级高于 `.env`）：
+> CLI flags override environment variables at runtime:
 > ```bash
 > bun run index.ts --exchange grvt --strategy maker
 > bun run index.ts -e lighter -s offset-maker --silent
 > ```
 
-## 交易所配置指南
+## Exchange Setup Guides
+
 ### Aster
-1. 将 `EXCHANGE` 保持为 `aster`（默认值）。
-2. 填写 `ASTER_API_KEY` 与 `ASTER_API_SECRET`。
-3. 根据交易对调整 `TRADE_SYMBOL`、`PRICE_TICK`、`QTY_STEP` 等精度参数。
-4. 一键脚本会自动写入这些变量，手动部署时需自行维护。
+1. Keep `EXCHANGE=aster` (default value).
+2. Supply `ASTER_API_KEY` and `ASTER_API_SECRET`.
+3. Adjust `TRADE_SYMBOL`, `PRICE_TICK`, and `QTY_STEP` to match the requested market.
 
 ### Binance
-1. 设置 `EXCHANGE=binance`。
-2. 填写 `BINANCE_API_KEY`、`BINANCE_API_SECRET`。
-3. 设置市场模式 `BINANCE_MARKET_TYPE`：
-   - `perp`：永续（默认）
-   - `spot`：现货
-   - `auto`：按符号自动匹配（同名现货/永续并存时建议不要使用）
-4. 设置交易符号 `BINANCE_SYMBOL`（或使用 `TRADE_SYMBOL`）：
-   - 永续建议写 `BTCUSDT_PERP`（或直接 `BTCUSDT` + `BINANCE_MARKET_TYPE=perp`）
-   - 现货建议写 `BTCUSDT`（也支持 `BTCUSDT_SPOT`）
-5. 需要做期现套利（Basis）时，建议显式拆分：
+1. Set `EXCHANGE=binance`.
+2. Provide `BINANCE_API_KEY` and `BINANCE_API_SECRET`.
+3. Set market mode via `BINANCE_MARKET_TYPE`:
+   - `perp`: perpetual futures (default)
+   - `spot`: spot market
+   - `auto`: resolve by symbol (not recommended when both spot/perp share the same symbol)
+4. Set `BINANCE_SYMBOL` (or fallback to `TRADE_SYMBOL`):
+   - Perp recommended: `BTCUSDT_PERP` (or `BTCUSDT` with `BINANCE_MARKET_TYPE=perp`)
+   - Spot recommended: `BTCUSDT` (also accepts `BTCUSDT_SPOT`)
+5. For Basis arbitrage on Binance, explicitly split legs:
    - `BASIS_FUTURES_SYMBOL=BTCUSDT_PERP`
    - `BASIS_SPOT_SYMBOL=BTCUSDT`
-6. 可选测试网/自定义端点：
+6. Optional sandbox/custom endpoints:
    - `BINANCE_SANDBOX=true`
    - `BINANCE_SPOT_REST_URL` / `BINANCE_FUTURES_REST_URL`
    - `BINANCE_SPOT_WS_URL` / `BINANCE_FUTURES_WS_URL`
 
-> Binance 适配器默认优先使用 WebSocket（盘口、ticker、kline、账户/订单用户流），仅在必要时使用 REST 补偿与兜底。
+> The Binance adapter is WS-first by default (depth/ticker/kline/account/order streams), with REST used only for reconciliation and fallback.
 >
-> 若使用现货模式，部分“仅合约可用”的保护单能力会受交易所限制，策略会按交易所能力自动降级。
+> In spot mode, some derivatives-only protective order capabilities are exchange-limited, and the strategy will degrade gracefully based on venue capabilities.
 
-**示例（永续做市）**
+**Example (perp maker)**
 ```bash
 EXCHANGE=binance BINANCE_MARKET_TYPE=perp BINANCE_SYMBOL=BTCUSDT_PERP bun run index.ts --strategy maker
 ```
 
-**示例（现货网格）**
+**Example (spot grid)**
 ```bash
 EXCHANGE=binance BINANCE_MARKET_TYPE=spot BINANCE_SYMBOL=BTCUSDT bun run index.ts --strategy grid
 ```
 
 ### StandX
 
-* [StandX 做市策略教程](docs/standx/maker-points-guide.md)
+* [StandX Maker Points Strategy Guide](docs/standx/maker-points-guide.md)
 
-策略需要 StandX 的 API Token 和签名私钥才能下单。
+The strategy requires a StandX API Token and signing private key to place orders.
 
-**获取方式（使用 StandX 官方 API 生成功能）：**
-1. 打开 StandX 官方 API 创建页面：https://standx.com/user/session
-2. 连接钱包并登录
-3. 点击 **"Generate API Token"** 按钮
-4. 页面会显示以下信息：
-   - **Token**（以 `eyJ` 开头的 JWT 字符串）→ 填入 `STANDX_TOKEN`
-   - **Ed25519 Private Key**（Base58 格式私钥，类似 `HdsyJD7oWgT...`）→ 填入 `STANDX_REQUEST_PRIVATE_KEY`
-   - **创建日期** 和 **有效期天数** → 用于配置 Token 过期提醒
+**How to obtain (using StandX's official API generation feature):**
+1. Open the StandX official API creation page: https://standx.com/user/session
+2. Connect your wallet and log in
+3. Click the **"Generate API Token"** button
+4. The page will display the following information:
+   - **Token** (JWT string starting with `eyJ`) → Fill in `STANDX_TOKEN`
+   - **Ed25519 Private Key** (Base58 format, like `HdsyJD7oWgT...`) → Fill in `STANDX_REQUEST_PRIVATE_KEY`
+   - **Creation date** and **Validity days** → Used to configure token expiry reminders
 
-> Ed25519 Private Key 是系统自动生成的签名私钥，仅用于交易请求签名，你的资产仍在主钱包中，非常安全。
+> The Ed25519 Private Key is an auto-generated signing key used only for trade request signatures. Your assets remain in your main wallet and are completely safe.
 
-请妥善保存这些凭证，不要分享给他人。
+Please keep these credentials safe and do not share them with anyone.
 
-**配置步骤：**
-1. 设置 `EXCHANGE=standx`。
-2. 填写 `STANDX_TOKEN`（Perps API 的 JWT Token）。
-3. 填写 `STANDX_REQUEST_PRIVATE_KEY`（Ed25519 签名私钥，Base58 格式）。
-4. 设置 `STANDX_SYMBOL`（默认 `BTC-USD`），并校准 `PRICE_TICK` / `QTY_STEP`。
-5. 推荐配置 Token 过期时间：
-   - `STANDX_TOKEN_CREATE_DATE`（创建日期，格式 `YYYY-MM-DD`）
-   - `STANDX_TOKEN_VALIDITY_DAYS`（有效期天数）
-6. 可选：`STANDX_BASE_URL`、`STANDX_WS_URL`、`STANDX_SESSION_ID` 用于自定义环境。
-
+**Configuration steps:**
+1. Set `EXCHANGE=standx`.
+2. Provide `STANDX_TOKEN` (JWT token for perps API).
+3. Provide `STANDX_REQUEST_PRIVATE_KEY` (Ed25519 signing private key, Base58 format).
+4. Set `STANDX_SYMBOL` (defaults to `BTC-USD`) and align `PRICE_TICK` / `QTY_STEP`.
+5. Recommended: configure token expiry settings:
+   - `STANDX_TOKEN_CREATE_DATE` (creation date, format `YYYY-MM-DD`)
+   - `STANDX_TOKEN_VALIDITY_DAYS` (validity days)
+6. Optional: `STANDX_BASE_URL`, `STANDX_WS_URL`, or `STANDX_SESSION_ID` for custom endpoints.
 
 ### GRVT
-1. 在 `.env` 中设置 `EXCHANGE=grvt`。
-2. 填写 `GRVT_API_KEY`、`GRVT_API_SECRET`、`GRVT_SUB_ACCOUNT_ID`。
-3. 若使用测试网，可将 `GRVT_ENV=testnet` 并调整 `GRVT_INSTRUMENT`/`GRVT_SYMBOL`。
-4. 可选：提供 `GRVT_COOKIE` 或自定义 `GRVT_SIGNER_PATH` 以复用已有登录态。
+1. Set `EXCHANGE=grvt` inside `.env`.
+2. Fill `GRVT_API_KEY`, `GRVT_API_SECRET`, and `GRVT_SUB_ACCOUNT_ID`.
+3. Use `GRVT_ENV=testnet` when targeting the test environment, and align `GRVT_INSTRUMENT` / `GRVT_SYMBOL`.
+4. Optional: provide `GRVT_COOKIE` or a custom `GRVT_SIGNER_PATH` when reusing an existing session.
 
 ### Lighter
-1. 设置 `EXCHANGE=lighter`。
-2. 填写 `LIGHTER_ACCOUNT_INDEX` 与 `LIGHTER_API_PRIVATE_KEY`（40 字节十六进制私钥），其中`LIGHTER_ACCOUNT_INDEX`是你的账户索引，需要你在官网按F12观察接口请求获取，`LIGHTER_API_PRIVATE_KEY`是你的API私钥。
-3. 如需切换环境，将 `LIGHTER_ENV` 改为 `mainnet`/`staging`/`dev`；必要时指定 `LIGHTER_BASE_URL`。
-4. 交易对默认为 `LIGHTER_SYMBOL=BTCUSDT`，也可按需重写价格与数量小数位。
+1. Set `EXCHANGE=lighter`.
+2. Provide `LIGHTER_ACCOUNT_INDEX` and `LIGHTER_API_PRIVATE_KEY` (40-byte hex private key). `LIGHTER_ACCOUNT_INDEX` is your account index, which you can find by opening DevTools (F12) on the official website and observing API requests. `LIGHTER_API_PRIVATE_KEY` is your API private key.
+3. Switch `LIGHTER_ENV` to `mainnet`, `staging`, or `dev` when necessary; override `LIGHTER_BASE_URL` if endpoints differ.
+4. `LIGHTER_SYMBOL` defaults to `BTCUSDT`; override price/size decimals when markets differ.
 
 ### Backpack
-1. 设置 `EXCHANGE=backpack`。
-2. 填写 `BACKPACK_API_KEY`、`BACKPACK_API_SECRET`、`BACKPACK_PASSWORD`；如有分账户，补充 `BACKPACK_SUBACCOUNT`，默认填写主账户ID。
-3. 使用测试环境时将 `BACKPACK_SANDBOX=true`，并确认 `BACKPACK_SYMBOL` 与实际符号一致（默认 `BTC_USD_PERP`）。
-4. 可通过 `BACKPACK_DEBUG=true` 观察适配器详细日志。
+1. Set `EXCHANGE=backpack`.
+2. Populate `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, and `BACKPACK_PASSWORD`; add `BACKPACK_SUBACCOUNT` if you trade from a subaccount (defaults to main account ID).
+3. Toggle `BACKPACK_SANDBOX=true` for the sandbox environment and verify `BACKPACK_SYMBOL` matches the contract (defaults to `BTC_USD_PERP`).
+4. Enable `BACKPACK_DEBUG=true` for verbose adapter logging.
 
 ### Paradex
-1. 设置 `EXCHANGE=paradex`。
-2. 提供 `PARADEX_PRIVATE_KEY`（EVM 私钥）与 `PARADEX_WALLET_ADDRESS` 注意这是你EVM钱包的地址和私钥，建议创建全新钱包，不要放置无关资产。
-3. 默认连接主网，若需测试网，将 `PARADEX_SANDBOX=true` 并根据需要调整 `PARADEX_SYMBOL`。
-4. 复杂环境可额外设置 `PARADEX_USE_PRO`、`PARADEX_RECONNECT_DELAY_MS` 或调试开关。
+1. Set `EXCHANGE=paradex`.
+2. Provide `PARADEX_PRIVATE_KEY` (EVM private key) and `PARADEX_WALLET_ADDRESS`. Note: These are your EVM wallet address and private key. It is recommended to create a brand new wallet and avoid storing unrelated assets in it.
+3. The adapter connects to mainnet by default; enable `PARADEX_SANDBOX=true` and adjust `PARADEX_SYMBOL` for testnet usage.
+4. Advanced tuning: use `PARADEX_USE_PRO`, `PARADEX_RECONNECT_DELAY_MS`, or debug flags as needed.
 
 ### Nado
-1. 设置 `EXCHANGE=nado`。
-2. 在 Nado 官网（交易界面）打开开发者工具（F12）→ 切换到 `Application` → `Local Storage`，找到 `nado.userSettings`，在其内容中取出 `privateKey` 字段并填入 `.env` 的 `NADO_SIGNER_PRIVATE_KEY`。
-3. 提供 `NADO_SUBACCOUNT_OWNER`（或 `NADO_EVM_ADDRESS`）。
-4. 选择网络 `NADO_ENV=inkMainnet`（主网）或 `inkTestnet`（测试网）。
-5. 设置交易品种 `NADO_SYMBOL`（交易对格式类似 `BTC-PERP`；也支持输入 `BTCUSDT0`，会自动映射为 `BTC-PERP`）。
+1. Set `EXCHANGE=nado`.
+2. On the Nado web app (trading interface), open DevTools (F12) -> switch to the `Application` tab -> `Local Storage`, locate `nado.userSettings`, then grab the `privateKey` field from its JSON value and paste it into `.env` as `NADO_SIGNER_PRIVATE_KEY`.
+3. Provide `NADO_SUBACCOUNT_OWNER` (or `NADO_EVM_ADDRESS`).
+4. Select network via `NADO_ENV=inkMainnet` (mainnet) or `inkTestnet` (testnet).
+5. Set `NADO_SYMBOL` using Nado product symbols like `BTC-PERP` (it also accepts `BTCUSDT0` and maps it to `BTC-PERP`).
 
-## 命令速查
+## Command Cheatsheet
 ```bash
-bun run index.ts   # 启动 CLI（默认入口）
-bun run start      # 等价于运行 index.ts
-bun run dev        # 调试模式
-bun run lint       # 执行 Oxlint 检查
-bun run lint:fix   # 自动修复可安全修复的问题
-bun x vitest run   # 执行全部测试
+bun run index.ts   # Launch the CLI (default entrypoint)
+bun run start      # Alias for bun run index.ts
+bun run dev        # Development entrypoint
+bun run lint       # Run Oxlint checks
+bun run lint:fix   # Apply safe Oxlint fixes
+bun x vitest run   # Execute the full Vitest suite
 ```
 
-## ritmex-bot 命令模式（Agent 友好）
-项目现已支持独立命令模式，命令名为 `ritmex-bot`：
+## ritmex-bot Command Mode (Agent-friendly)
+The project supports a standalone command mode:
 
 ```bash
-ritmex-bot doctor
-ritmex-bot exchange list
-ritmex-bot market ticker --exchange binance --symbol BTCUSDT
-ritmex-bot order create --exchange binance --symbol BTCUSDT --side buy --type limit --quantity 0.01 --price 90000 --dry-run
-ritmex-bot strategy run --strategy maker --exchange standx --silent --dry-run
+bun run index.ts doctor
+bun run index.ts exchange list
+bun run index.ts market ticker --exchange binance --symbol BTCUSDT
+bun run index.ts order create --exchange binance --symbol BTCUSDT --side buy --type limit --quantity 0.01 --price 90000 --dry-run
+bun run index.ts strategy run --strategy maker --exchange standx --silent --dry-run
 ```
 
-### 运行方式
-```bash
-# 全局安装
-npm install -g ritmex-bot
-ritmex-bot doctor
+### Global Flags
+- `--exchange`: picks exchange using the existing env/config logic
+- `--symbol`: passed through as-is (no symbol normalization)
+- `--dry-run`: simulation mode (no real create/cancel side effects)
+- `--json`: structured JSON output for AI agents
+- `--timeout`: command timeout in milliseconds
 
-# 不安装直接运行
-npx ritmex-bot doctor
-bunx ritmex-bot doctor
-```
-
-### 全局参数
-- `--exchange`：按现有逻辑选择交易所（不修改原有环境变量体系）
-- `--symbol`：原样透传，不做统一或改写
-- `--dry-run`：模拟执行，不发真实下单/撤单请求
-- `--json`：输出结构化 JSON，便于 AI Agent 解析
-- `--timeout`：命令超时毫秒数
-
-## 静默启动与后台运行
-### 直接静默启动
-无需进入 Ink 菜单，可用命令行直接拉起指定策略：
+## Silent & Background Execution
+### Direct silent launch
+Skip the Ink menu and start a strategy directly:
 ```bash
 bun run index.ts --strategy trend --silent
 bun run index.ts --strategy maker --silent
 bun run index.ts --strategy offset-maker --silent
 ```
-如需同时指定交易所，可叠加 `--exchange/-e` 参数。
+Combine with `--exchange/-e` to pin the venue for that run.
 
-### 项目内置脚本
-`package.json` 提供了便捷脚本：
+### Package scripts
+Convenience aliases exposed via `package.json`:
 ```bash
 bun run start:trend:silent
 bun run start:maker:silent
 bun run start:offset:silent
 ```
 
-### 使用 pm2 守护并自动重启
-安装 `pm2`（示例：`bun add -d pm2`）后，可在项目内直接运行：
+### Daemonising with pm2
+Install `pm2` locally (e.g. `bun add -d pm2`) and launch the process:
 ```bash
 bunx pm2 start bun --name ritmex-trend --cwd . --restart-delay 5000 -- run index.ts --strategy trend --silent
 ```
-或调用预置脚本：
+You can also call the bundled scripts:
 ```bash
 bun run pm2:start:trend
 bun run pm2:start:maker
 bun run pm2:start:offset
 ```
-完成配置后可执行 `pm2 save` 持久化进程列表。
+Run `pm2 save` afterwards if you want the process list to survive reboots.
 
-## 测试
-项目使用 Vitest：
+## Testing
+Powered by Vitest:
 ```bash
 bun run lint
 bun run lint:fix
@@ -300,19 +253,14 @@ bun run test
 bun x vitest --watch
 ```
 
-## 常见问题
-- 至少准备 50–100 USDT 资金以覆盖策略运行需求。
-- 杠杆需在交易所提前设置（建议 ~50 倍），程序不会自动调整。
-- 请确保服务器/电脑时间同步真实世界时间，避免签名过期。
-- 账户需保持单向持仓模式。
-- `.env` 未读取：确认文件位于项目根目录且变量名无误。
-- API 拒绝访问：检查交易所后台权限，确保开启合约读写。
-- 精度错误：同步交易对的最小价格与数量步长。
-更多排查细节可参见 [简明上手指南](simple-readme.md)。
+## Troubleshooting
+- Keep at least 50-100 USDT in the account before deploying a live strategy.
+- Configure leverage on the exchange manually (~50x is recommended); the bot will not change it.
+- Ensure your server or workstation clock is in sync to avoid signature errors.
+- Accounts must run in one-way position mode.
+- **Env not loading**: make sure `.env` lives in the repo root and variable names are spelled correctly.
+- **Permission rejected**: confirm the API key has perpetual trading scopes enabled.
+- **Precision errors**: align `PRICE_TICK`, `QTY_STEP`, and `TRADE_SYMBOL` with the exchange filters.
 
-## 社区与支持
-- Telegram 交流群：[https://t.me/+4fdo0quY87o4Mjhh](https://t.me/+4fdo0quY87o4Mjhh)
-- 欢迎通过 Issue 或 PR 提交反馈、特性建议
-
-## 风险提示
-量化交易具备风险。请先在仿真或小额账户中验证策略表现，妥善保管 API 密钥，仅开启必要权限。
+## Disclaimer
+Algorithmic trading carries risk. Validate strategies with paper trading or small capital first, safeguard your API keys, and only grant the minimum required permissions.

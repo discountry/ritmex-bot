@@ -23,26 +23,21 @@ This skill is for running `ritmex-bot` in an agent-safe, exchange-compatible way
 5. For write actions (`order create`, `order cancel`, `order cancel-all`), prefer `--dry-run` first unless the user explicitly asks to skip simulation.
 6. Use `--json` whenever output must be consumed by another agent/tool.
 
-## Command Entry Options
+## Command Entry
 
-Use one of these:
+All commands run from the repository root:
 
 ```bash
-ritmex-bot <command>
-npx ritmex-bot <command>
-bunx ritmex-bot <command>
 bun run index.ts <command>
 ```
-
-If `ritmex-bot` is unavailable, use `bun run index.ts <command>` from repo root.
 
 ## Default Agent Workflow
 
 1. Determine exchange and symbol from user request.
 2. If missing, rely on existing env resolution; do not create fallback env variables.
 3. Run capability precheck:
-   - `exchange list`
-   - `exchange capabilities --exchange <id>`
+   - `bun run index.ts exchange list`
+   - `bun run index.ts exchange capabilities --exchange <id>`
 4. For read operations, run command directly (prefer `--json`).
 5. For write operations:
    - Run the exact command with `--dry-run --json`.
@@ -77,8 +72,8 @@ If `ritmex-bot` is unavailable, use `bun run index.ts <command>` from repo root.
 ### `doctor`
 
 ```bash
-ritmex-bot doctor
-ritmex-bot doctor --exchange binance --symbol BTCUSDT --json
+bun run index.ts doctor
+bun run index.ts doctor --exchange binance --symbol BTCUSDT --json
 ```
 
 Returns effective setup and runtime capabilities.
@@ -86,8 +81,8 @@ Returns effective setup and runtime capabilities.
 ### `exchange`
 
 ```bash
-ritmex-bot exchange list
-ritmex-bot exchange capabilities --exchange standx
+bun run index.ts exchange list
+bun run index.ts exchange capabilities --exchange standx
 ```
 
 If runtime adapter cannot initialize, capabilities may fallback to static metadata.
@@ -95,9 +90,9 @@ If runtime adapter cannot initialize, capabilities may fallback to static metada
 ### `market`
 
 ```bash
-ritmex-bot market ticker --exchange <id> --symbol <symbol>
-ritmex-bot market depth --exchange <id> --symbol <symbol> --levels 10
-ritmex-bot market kline --exchange <id> --symbol <symbol> --interval 1m --limit 100
+bun run index.ts market ticker --exchange <id> --symbol <symbol>
+bun run index.ts market depth --exchange <id> --symbol <symbol> --levels 10
+bun run index.ts market kline --exchange <id> --symbol <symbol> --interval 1m --limit 100
 ```
 
 Rules:
@@ -109,8 +104,8 @@ Rules:
 ### `account`
 
 ```bash
-ritmex-bot account snapshot --exchange <id>
-ritmex-bot account summary --exchange <id>
+bun run index.ts account snapshot --exchange <id>
+bun run index.ts account summary --exchange <id>
 ```
 
 `summary` is an alias of `snapshot`.
@@ -118,8 +113,8 @@ ritmex-bot account summary --exchange <id>
 ### `position`
 
 ```bash
-ritmex-bot position list --exchange <id>
-ritmex-bot position list --exchange <id> --symbol <symbol>
+bun run index.ts position list --exchange <id>
+bun run index.ts position list --exchange <id> --symbol <symbol>
 ```
 
 ### `order`
@@ -127,13 +122,13 @@ ritmex-bot position list --exchange <id> --symbol <symbol>
 ### Query open orders
 
 ```bash
-ritmex-bot order open --exchange <id> --symbol <symbol>
+bun run index.ts order open --exchange <id> --symbol <symbol>
 ```
 
 ### Create order
 
 ```bash
-ritmex-bot order create --exchange <id> --symbol <symbol> --side buy --type limit --quantity 0.01 --price 90000
+bun run index.ts order create --exchange <id> --symbol <symbol> --side buy --type limit --quantity 0.01 --price 90000
 ```
 
 Required:
@@ -160,20 +155,20 @@ Optional:
 ### Cancel one order
 
 ```bash
-ritmex-bot order cancel --exchange <id> --symbol <symbol> --order-id <id>
+bun run index.ts order cancel --exchange <id> --symbol <symbol> --order-id <id>
 ```
 
 ### Cancel all
 
 ```bash
-ritmex-bot order cancel-all --exchange <id> --symbol <symbol>
+bun run index.ts order cancel-all --exchange <id> --symbol <symbol>
 ```
 
 ### `strategy`
 
 ```bash
-ritmex-bot strategy run --strategy maker --exchange standx --silent
-ritmex-bot strategy run --strategy offset --exchange binance --dry-run
+bun run index.ts strategy run --strategy maker --exchange standx --silent
+bun run index.ts strategy run --strategy offset --exchange binance --dry-run
 ```
 
 Supported strategy IDs:
@@ -205,20 +200,20 @@ Extra flags:
 
 ```bash
 # 1) Simulate
-ritmex-bot order create --exchange <id> --symbol <symbol> --side buy --type limit --quantity 0.01 --price 90000 --dry-run --json
+bun run index.ts order create --exchange <id> --symbol <symbol> --side buy --type limit --quantity 0.01 --price 90000 --dry-run --json
 
 # 2) Execute live only after confirmation
-ritmex-bot order create --exchange <id> --symbol <symbol> --side buy --type limit --quantity 0.01 --price 90000 --json
+bun run index.ts order create --exchange <id> --symbol <symbol> --side buy --type limit --quantity 0.01 --price 90000 --json
 ```
 
 ### Cancel safely
 
 ```bash
 # 1) Simulate
-ritmex-bot order cancel --exchange <id> --symbol <symbol> --order-id <id> --dry-run --json
+bun run index.ts order cancel --exchange <id> --symbol <symbol> --order-id <id> --dry-run --json
 
 # 2) Execute live
-ritmex-bot order cancel --exchange <id> --symbol <symbol> --order-id <id> --json
+bun run index.ts order cancel --exchange <id> --symbol <symbol> --order-id <id> --json
 ```
 
 ## Agent Output Handling
@@ -265,34 +260,34 @@ Handling policy:
 ### Preflight
 
 ```bash
-ritmex-bot exchange list --json
-ritmex-bot exchange capabilities --exchange <id> --json
-ritmex-bot doctor --exchange <id> --symbol <symbol> --json
+bun run index.ts exchange list --json
+bun run index.ts exchange capabilities --exchange <id> --json
+bun run index.ts doctor --exchange <id> --symbol <symbol> --json
 ```
 
 ### Read-only market/account state
 
 ```bash
-ritmex-bot market ticker --exchange <id> --symbol <symbol> --json
-ritmex-bot market depth --exchange <id> --symbol <symbol> --levels 20 --json
-ritmex-bot market kline --exchange <id> --symbol <symbol> --interval 1m --limit 120 --json
-ritmex-bot account snapshot --exchange <id> --json
-ritmex-bot position list --exchange <id> --symbol <symbol> --json
+bun run index.ts market ticker --exchange <id> --symbol <symbol> --json
+bun run index.ts market depth --exchange <id> --symbol <symbol> --levels 20 --json
+bun run index.ts market kline --exchange <id> --symbol <symbol> --interval 1m --limit 120 --json
+bun run index.ts account snapshot --exchange <id> --json
+bun run index.ts position list --exchange <id> --symbol <symbol> --json
 ```
 
 ### Write flow (safe)
 
 ```bash
-ritmex-bot order create --exchange <id> --symbol <symbol> --side buy --type market --qty 0.01 --dry-run --json
-ritmex-bot order create --exchange <id> --symbol <symbol> --side buy --type market --qty 0.01 --json
-ritmex-bot order open --exchange <id> --symbol <symbol> --json
+bun run index.ts order create --exchange <id> --symbol <symbol> --side buy --type market --qty 0.01 --dry-run --json
+bun run index.ts order create --exchange <id> --symbol <symbol> --side buy --type market --qty 0.01 --json
+bun run index.ts order open --exchange <id> --symbol <symbol> --json
 ```
 
 ### Strategy flow
 
 ```bash
-ritmex-bot strategy run --strategy trend --exchange <id> --dry-run
-ritmex-bot strategy run --strategy trend --exchange <id> --silent
+bun run index.ts strategy run --strategy trend --exchange <id> --dry-run
+bun run index.ts strategy run --strategy trend --exchange <id> --silent
 ```
 
 ## Completion Checklist

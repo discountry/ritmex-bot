@@ -1,12 +1,23 @@
-# RitMEX Bot - Claude Instructions
+# RitMEX Bot — Claude Instructions
 
 ## Package Manager
 
-**必须使用 Bun** - 这个项目使用 Bun 作为包管理器和运行时。所有能用 bun 执行的命令都必须使用 bun：
+**You must use Bun** — this project uses Bun as both the package manager and the runtime. Every command that can be run with Bun must use Bun:
 
-- 安装依赖: `bun install`
-- 运行脚本: `bun run <script>`
-- 执行测试: `bun test`
-- 类型检查: `bun run typecheck`
+- Install dependencies: `bun install`
+- Run scripts: `bun run <script>`
+- Execute tests: `bun test`
 
-**不要使用 npm、yarn 或 npx**
+**Do not use npm, yarn, or npx.**
+
+## Source-Only Execution
+
+This project must always run from the local repository. The following are forbidden — they fetch the upstream author's published npm package, not this fork:
+
+```
+npm install -g ritmex-bot
+npx ritmex-bot
+npm install ritmex-bot
+```
+
+The only valid entry point is `bun run index.ts` from the repository root.
