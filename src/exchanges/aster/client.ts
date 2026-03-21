@@ -532,7 +532,7 @@ export class AsterSpotRestClient {
     try {
       response = await fetch(url, init);
     } catch (error) {
-      throw new Error(`[AsterSpotRestClient] 请求失败 ${String(error)}`);
+      throw new Error(`[AsterSpotRestClient] Request failed: ${String(error)}`);
     }
     const text = await response.text();
     if (!response.ok) {
@@ -544,7 +544,7 @@ export class AsterSpotRestClient {
     try {
       return JSON.parse(text) as T;
     } catch {
-      throw new Error(`[AsterSpotRestClient] 无法解析响应: ${text.slice(0, 200)}`);
+      throw new Error(`[AsterSpotRestClient] Failed to parse response: ${text.slice(0, 200)}`);
     }
   }
 }
@@ -787,7 +787,7 @@ export class AsterRestClient {
     try {
       response = await fetch(url);
     } catch (error) {
-      throw new Error(`[AsterRestClient] 获取交易规则失败 ${String(error)}`);
+      throw new Error(`[AsterRestClient] Failed to fetch exchange info: ${String(error)}`);
     }
     const text = await response.text();
     if (!response.ok) {
@@ -796,7 +796,7 @@ export class AsterRestClient {
     try {
       return JSON.parse(text) as AsterFuturesExchangeInfo;
     } catch {
-      throw new Error(`[AsterRestClient] 无法解析交易规则响应: ${text.slice(0, 200)}`);
+      throw new Error(`[AsterRestClient] Failed to parse exchange info response: ${text.slice(0, 200)}`);
     }
   }
 
@@ -860,7 +860,7 @@ export class AsterRestClient {
     try {
       response = await fetch(url);
     } catch (error) {
-      throw new Error(`[AsterRestClient] 获取K线失败 ${String(error)}`);
+      throw new Error(`[AsterRestClient] Failed to fetch klines: ${String(error)}`);
     }
     const text = await response.text();
     if (!response.ok) {
@@ -870,7 +870,7 @@ export class AsterRestClient {
       const payload = JSON.parse(text) as any[];
       return payload.map((entry) => fromRestKline(entry, interval, upper));
     } catch {
-      throw new Error(`[AsterRestClient] 无法解析K线响应: ${text.slice(0, 200)}`);
+      throw new Error(`[AsterRestClient] Failed to parse kline response: ${text.slice(0, 200)}`);
     }
   }
 
@@ -889,7 +889,7 @@ export class AsterRestClient {
     try {
       response = await fetch(url);
     } catch (error) {
-      throw new Error(`[AsterRestClient] 获取资金费率失败 ${String(error)}`);
+      throw new Error(`[AsterRestClient] Failed to fetch funding rate: ${String(error)}`);
     }
     const text = await response.text();
     if (!response.ok) {
@@ -900,7 +900,7 @@ export class AsterRestClient {
       // The response shape mirrors Binance: { symbol, markPrice, indexPrice, lastFundingRate, nextFundingTime, time }
       return payload;
     } catch {
-      throw new Error(`[AsterRestClient] 无法解析资金费率响应: ${text.slice(0, 200)}`);
+      throw new Error(`[AsterRestClient] Failed to parse funding-rate response: ${text.slice(0, 200)}`);
     }
   }
 
@@ -934,7 +934,7 @@ export class AsterRestClient {
     try {
       response = await fetch(url, init);
     } catch (error) {
-      throw new Error(`[AsterRestClient] 请求失败 ${String(error)}`);
+      throw new Error(`[AsterRestClient] Request failed: ${String(error)}`);
     }
     const text = await response.text();
     if (!response.ok) {
@@ -943,7 +943,7 @@ export class AsterRestClient {
     try {
       return JSON.parse(text) as T;
     } catch {
-      throw new Error(`[AsterRestClient] 无法解析响应: ${text.slice(0, 200)}`);
+      throw new Error(`[AsterRestClient] Failed to parse response: ${text.slice(0, 200)}`);
     }
   }
 
@@ -1034,7 +1034,7 @@ export class AsterPublicStreams {
         try {
           payload = JSON.parse(event.data);
         } catch (error) {
-          console.error("[AsterPublicStreams] 无法解析消息", error, event.data);
+          console.error("[AsterPublicStreams] Failed to parse message", error, event.data);
           return;
         }
       } else {
@@ -1195,7 +1195,7 @@ export class AsterUserStream {
         try {
           payload = JSON.parse(event.data);
         } catch (error) {
-          console.error("[AsterUserStream] 无法解析消息", error, event.data);
+          console.error("[AsterUserStream] Failed to parse message", error, event.data);
           return;
         }
       } else {
@@ -1506,7 +1506,7 @@ export class AsterGateway {
           positions = latestPositions;
         }
       } catch (positionError) {
-        console.error("[AsterGateway] 刷新持仓失败", positionError);
+        console.error("[AsterGateway] Failed to refresh positions", positionError);
       }
       const normalizedPositions = clonePositions(positions);
       const snapshot: AsterAccountSnapshot = {
@@ -1518,7 +1518,7 @@ export class AsterGateway {
       this.accountSnapshot = snapshot;
       this.accountEvent.emit(snapshot);
     } catch (error) {
-      console.error("[AsterGateway] 刷新账户信息失败", error);
+      console.error("[AsterGateway] Failed to refresh account snapshot", error);
     }
     try {
       const orders = await this.rest.getOpenOrders();
@@ -1526,7 +1526,7 @@ export class AsterGateway {
       orders.forEach((order) => mergeOrderSnapshot(this.openOrders, order));
       this.ordersEvent.emit(Array.from(this.openOrders.values()));
     } catch (error) {
-      console.error("[AsterGateway] 刷新挂单失败", error);
+      console.error("[AsterGateway] Failed to refresh open orders", error);
     }
   }
 
@@ -1570,7 +1570,7 @@ export class AsterGateway {
       this.accountSnapshot = nextSnapshot;
       this.accountEvent.emit(nextSnapshot);
     } catch (error) {
-      console.error("[AsterGateway] 同步持仓失败", error);
+      console.error("[AsterGateway] Failed to sync positions", error);
     } finally {
       this.positionSyncInFlight = false;
     }
@@ -1605,7 +1605,7 @@ export class AsterGateway {
     try {
       exchangeInfo = await this.loadExchangeInfo();
     } catch (error) {
-      console.error("[AsterGateway] 获取交易规则失败", error);
+      console.error("[AsterGateway] Failed to fetch exchange info", error);
       return null;
     }
     const symbols = exchangeInfo?.symbols ?? [];

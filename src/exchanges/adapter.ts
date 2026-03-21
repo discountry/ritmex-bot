@@ -77,7 +77,7 @@ export interface ExchangeAdapter {
   cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void>;
   cancelAllOrders(params: { symbol: string }): Promise<void>;
   getPrecision?(): Promise<ExchangePrecision | null>;
-  // 连接保护相关方法（可选，仅 StandX 支持）
+  // Connection-protection hooks (optional, currently StandX only).
   onConnectionEvent?(listener: ConnectionEventListener): void;
   offConnectionEvent?(listener: ConnectionEventListener): void;
   onRestHealthEvent?(listener: RestHealthListener): void;

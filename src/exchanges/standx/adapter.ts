@@ -126,14 +126,14 @@ export class StandxExchangeAdapter implements ExchangeAdapter {
   }
 
   /**
-   * 监听连接事件（断连/重连）
+   * Subscribe to connection events (disconnect/reconnect).
    */
   onConnectionEvent(listener: ConnectionEventListener): void {
     this.gateway.onConnectionEvent(listener);
   }
 
   /**
-   * 取消连接事件监听
+   * Unsubscribe from connection events.
    */
   offConnectionEvent(listener: ConnectionEventListener): void {
     this.gateway.offConnectionEvent(listener);
@@ -148,8 +148,8 @@ export class StandxExchangeAdapter implements ExchangeAdapter {
   }
 
   /**
-   * 查询当前真实的挂单状态（通过 HTTP API）
-   * 用于验证实际挂单情况，防止取消请求丢失
+   * Query current real open orders via HTTP API.
+   * Used to verify actual order state and avoid lost cancel requests.
    */
   async queryOpenOrders(): Promise<AsterOrder[]> {
     await this.ensureInitialized("queryOpenOrders");
@@ -167,8 +167,8 @@ export class StandxExchangeAdapter implements ExchangeAdapter {
   }
 
   /**
-   * 强制取消所有挂单
-   * 会查询当前挂单然后取消，并验证取消成功
+   * Force-cancel all open orders.
+   * Queries current orders, cancels them, and verifies cancellation.
    */
   async forceCancelAllOrders(): Promise<boolean> {
     await this.ensureInitialized("forceCancelAllOrders");

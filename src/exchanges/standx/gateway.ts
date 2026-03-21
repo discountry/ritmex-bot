@@ -52,18 +52,18 @@ const DEFAULT_KLINE_LIMIT = 200;
 const KLINE_REFRESH_MS = 30_000;
 const FUNDING_REFRESH_MS = 60_000;
 
-// ========== WebSocket 连接管理常量 ==========
-// 基础重连延迟（毫秒）
+// ========== WebSocket connection constants ==========
+// Base reconnect delay (ms)
 const WS_RECONNECT_DELAY_BASE = 2000;
-// 最大重连延迟（毫秒）- 指数退避上限
+// Max reconnect delay (ms) - exponential backoff cap
 const WS_RECONNECT_DELAY_MAX = 30_000;
-// 心跳超时（毫秒）- StandX 服务器 5 分钟无 pong 会断连，我们设置 2 分钟作为安全阈值
+// Heartbeat timeout (ms) - StandX may drop after 5m without pong; use 2m safety threshold
 const WS_HEARTBEAT_TIMEOUT = 120_000;
-// 心跳检查间隔（毫秒）- 每 30 秒检查一次是否收到消息
+// Heartbeat check interval (ms) - check every 30s
 const WS_HEARTBEAT_CHECK_INTERVAL = 30_000;
-// 数据过时阈值（毫秒）- 超过此时间未收到行情/仓位数据，启动 REST 主动拉取
+// Data stale threshold (ms) - if market/position updates exceed this, fallback to REST fetch
 const WS_DATA_STALE_THRESHOLD = 3000;
-// REST 轮询间隔（毫秒）- WS 断连或数据过时时的 REST 拉取间隔
+// REST polling interval (ms) - used during WS disconnect or stale data
 const REST_POLL_INTERVAL = 2000;
 const REST_ERROR_DEFENSE_THRESHOLD = 3;
 
@@ -437,24 +437,24 @@ export class StandxGateway {
   private marketReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly subscriptions = new Set<string>();
 
-  // ========== 心跳与连接管理 ==========
-  // 上次收到消息的时间戳
+  // ========== Heartbeat and connection state ==========
+  // Last message timestamp
   private lastMessageTime = 0;
-  // 心跳检查定时器
+  // Heartbeat check timer
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
-  // 重连次数（用于指数退避）
+  // Reconnect attempts (for exponential backoff)
   private reconnectAttempts = 0;
 
-  // ========== 数据过时检测与 REST 备用 ==========
-  // 上次收到行情数据（price/depth）的时间戳
+  // ========== Data staleness and REST fallback ==========
+  // Last market-data timestamp (price/depth)
   private lastMarketDataTime = 0;
-  // 上次收到账户数据（position/balance）的时间戳
+  // Last account-data timestamp (position/balance)
   private lastAccountDataTime = 0;
-  // 数据过时检查定时器
+  // Data staleness check timer
   private dataStaleCheckTimer: ReturnType<typeof setInterval> | null = null;
-  // REST 轮询定时器（WS 断连时启用）
+  // REST polling timer (enabled when WS is disconnected)
   private restPollTimer: ReturnType<typeof setInterval> | null = null;
-  // REST 轮询是否激活
+  // Whether REST polling is active
   private restPollActive = false;
 
   private readonly klineTimers = new Map<string, PollTimer>();
@@ -462,7 +462,7 @@ export class StandxGateway {
 
   private lastPriceBySymbol = new Map<string, number>();
 
-  // 断连保护相关
+  // Disconnect protection state
   private disconnectCancelRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private disconnectCancelRetryActive = false;
   private lastKnownOpenOrders: Array<{ orderId: string; clOrdId?: string }> = [];
@@ -579,8 +579,8 @@ export class StandxGateway {
   }
 
   /**
-   * 查询当前真实的挂单状态（通过 HTTP API）
-   * 用于在网络恢复后验证实际挂单情况
+   * Query real current open-order state via HTTP API.
+   * Used to verify order status after network recovery.
    */
   async queryOpenOrders(symbol: string): Promise<AsterOrder[]> {
     const normalized = normalizeSymbol(symbol);
@@ -598,8 +598,8 @@ export class StandxGateway {
   }
 
   /**
-   * 强制取消所有挂单（用于断连保护）
-   * 会不断重试直到成功或确认没有挂单
+   * Force-cancel all open orders (disconnect protection).
+   * Retries until success or confirmed no open orders.
    */
   async forceCancelAllOrders(symbol: string): Promise<boolean> {
     const normalized = normalizeSymbol(symbol);
@@ -609,7 +609,7 @@ export class StandxGateway {
         return true;
       }
       await this.cancelAllOrders({ symbol: normalized });
-      // 再次查询确认
+      // Query again for confirmation.
       const afterCancel = await this.queryOpenOrders(normalized);
       return afterCancel.length === 0;
     } catch (error) {
@@ -848,7 +848,7 @@ export class StandxGateway {
       }
       payload.price = price;
     }
-    // StandX TPSL 参数
+    // StandX TPSL parameters
     if (params.slPrice != null && Number.isFinite(params.slPrice)) {
       payload.sl_price = toDecimalString(params.slPrice);
     }
@@ -901,17 +901,17 @@ export class StandxGateway {
     const handleOpen = () => {
       this.marketWsReady = true;
       this.marketWsAuthed = false;
-      // 重置重连计数和时间戳
+      // Reset reconnect counter and timestamps.
       this.reconnectAttempts = 0;
       this.lastMessageTime = Date.now();
       this.lastMarketDataTime = Date.now();
       this.lastAccountDataTime = Date.now();
       this.logDebug("ws open");
-      // 启动心跳监控
+      // Start heartbeat monitoring.
       this.startHeartbeatMonitor();
-      // 启动数据过时检测
+      // Start data-staleness checks.
       this.startDataStaleCheck();
-      // 停止 REST 轮询（WS 恢复后不再需要）
+      // Stop REST polling (not needed once WS recovers).
       this.stopRestPoll();
       this.sendAuthIfNeeded();
     };
@@ -921,11 +921,11 @@ export class StandxGateway {
       this.marketWsAuthed = false;
       this.marketWsAuthRequested = false;
       this.marketWs = null;
-      // 停止心跳监控和数据过时检测
+      // Stop heartbeat and staleness monitors.
       this.stopHeartbeatMonitor();
       this.stopDataStaleCheck();
       this.logDebug("ws close");
-      // 触发断连事件，启动断连保护
+      // Trigger disconnect event and start disconnect protection.
       if (wasReady) {
         this.onDisconnect();
       }
@@ -933,8 +933,8 @@ export class StandxGateway {
     };
     const handleError = (error: unknown) => {
       this.logger("marketWs", error);
-      // 如果连接从未成功建立（握手失败），需要清理并重连
-      // 因为某些 WebSocket 实现在握手失败时可能不触发 close 事件
+      // If handshake failed before a successful open, cleanup and reconnect.
+      // Some WebSocket implementations may not emit close on handshake failure.
       if (this.marketWs && !this.marketWsReady) {
         this.marketWs = null;
         this.scheduleReconnect();
@@ -962,7 +962,7 @@ export class StandxGateway {
 
   private scheduleReconnect(): void {
     if (this.marketReconnectTimer) return;
-    // 指数退避：delay = min(base * 2^attempts, max)
+    // Exponential backoff: delay = min(base * 2^attempts, max)
     const delay = Math.min(
       WS_RECONNECT_DELAY_BASE * Math.pow(2, this.reconnectAttempts),
       WS_RECONNECT_DELAY_MAX
@@ -977,7 +977,7 @@ export class StandxGateway {
   }
 
   private handleMarketMessage(event: { data: any }): void {
-    // 更新最后收到消息的时间（心跳监控）
+    // Update last message timestamp for heartbeat monitor.
     this.lastMessageTime = Date.now();
     this.logRawPayload(event.data);
     const payloads = parseJsonPayloads(event.data);
@@ -1003,13 +1003,13 @@ export class StandxGateway {
         this.marketWsAuthed = true;
         this.marketWsAuthRequested = false;
         this.flushSubscriptions();
-        // 触发重连事件
+        // Emit reconnect event.
         this.onReconnect();
       }
       return;
     }
     if (channel === "depth_book") {
-      // 更新行情数据时间戳
+      // Update market-data timestamp.
       this.lastMarketDataTime = Date.now();
       const data = message.data as StandxDepthBook | undefined;
       const rawSymbol = data?.symbol ?? message?.symbol;
@@ -1049,7 +1049,7 @@ export class StandxGateway {
       return;
     }
     if (channel === "price") {
-      // 更新行情数据时间戳
+      // Update market-data timestamp.
       this.lastMarketDataTime = Date.now();
       const data = message.data as StandxPrice | undefined;
       if (!data?.symbol) return;
@@ -1058,7 +1058,7 @@ export class StandxGateway {
       return;
     }
     if (channel === "order") {
-      // 更新账户数据时间戳
+      // Update account-data timestamp.
       this.lastAccountDataTime = Date.now();
       const payload = message.data as StandxOrder | StandxOrder[] | undefined;
       if (!payload) return;
@@ -1071,7 +1071,7 @@ export class StandxGateway {
       return;
     }
     if (channel === "position") {
-      // 更新账户数据时间戳
+      // Update account-data timestamp.
       this.lastAccountDataTime = Date.now();
       const payload = message.data as StandxPosition | StandxPosition[] | undefined;
       if (!payload) return;
@@ -1085,7 +1085,7 @@ export class StandxGateway {
       return;
     }
     if (channel === "balance") {
-      // 更新账户数据时间戳
+      // Update account-data timestamp.
       this.lastAccountDataTime = Date.now();
       const payload = message.data as StandxBalance | StandxBalance[] | undefined;
       if (!payload) return;
@@ -1139,10 +1139,10 @@ export class StandxGateway {
     this.marketWs?.send(JSON.stringify({ subscribe: stream }));
   }
 
-  // ========== 心跳监控 ==========
+  // ========== Heartbeat monitoring ==========
   /**
-   * 启动心跳监控
-   * 定期检查是否收到消息，如果超时则主动触发重连
+   * Start heartbeat monitoring.
+   * Periodically checks message arrival; force reconnect on timeout.
    */
   private startHeartbeatMonitor(): void {
     this.stopHeartbeatMonitor();
@@ -1157,7 +1157,7 @@ export class StandxGateway {
   }
 
   /**
-   * 停止心跳监控
+   * Stop heartbeat monitoring.
    */
   private stopHeartbeatMonitor(): void {
     if (this.heartbeatTimer) {
@@ -1166,10 +1166,10 @@ export class StandxGateway {
     }
   }
 
-  // ========== 数据过时检测与 REST 备用拉取 ==========
+  // ========== Data staleness and REST fallback fetch ==========
   /**
-   * 启动数据过时检测
-   * 即使 WS 连接正常，如果超过 3 秒未收到行情/账户数据，也主动通过 REST 拉取
+   * Start data-staleness checks.
+   * Even with WS connected, if no market/account updates for >3s, actively pull via REST.
    */
   private startDataStaleCheck(): void {
     this.stopDataStaleCheck();
@@ -1185,14 +1185,14 @@ export class StandxGateway {
           marketStale,
           accountStale,
         });
-        // 主动通过 REST 拉取数据
+        // Actively fetch stale data via REST.
         this.fetchStaleData(marketStale, accountStale);
       }
-    }, 1000); // 每秒检查一次
+    }, 1000); // Check once per second.
   }
 
   /**
-   * 停止数据过时检测
+   * Stop data-staleness checks.
    */
   private stopDataStaleCheck(): void {
     if (this.dataStaleCheckTimer) {
@@ -1202,10 +1202,10 @@ export class StandxGateway {
   }
 
   /**
-   * 主动拉取过时的数据
+   * Actively fetch stale data.
    */
   private fetchStaleData(marketStale: boolean, accountStale: boolean): void {
-    // 获取当前订阅的 symbols
+    // Get currently subscribed symbols.
     const symbols = new Set<string>();
     for (const key of this.subscriptions) {
       const [, symbol] = key.split(":");
@@ -1217,7 +1217,7 @@ export class StandxGateway {
         void this.fetchTickerSnapshot(symbol).catch((e) => this.logger("staleTickerFetch", e));
         void this.fetchDepthSnapshot(symbol).catch((e) => this.logger("staleDepthFetch", e));
       }
-      // 更新时间戳避免重复拉取
+      // Refresh timestamp to avoid repeated pulls.
       this.lastMarketDataTime = Date.now();
     }
 
@@ -1226,14 +1226,14 @@ export class StandxGateway {
       for (const symbol of symbols) {
         void this.refreshOpenOrders(symbol).catch((e) => this.logger("staleOrdersFetch", e));
       }
-      // 更新时间戳避免重复拉取
+      // Refresh timestamp to avoid repeated pulls.
       this.lastAccountDataTime = Date.now();
     }
   }
 
   /**
-   * 启动 REST 轮询（WS 断连时使用）
-   * 持续通过 REST API 拉取行情和账户数据，确保止损等逻辑能正常工作
+   * Start REST polling (used when WS is disconnected).
+   * Continuously fetch market/account data so stop-loss and safety logic still work.
    */
   private startRestPoll(): void {
     if (this.restPollActive) return;
@@ -1243,14 +1243,14 @@ export class StandxGateway {
     const poll = async () => {
       if (!this.restPollActive) return;
 
-      // 获取当前订阅的 symbols
+      // Get currently subscribed symbols.
       const symbols = new Set<string>();
       for (const key of this.subscriptions) {
         const [, symbol] = key.split(":");
         if (symbol) symbols.add(symbol);
       }
 
-      // 拉取行情数据
+      // Fetch market data.
       for (const symbol of symbols) {
         try {
           await this.fetchTickerSnapshot(symbol);
@@ -1265,7 +1265,7 @@ export class StandxGateway {
         }
       }
 
-      // 拉取账户数据
+      // Fetch account data.
       try {
         await this.refreshAccountSnapshot();
         this.lastAccountDataTime = Date.now();
@@ -1273,7 +1273,7 @@ export class StandxGateway {
         this.logger("restPollAccount", e);
       }
 
-      // 继续下一次轮询
+      // Schedule next polling cycle.
       if (this.restPollActive) {
         this.restPollTimer = setTimeout(() => void poll(), REST_POLL_INTERVAL);
       }
@@ -1283,7 +1283,7 @@ export class StandxGateway {
   }
 
   /**
-   * 停止 REST 轮询
+   * Stop REST polling.
    */
   private stopRestPoll(): void {
     if (!this.restPollActive) return;
@@ -1296,15 +1296,15 @@ export class StandxGateway {
   }
 
   /**
-   * 强制重连（用于心跳超时）
-   * 与普通断连不同，这里不增加重连计数（因为是主动行为）
+   * Force reconnect (used for heartbeat timeout).
+   * Unlike passive disconnects, this is proactive reconnect behavior.
    */
   private forceReconnect(reason: string): void {
     this.logDebug(`force reconnect: ${reason}`);
-    // 停止监控
+    // Stop monitors.
     this.stopHeartbeatMonitor();
     this.stopDataStaleCheck();
-    // 关闭现有连接
+    // Close existing connection.
     if (this.marketWs) {
       try {
         this.marketWs.close();
@@ -1313,16 +1313,16 @@ export class StandxGateway {
       }
       this.marketWs = null;
     }
-    // 重置状态
+    // Reset state.
     const wasReady = this.marketWsReady;
     this.marketWsReady = false;
     this.marketWsAuthed = false;
     this.marketWsAuthRequested = false;
-    // 触发断连事件
+    // Emit disconnect event.
     if (wasReady) {
       this.onDisconnect();
     }
-    // 立即重连（不使用指数退避，因为是主动行为）
+    // Reconnect immediately.
     this.reconnectAttempts = 0;
     this.scheduleReconnect();
   }
@@ -1500,7 +1500,7 @@ export class StandxGateway {
         const order = this.mapOrder(raw);
         mergeOrderSnapshot(this.openOrders, order);
       }
-      // 无论是否有挂单都触发推送，确保上层状态更新
+      // Emit regardless of order count to keep upstream state in sync.
       this.emitOrders();
     } catch (error) {
       this.logger("openOrders", error);
@@ -1825,16 +1825,16 @@ export class StandxGateway {
   }
 
   /**
-   * 断连时触发，记录当前挂单状态并启动持久重试取消
+   * Called on disconnect: snapshot open orders and start persistent cancel retries.
    */
   private onDisconnect(): void {
-    // 记录最后已知的挂单状态
+    // Record last known open-order state.
     this.lastKnownOpenOrders = Array.from(this.openOrders.values()).map((order) => ({
       orderId: String(order.orderId),
       clOrdId: order.clientOrderId,
     }));
 
-    // 获取当前订阅的 symbol
+    // Collect currently subscribed symbol.
     const symbols = new Set<string>();
     for (const key of this.subscriptions) {
       const [, symbol] = key.split(":");
@@ -1847,7 +1847,7 @@ export class StandxGateway {
       symbol: this.disconnectedSymbol,
     });
 
-    // 触发断连事件
+    // Emit disconnect event.
     for (const listener of this.connectionListeners) {
       try {
         listener("disconnected", this.disconnectedSymbol ?? "");
@@ -1856,17 +1856,17 @@ export class StandxGateway {
       }
     }
 
-    // 启动断连保护：持续重试取消所有挂单
+    // Start disconnect protection: keep retrying cancel-all.
     if (this.lastKnownOpenOrders.length > 0 && this.disconnectedSymbol) {
       this.startDisconnectCancelRetry(this.disconnectedSymbol);
     }
 
-    // 启动 REST 轮询，确保断连期间仍能获取行情和账户数据（用于止损等逻辑）
+    // Start REST polling so market/account data still updates during disconnect.
     this.startRestPoll();
   }
 
   /**
-   * 重连成功时触发，停止断连保护并通知监听器
+   * Called on reconnect: stop disconnect protection and notify listeners.
    */
   private onReconnect(): void {
     this.logDebug("reconnect protection", {
@@ -1874,20 +1874,20 @@ export class StandxGateway {
       symbol: this.disconnectedSymbol,
     });
 
-    // 停止断连保护重试
+    // Stop disconnect-protection retries.
     this.stopDisconnectCancelRetry();
 
-    // 清空本地挂单状态（重连后需要重新同步）
+    // Clear local open-order cache (will be re-synced).
     this.openOrders.clear();
 
-    // 主动触发一次数据推送，确保上层 feedStatus 能更新
+    // Emit one immediate update so upstream feedStatus can refresh.
     this.emitOrders();
     this.emitAccountSnapshot();
 
-    // 主动刷新账户和挂单数据
+    // Actively refresh account and order data.
     void this.refreshAccountSnapshot();
 
-    // 获取当前订阅的 symbols 并刷新数据
+    // Refresh data for subscribed symbols.
     const subscribedSymbols = new Set<string>();
     for (const key of this.subscriptions) {
       const [, symbol] = key.split(":");
@@ -1897,14 +1897,14 @@ export class StandxGateway {
       subscribedSymbols.add(this.disconnectedSymbol);
     }
 
-    // 刷新每个 symbol 的数据
+    // Refresh each symbol.
     for (const symbol of subscribedSymbols) {
       void this.refreshOpenOrders(symbol);
       void this.fetchDepthSnapshot(symbol).catch((e) => this.logger("depthSnapshot", e));
       void this.fetchTickerSnapshot(symbol).catch((e) => this.logger("tickerSnapshot", e));
     }
 
-    // 触发重连事件
+    // Emit reconnect event.
     for (const listener of this.connectionListeners) {
       try {
         listener("reconnected", this.disconnectedSymbol ?? "");
@@ -1918,8 +1918,8 @@ export class StandxGateway {
   }
 
   /**
-   * 启动断连保护：持续重试取消所有挂单
-   * 即使网络不通也不停止重试
+   * Start disconnect protection: continuously retry cancel-all.
+   * Keep retrying even when network is unstable.
    */
   private startDisconnectCancelRetry(symbol: string): void {
     if (this.disconnectCancelRetryActive) return;
@@ -1941,11 +1941,11 @@ export class StandxGateway {
         this.logger("disconnectCancelRetry", error);
       }
 
-      // 如果仍在重试状态，继续下一次重试
+      // Continue next retry if still active.
       if (this.disconnectCancelRetryActive) {
         this.disconnectCancelRetryTimer = setTimeout(() => {
           void retryCancel();
-        }, 2000); // 每 2 秒重试一次
+        }, 2000); // Retry every 2 seconds.
       }
     };
 
@@ -1953,7 +1953,7 @@ export class StandxGateway {
   }
 
   /**
-   * 停止断连保护重试
+   * Stop disconnect-protection retries.
    */
   private stopDisconnectCancelRetry(): void {
     this.disconnectCancelRetryActive = false;

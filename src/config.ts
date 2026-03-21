@@ -186,7 +186,7 @@ export interface MakerConfig {
   maxLogEntries: number;
   maxCloseSlippagePct: number;
   priceTick: number;
-  /** 开仓挂单档位：1=买1/卖1，2=买2/卖2，以此类推。仅影响无仓位时的开仓挂单，平仓逻辑不受影响。默认1 */
+  /** Entry quoting level: 1=best bid/ask, 2=second level, etc. Only affects entry orders with no position. Default: 1. */
   entryDepthLevel: number;
 }
 
@@ -219,20 +219,20 @@ export interface MakerPointsConfig {
   enableBand0To10: boolean;
   enableBand10To30: boolean;
   enableBand30To100: boolean;
-  /** 0-10 bps 档位挂单数量，未配置时使用 perOrderAmount */
+  /** Order size for 0-10 bps band; falls back to perOrderAmount. */
   band0To10Amount: number;
-  /** 10-30 bps 档位挂单数量，未配置时使用 perOrderAmount */
+  /** Order size for 10-30 bps band; falls back to perOrderAmount. */
   band10To30Amount: number;
-  /** 30-100 bps 档位挂单数量，未配置时使用 perOrderAmount */
+  /** Order size for 30-100 bps band; falls back to perOrderAmount. */
   band30To100Amount: number;
   minRepriceBps: number;
-  /** 是否根据 Binance 盘口深度失衡自动取消单边挂单，默认 true */
+  /** Whether to auto-cancel one side when Binance depth is imbalanced. Default: true. */
   enableBinanceDepthCancel: boolean;
-  /** Binance 深度监控窗口（bps），默认 3 */
+  /** Binance depth monitoring window in bps. Default: 3. */
   binanceDepthWindowBps?: number;
-  /** Binance 深度失衡比例阈值，默认 9 */
+  /** Binance depth imbalance ratio threshold. Default: 9. */
   binanceDepthImbalanceRatio?: number;
-  /** 各档位最小深度阈值 (BTC)，盘口到目标价之间的挂单量低于此值则跳过该档位，默认 10 */
+  /** Minimum required depth per band (BTC). Skip that band if depth between top and target is below this value. Default: 10. */
   filterMinDepth: number;
 }
 
@@ -386,11 +386,11 @@ export interface LiquidityMakerConfig {
   maxLogEntries: number;
   maxCloseSlippagePct: number;
   priceTick: number;
-  /** 平仓挂单距成交价的档位数，默认1档 */
+  /** Number of ticks from fill price for close quotes. Default: 1. */
   closeTickOffset: number;
-  /** 偏移判断阈值倍数，当一侧深度超出另一侧此倍数时取消薄端订单，默认2 */
+  /** Depth imbalance multiplier: cancel thinner-side quotes when one side exceeds this ratio. Default: 2. */
   depthImbalanceRatio: number;
-  /** 开仓挂单档位：1=买1/卖1，2=买2/卖2，以此类推。仅影响无仓位时的开仓挂单，平仓逻辑不受影响。默认1 */
+  /** Entry quoting level: 1=best bid/ask, 2=second level, etc. Only affects entry orders with no position. Default: 1. */
   entryDepthLevel: number;
 }
 

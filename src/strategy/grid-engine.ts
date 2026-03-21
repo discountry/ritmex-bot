@@ -163,12 +163,12 @@ export class GridEngine {
     this.syncPrecision();
     this.running = this.configValid;
     if (!this.configValid) {
-      this.stopReason = "配置无效，已暂停网格";
+      this.stopReason = "Invalid configuration, grid paused";
       this.log("error", this.stopReason);
     }
     if (this.gridLevels.length === 0) {
       this.running = false;
-      this.stopReason = `网格价位计算失败，模式不支持或参数无效: ${String(this.config.gridMode)}`;
+      this.stopReason = `Failed to compute grid levels: unsupported mode or invalid params: ${String(this.config.gridMode)}`;
       this.log("error", this.stopReason);
       this.emitUpdate();
     }
@@ -230,13 +230,13 @@ export class GridEngine {
         if (updated) {
           this.log(
             "info",
-            `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
+            `Synced exchange precision: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
           );
           this.rebuildGridAfterPrecisionUpdate();
         }
       })
       .catch((error) => {
-        this.log("error", `同步精度失败: ${extractMessage(error)}`);
+        this.log("error", `Precision sync failed: ${extractMessage(error)}`);
         this.precisionSync = null;
         setTimeout(() => this.syncPrecision(), 2000);
       });
@@ -287,7 +287,7 @@ export class GridEngine {
         this.lastAbsPositionAmt = Math.abs(this.position.positionAmt);
         if (!this.feedArrived.account) {
           this.feedArrived.account = true;
-          log("info", "账户快照已同步");
+          log("info", "Account snapshot synced");
         }
         this.feedStatus.account = true;
         this.tryLockSidesOnce();
@@ -296,8 +296,8 @@ export class GridEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅账户失败: ${extractMessage(error)}`,
-        processFail: (error) => `账户推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => `Account subscription failed: ${extractMessage(error)}`,
+        processFail: (error) => `Account stream processing error: ${extractMessage(error)}`,
       }
     );
 
@@ -311,7 +311,7 @@ export class GridEngine {
         this.ordersVersion += 1;
         if (!this.feedArrived.orders) {
           this.feedArrived.orders = true;
-          log("info", "订单快照已同步");
+          log("info", "Order snapshot synced");
           // cancel all existing orders at startup per simplified rules
           this.startupCancelPromise = this.cancelAllExistingOrdersOnStartup();
         }
@@ -322,8 +322,8 @@ export class GridEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅订单失败: ${extractMessage(error)}`,
-        processFail: (error) => `订单推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => `Order subscription failed: ${extractMessage(error)}`,
+        processFail: (error) => `Order stream processing error: ${extractMessage(error)}`,
       }
     );
 
@@ -333,15 +333,15 @@ export class GridEngine {
         this.depthSnapshot = depth;
         if (!this.feedArrived.depth) {
           this.feedArrived.depth = true;
-          log("info", "盘口深度已同步");
+          log("info", "Orderbook depth synced");
         }
         this.feedStatus.depth = true;
         this.tryLockSidesOnce();
       },
       log,
       {
-        subscribeFail: (error) => `订阅深度失败: ${extractMessage(error)}`,
-        processFail: (error) => `深度推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => `Depth subscription failed: ${extractMessage(error)}`,
+        processFail: (error) => `Depth stream processing error: ${extractMessage(error)}`,
       }
     );
 
@@ -351,7 +351,7 @@ export class GridEngine {
         this.tickerSnapshot = ticker;
         if (!this.feedArrived.ticker) {
           this.feedArrived.ticker = true;
-          log("info", "行情推送已同步");
+          log("info", "Ticker stream synced");
         }
         this.feedStatus.ticker = true;
         this.tryLockSidesOnce();
@@ -360,8 +360,8 @@ export class GridEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅行情失败: ${extractMessage(error)}`,
-        processFail: (error) => `行情推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => `Ticker subscription failed: ${extractMessage(error)}`,
+        processFail: (error) => `Ticker stream processing error: ${extractMessage(error)}`,
       }
     );
   }
@@ -407,7 +407,7 @@ export class GridEngine {
       }
       await this.syncGridSimple(price);
     } catch (error) {
-      this.log("error", `网格轮询异常: ${extractMessage(error)}`);
+      this.log("error", `Grid loop error: ${extractMessage(error)}`);
     } finally {
       this.processing = false;
       this.emitUpdate();
@@ -431,7 +431,7 @@ export class GridEngine {
     const price = this.clampReferencePrice(Number(anchor));
     this.buildLevelMeta(price);
     this.sidesLocked = true;
-    this.log("info", "已根据锚定价一次性划分买卖档位");
+    this.log("info", "Buy/sell levels initialized once from anchor price");
   }
 
   private clampReferencePrice(price: number): number {
@@ -451,11 +451,11 @@ export class GridEngine {
     const lowerTrigger = this.config.lowerPrice * (1 - this.config.stopLossPct);
     const upperTrigger = this.config.upperPrice * (1 + this.config.stopLossPct);
     if (price <= lowerTrigger) {
-      this.stopReason = `价格跌破网格下边界 ${((1 - price / this.config.lowerPrice) * 100).toFixed(2)}%`;
+      this.stopReason = `Price dropped below lower grid boundary by ${((1 - price / this.config.lowerPrice) * 100).toFixed(2)}%`;
       return true;
     }
     if (price >= upperTrigger) {
-      this.stopReason = `价格突破网格上边界 ${((price / this.config.upperPrice - 1) * 100).toFixed(2)}%`;
+      this.stopReason = `Price broke above upper grid boundary by ${((price / this.config.upperPrice - 1) * 100).toFixed(2)}%`;
       return true;
     }
     return false;
@@ -463,13 +463,13 @@ export class GridEngine {
 
   private async haltGrid(_price: number): Promise<void> {
     if (!this.running) return;
-    const reason = this.stopReason ?? "触发网格止损";
-    this.log("warn", `${reason}，开始执行平仓与撤单`);
+    const reason = this.stopReason ?? "Grid stop-loss triggered";
+    this.log("warn", `${reason}, starting close and order cancellation`);
     try {
       await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-      this.log("order", "已撤销全部网格挂单");
+      this.log("order", "Cancelled all grid open orders");
     } catch (error) {
-      this.log("error", `撤销网格挂单失败: ${extractMessage(error)}`);
+      this.log("error", `Failed to cancel grid orders: ${extractMessage(error)}`);
     }
     await this.closePosition();
     this.desiredOrders = [];
@@ -480,7 +480,7 @@ export class GridEngine {
     this.awaitingByLevel.clear();
     this.closeKeyBySourceLevel.clear();
     this.immediateCloseToPlace = [];
-    // 仅在不需要自动重启时停止轮询定时器
+    // Stop polling only when auto-restart is disabled.
     if (!this.config.autoRestart) {
       this.stop();
     }
@@ -506,9 +506,9 @@ export class GridEngine {
         undefined,
         { qtyStep: this.config.qtyStep }
       );
-      this.log("order", `市价平仓 ${side} ${amount}`);
+      this.log("order", `Market close ${side} ${amount}`);
     } catch (error) {
-      this.log("error", `平仓失败: ${extractMessage(error)}`);
+      this.log("error", `Close position failed: ${extractMessage(error)}`);
     } finally {
       unlockOperating(this.locks, this.timers, this.pendings, "MARKET");
     }
@@ -525,19 +525,19 @@ export class GridEngine {
     if (price < lowerGuard || price > upperGuard) {
       return;
     }
-    this.log("info", "价格重新回到网格区间，恢复网格运行");
+    this.log("info", "Price returned to grid range, resuming grid");
     this.running = true;
     this.stopReason = null;
-    // 重新锚定买卖侧（可选：根据当前价格）
+    // Re-anchor buy/sell sides (optional: based on current price).
     this.sidesLocked = false;
     this.tryLockSidesOnce();
     this.start();
   }
 
   private async syncGridSimple(price: number): Promise<void> {
-    // 启动撤单未完成前，禁止铺网/下单，避免新单被启动撤单冲掉造成“消失待判定”
+    // Block new placements until startup cancel completes to avoid race conditions.
     if (!this.startupCancelDone) {
-      this.log("info", "启动撤单未完成，等待后再部网");
+      this.log("info", "Startup cancel not finished, waiting before placing grid");
       this.lastUpdated = this.now();
       return;
     }
@@ -598,11 +598,11 @@ export class GridEngine {
             intent: "EXIT",
             sourceLevel: source,
           });
-          this.log("order", `兜底：为已有仓位挂平仓单 ${exitSide} @ ${priceStr}`);
+          this.log("order", `Fallback: placed close order for existing position ${exitSide} @ ${priceStr}`);
         }
         return true;
       } catch (err) {
-        this.log("error", `兜底平仓单下单失败: ${extractMessage(err)}`);
+        this.log("error", `Fallback close-order placement failed: ${extractMessage(err)}`);
         return false;
       }
     };
@@ -802,11 +802,11 @@ export class GridEngine {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice >= price - halfTick) continue;
       if (this.awaitingByLevel.has(level)) {
-        this.log("info", `跳过 BUY @ ${this.formatPrice(levelPrice)}：等待上一笔消失判定`);
+        this.log("info", `Skip BUY @ ${this.formatPrice(levelPrice)}: waiting for previous disappearance classification`);
         continue;
       }
       if (this.pendingLongLevels.has(level)) {
-        this.log("info", `跳过 BUY @ ${this.formatPrice(levelPrice)}：等待对应平仓成交`);
+        this.log("info", `Skip BUY @ ${this.formatPrice(levelPrice)}: waiting for corresponding close fill`);
         continue; // wait until close filled
       }
       const priceStr = this.formatPrice(levelPrice);
@@ -838,11 +838,11 @@ export class GridEngine {
       const levelPrice = this.gridLevels[level]!;
       if (levelPrice <= price + halfTick) continue;
       if (this.awaitingByLevel.has(level)) {
-        this.log("info", `跳过 SELL @ ${this.formatPrice(levelPrice)}：等待上一笔消失判定`);
+        this.log("info", `Skip SELL @ ${this.formatPrice(levelPrice)}: waiting for previous disappearance classification`);
         continue;
       }
       if (this.pendingShortLevels.has(level)) {
-        this.log("info", `跳过 SELL @ ${this.formatPrice(levelPrice)}：等待对应平仓成交`);
+        this.log("info", `Skip SELL @ ${this.formatPrice(levelPrice)}: waiting for corresponding close fill`);
         continue;
       }
       const priceStr = this.formatPrice(levelPrice);
@@ -927,7 +927,7 @@ export class GridEngine {
       if (newOrdersPlaced >= MAX_NEW_ORDERS_PER_TICK) break;
       // Gate: avoid overlapping with coordinator pending LIMIT
       if (this.pendings["LIMIT"]) {
-        this.log("info", "存在未完成的 LIMIT 操作，本轮不再下新单");
+        this.log("info", "Pending LIMIT operation exists, skip new orders this tick");
         break;
       }
       // Gate: require either a new orders snapshot OR cooldown elapsed
@@ -936,12 +936,12 @@ export class GridEngine {
       const inCooldown = nowTs2 - this.lastLimitAttemptAt < GridEngine.LIMIT_COOLDOWN_MS;
       if (needSnapshotUpdated && inCooldown) {
         // both conditions unmet: still waiting for either snapshot or cooldown
-        this.log("info", "等待订单快照或冷却结束再下单");
+        this.log("info", "Waiting for order snapshot update or cooldown before placing");
         break;
       }
       // If a LIMIT operation is already pending (coordinator lock), skip issuing more this tick
       if (this.pendings["LIMIT"]) {
-        this.log("info", "存在未完成的 LIMIT 操作，本轮不再下新单");
+        this.log("info", "Pending LIMIT operation exists, skip new orders this tick");
         break;
       }
       const isClose = d.intent === "EXIT" || (d.side === "SELL" && this.isTargetOfPendingLong(d.level)) || (d.side === "BUY" && this.isTargetOfPendingShort(d.level));
@@ -958,7 +958,7 @@ export class GridEngine {
           const pendingEntrySameSide = this.estimatePendingEntryQty(d.side);
           this.log(
             "info",
-            `跳过开仓 ${d.side} @ ${d.price}：仓位容量已满 (abs=${absPos}, pending=${pendingEntrySameSide}, max=${this.config.maxPositionSize})`
+            `Skip entry ${d.side} @ ${d.price}: position capacity is full (abs=${absPos}, pending=${pendingEntrySameSide}, max=${this.config.maxPositionSize})`
           );
           continue;
         }
@@ -968,7 +968,7 @@ export class GridEngine {
       // Strong local dedupe: skip if any active LIMIT exists with same side+price
       const hasSameSidePrice = this.openOrders.some(o => this.isActiveLimitOrder(o) && o.side === d.side && this.normalizePrice(o.price) === d.price);
       if (hasSameSidePrice || (activeKeyCounts.get(key) ?? 0) >= 1) {
-        this.log("info", `已存在挂单，跳过 ${intent} ${d.side} @ ${d.price}`);
+        this.log("info", `Order already exists, skip ${intent} ${d.side} @ ${d.price}`);
         continue;
       }
       try {
@@ -1020,7 +1020,7 @@ export class GridEngine {
           );
         }
       } catch (error) {
-        this.log("error", `挂单失败 (${d.side} @ ${d.price}): ${extractMessage(error)}`);
+        this.log("error", `Place order failed (${d.side} @ ${d.price}): ${extractMessage(error)}`);
       }
     }
 
@@ -1120,7 +1120,7 @@ export class GridEngine {
       }
       return levels;
     }
-    this.log("error", `不支持的网格模式: ${String(this.config.gridMode)}`);
+    this.log("error", `Unsupported grid mode: ${String(this.config.gridMode)}`);
     return [];
   }
 
@@ -1240,9 +1240,9 @@ export class GridEngine {
       if (side === "BUY") this.buyLevelIndices.push(i);
       else this.sellLevelIndices.push(i);
     }
-    // 简化映射：
-    // - BUY 关单目标为其上方最近的 SELL 档
-    // - SELL 关单目标为其下方最近的 BUY 档
+    // Simplified mapping:
+    // - BUY close target is nearest SELL level above.
+    // - SELL close target is nearest BUY level below.
     for (const meta of this.levelMeta) {
       if (meta.side === "BUY") {
         for (let j = meta.index + 1; j < this.levelMeta.length; j += 1) {
@@ -1285,12 +1285,12 @@ export class GridEngine {
     this.startupCleaned = true;
     try {
       await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-      this.log("order", "启动阶段：已撤销全部历史挂单");
+      this.log("order", "Startup: cancelled all historical open orders");
     } catch (error) {
-      this.log("error", `启动撤单失败: ${extractMessage(error)}`);
+      this.log("error", `Startup cancel failed: ${extractMessage(error)}`);
     } finally {
       this.startupCancelDone = true;
-      // 清理本地判定/抑制状态，避免被启动撤单冲掉的新单在本地留下“待判定”残留
+      // Clear local suppression/classification states after startup cancellation.
       this.prevActiveIds.clear();
       this.orderIntentById.clear();
       this.awaitingByLevel.clear();
@@ -1351,10 +1351,10 @@ export class GridEngine {
           if (placed.orderId != null) {
             this.orderIntentById.set(String(placed.orderId), { side, price: priceStr, level: nearest, intent: "EXIT", sourceLevel: source });
           }
-          this.log("order", `为已有仓位挂出一次性平仓单 ${side} @ ${priceStr}`);
+          this.log("order", `Placed one-time close order for existing position ${side} @ ${priceStr}`);
         }
       } catch (error) {
-        this.log("error", `启动阶段挂减仓单失败: ${extractMessage(error)}`);
+        this.log("error", `Startup close-order placement failed: ${extractMessage(error)}`);
       }
     })();
   }

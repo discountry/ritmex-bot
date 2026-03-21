@@ -43,7 +43,7 @@ export interface TrendEngineSnapshot {
   lastPrice: number | null;
   sma30: number | null;
   bollingerBandwidth: number | null;
-  trend: "做多" | "做空" | "无信号";
+  trend: "long" | "short" | "none";
   position: PositionSnapshot;
   pnl: number;
   unrealized: number;
@@ -103,16 +103,16 @@ export class TrendEngine {
   private klineInsufficientLogged = false;
   private klineReadyLogged = false;
 
-  // 控制入场频率：同一分钟内最多入场一次
+  // Entry frequency guard: at most once per minute.
   private lastEntryMinute: number | null = null;
-  // 止损后冷却：止损发生后的 60s 内忽略 SMA 入场信号
+  // Cooldown after stop loss: ignore SMA entry for 60s.
   private lastStopLossAt: number | null = null;
   private lastBollingerBlockLogged = 0;
 
   private ordersSnapshotReady = false;
   private startupLogged = false;
   private entryPricePendingLogged = false;
-  // 记录最近一次止损下单尝试，用于抑制在无订单流识别时的重复挂单
+  // Track latest stop placement attempt to suppress duplicate submits.
   private lastStopAttempt: { side: "BUY" | "SELL" | null; price: number | null; at: number } = {
     side: null,
     price: null,
@@ -422,13 +422,13 @@ export class TrendEngine {
     this.entryPricePendingLogged = false;
     const now = Date.now();
     const currentMinute = Math.floor(now / 60_000);
-    // 止损后的冷却期：60s 内不允许基于 SMA 穿越再次入场
+    // Stop-loss cooldown: block SMA cross entries for 60s.
     if (this.lastStopLossAt != null && now - this.lastStopLossAt < 60_000) {
       const remaining = Math.max(0, 60_000 - (now - this.lastStopLossAt));
       this.tradeLog.push("info", t("log.trend.stopCooldown", { seconds: (remaining / 1000).toFixed(0) }));
       return;
     }
-    // 同一分钟只允许一次入场
+    // Allow only one entry in the same minute.
     if (this.lastEntryMinute != null && this.lastEntryMinute === currentMinute) {
       this.tradeLog.push("info", t("log.trend.alreadyEntered"));
       return;
@@ -458,14 +458,14 @@ export class TrendEngine {
       try {
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
         this.cancelAllRequested = true;
-        // 清空本地挂单与撤单队列，避免在下一轮中基于过期快照继续操作
+        // Clear local order/cancel queues to avoid acting on stale snapshots.
         this.pendingCancelOrders.clear();
         this.openOrders = [];
       } catch (err) {
         if (isUnknownOrderError(err)) {
           this.tradeLog.push("order", t("log.trend.cancelMissing"));
           this.cancelAllRequested = true;
-          // 与成功撤单路径保持一致，立即清空本地缓存，等待订单流推送重建
+          // Keep behavior aligned with successful cancel path: clear local cache immediately.
           this.pendingCancelOrders.clear();
           this.openOrders = [];
         } else {
@@ -556,8 +556,8 @@ export class TrendEngine {
       this.config.trailingProfit
     );
 
-    // 对于部分交易所（如 Lighter），触发类订单在订单流中可能显示为 LIMIT，但会带有 stopPrice。
-    // 因此将带有有效 stopPrice 的同向订单也视为当前止损单。
+    // On some venues (e.g. Lighter), trigger orders may appear as LIMIT with stopPrice.
+    // Treat same-side orders with valid stopPrice as the active stop order.
     const currentStop = this.openOrders.find((o) => {
       const hasStopPrice = Number.isFinite(Number(o.stopPrice)) && Number(o.stopPrice) > 0;
       return o.side === stopSide && (o.type === "STOP_MARKET" || hasStopPrice);
@@ -566,7 +566,7 @@ export class TrendEngine {
       (o) => o.type === "TRAILING_STOP_MARKET" && o.side === stopSide
     );
 
-    // 步进式锁盈移动：在动态止盈生效前，盈利每增加一个 profitLockOffsetUsd 就上移/下移一次止损
+    // Stepwise profit lock: move stop each time profit increases by profitLockOffsetUsd.
     {
       const tick = Math.max(1e-9, this.config.priceTick);
       const qtyAbs = Math.abs(position.positionAmt);
@@ -578,13 +578,13 @@ export class TrendEngine {
         ? trailingActivateFromOrder
         : activationPrice;
 
-      // 判断动态止盈是否已生效：多头 price >= activate；空头 price <= activate
+      // Check trailing activation: long price >= activate; short price <= activate.
       const trailingActivated =
         direction === "long"
           ? Number.isFinite(trailingActivate) && price >= trailingActivate - tick
           : Number.isFinite(trailingActivate) && price <= trailingActivate + tick;
 
-      // 仅在动态止盈未生效时执行步进移动
+      // Apply stepwise stop movement only before trailing stop is active.
       if (!trailingActivated && qtyAbs > 0 && stepUsd > 0) {
         const basisProfit = Number.isFinite(unrealized ?? pnl) ? Math.max(pnl, unrealized ?? pnl) : pnl;
         if (basisProfit >= triggerUsd) {
@@ -596,19 +596,19 @@ export class TrendEngine {
             : position.entryPrice - steps * stepPx;
           let targetStop = Number(formatPriceToString(rawTarget, Math.max(0, Math.floor(Math.log10(1 / this.config.priceTick)))));
 
-          // 不允许下一次移动超过动态止盈订单的激活价
+          // Do not move beyond trailing activation price.
           if (Number.isFinite(trailingActivate)) {
             if (stopSide === "SELL" && targetStop >= trailingActivate - tick) {
-              // 达到或超过激活价，停止移动
+              // Reached activation boundary; stop moving further.
               targetStop = Math.min(targetStop, trailingActivate - tick);
-              // 若已经无法进一步改善，则不再尝试
+              // Skip if no further improvement is possible.
               const existingRaw = Number(currentStop?.stopPrice);
               const existingPrice = Number.isFinite(existingRaw) ? existingRaw : NaN;
               const canImprove =
                 !Number.isFinite(existingPrice) ||
                 (stopSide === "SELL" && targetStop >= existingPrice + tick);
               if (!canImprove) {
-                // 直接跳过
+                // Skip directly.
                 // no-op
               } else if (currentStop) {
                 await this.tryReplaceStop(stopSide, currentStop, targetStop, price);
@@ -630,7 +630,7 @@ export class TrendEngine {
                 await this.tryPlaceStopLoss(stopSide, targetStop, price);
               }
             } else {
-              // 正常范围内，且必须与当前价方向不冲突
+              // Normal range; must not conflict with current price direction.
               const validForSide =
                 (stopSide === "SELL" && targetStop <= price - tick) ||
                 (stopSide === "BUY" && targetStop >= price + tick);
@@ -651,7 +651,7 @@ export class TrendEngine {
               }
             }
           } else {
-            // 无法取得动态止盈激活价时，仅按普通步进逻辑
+            // If trailing activation is unavailable, use normal step logic only.
             const validForSide =
               (stopSide === "SELL" && targetStop <= price - tick) ||
               (stopSide === "BUY" && targetStop >= price + tick);
@@ -711,7 +711,7 @@ export class TrendEngine {
           } catch (err) {
             if (isUnknownOrderError(err)) {
               this.tradeLog.push("order", t("log.trend.stopPreCancelMissing"));
-                // 清理本地缓存，避免重复对同一订单执行撤单
+                // Clean local cache to avoid repeated cancel attempts.
                 for (const id of orderIdSet) {
                   this.pendingCancelOrders.delete(id);
                 }
@@ -721,7 +721,7 @@ export class TrendEngine {
             }
           }
         }
-        // 价格操纵保护：仅当平仓方向价格与标记价格偏离在阈值内才执行市价平仓
+        // Price-deviation guard: only market-close within configured mark deviation.
         const mark = getPosition(this.accountSnapshot, this.config.symbol).markPrice;
         const limitPct = this.config.maxCloseSlippagePct;
         const sideIsSell = direction === "long";
@@ -766,7 +766,7 @@ export class TrendEngine {
         );
         result.closed = true;
         this.tradeLog.push("close", t("log.trend.stopClose", { side: direction === "long" ? "SELL" : "BUY" }));
-        // 记录止损时间以便短期内抑制再次入场
+        // Record stop-loss timestamp to suppress immediate re-entry.
         this.lastStopLossAt = Date.now();
       } catch (err) {
         if (isUnknownOrderError(err)) {
@@ -787,7 +787,7 @@ export class TrendEngine {
     stopPrice: number,
     lastPrice: number
   ): Promise<void> {
-    // 短期去抖：在订单流无法正确识别止损单时，避免在极短时间内重复提交同价同向止损
+    // Short debounce: avoid duplicate same-price/same-side stop submits.
     const tick = Math.max(1e-9, this.config.priceTick);
     const now = Date.now();
     if (
@@ -796,7 +796,7 @@ export class TrendEngine {
       Math.abs(stopPrice - Number(this.lastStopAttempt.price)) < tick &&
       now - this.lastStopAttempt.at < 5000
     ) {
-      // 5 秒内同向同价重复尝试，直接跳过
+      // Skip duplicate same-side/same-price attempt within 5 seconds.
       return;
     }
     try {
@@ -827,7 +827,7 @@ export class TrendEngine {
       this.lastStopAttempt = { side, price: stopPrice, at: Date.now() };
     } catch (err) {
       this.tradeLog.push("error", t("log.trend.placeStopFail", { error: String(err) }));
-      // 记录尝试以避免在错误被抛回时立即再次重复尝试
+      // Record attempt to prevent immediate retrigger after error.
       this.lastStopAttempt = { side, price: stopPrice, at: Date.now() };
     }
   }
@@ -838,12 +838,12 @@ export class TrendEngine {
     nextStopPrice: number,
     lastPrice: number
   ): Promise<void> {
-    // 预校验：SELL 止损价必须低于当前价；BUY 止损价必须高于当前价
+    // Pre-check: SELL stop must be below current price; BUY stop must be above.
     const invalidForSide =
       (side === "SELL" && nextStopPrice >= lastPrice) ||
       (side === "BUY" && nextStopPrice <= lastPrice);
     if (invalidForSide) {
-      // 目标止损价与当前价冲突时跳过移动，避免反复撤单/重下导致的循环
+      // Skip when target stop conflicts with market to avoid cancel/recreate loops.
       return;
     }
     const existingStopPrice = Number(currentOrder.stopPrice);
@@ -852,13 +852,13 @@ export class TrendEngine {
     } catch (err) {
       if (isUnknownOrderError(err)) {
         this.tradeLog.push("order", t("log.trend.stopMissingSkip"));
-        // 订单已不存在，移除本地记录，防止后续重复匹配
+        // Order no longer exists; remove local record to avoid repeated matches.
         this.openOrders = this.openOrders.filter((o) => o.orderId !== currentOrder.orderId);
       } else {
         this.tradeLog.push("error", t("log.trend.cancelStopFail", { error: String(err) }));
       }
     }
-    // 仅在成功创建新止损单后记录“移动止损”日志
+    // Log stop movement only after new stop order is placed successfully.
     try {
       const position = getPosition(this.accountSnapshot, this.config.symbol);
       const quantity = Math.abs(position.positionAmt);
@@ -897,7 +897,7 @@ export class TrendEngine {
       }
     } catch (err) {
       this.tradeLog.push("error", t("log.trend.moveStopFail", { error: String(err) }));
-      // 回滚策略：尝试用原价恢复止损，以避免出现短时间内无止损保护
+      // Rollback strategy: restore original stop to avoid unprotected gap.
       try {
         const position = getPosition(this.accountSnapshot, this.config.symbol);
         const quantity = Math.abs(position.positionAmt);
@@ -1029,12 +1029,12 @@ export class TrendEngine {
     const price = this.tickerSnapshot ? Number(this.tickerSnapshot.lastPrice) : null;
     const sma30 = this.lastSma30;
     const trend = price == null || sma30 == null
-      ? "无信号"
+      ? "none"
       : price > sma30
-      ? "做多"
+      ? "long"
       : price < sma30
-      ? "做空"
-      : "无信号";
+      ? "short"
+      : "none";
     const pnl = price != null ? computePositionPnl(position, price, price) : 0;
     return {
       ready: this.isReady(),

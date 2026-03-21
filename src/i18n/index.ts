@@ -1,13 +1,13 @@
 export type Language = "zh" | "en";
 
 const normalizeLanguage = (value: string | undefined): Language => {
-  if (!value) return "zh";
+  if (!value) return "en";
   const normalized = value.trim().toLowerCase();
   if (normalized === "en" || normalized.startsWith("en-") || normalized.startsWith("en_")) return "en";
   if (normalized === "zh" || normalized.startsWith("zh")) return "zh";
   if (normalized === "english") return "en";
   if (normalized === "chinese") return "zh";
-  return "zh";
+  return "en";
 };
 
 export const language: Language = normalizeLanguage(process.env.LANG);

@@ -68,18 +68,18 @@ export function formatTokenExpiryMessage(status: TokenExpiryStatus): string | nu
   if (!status.expired) {
     if (status.remainingMs != null && status.remainingMs < 3600_000) {
       const mins = Math.ceil(status.remainingMs / 60_000);
-      return `StandX Token 将在 ${mins} 分钟后过期`;
+      return `StandX Token expires in ${mins} minute(s)`;
     }
     return null;
   }
 
   switch (status.state) {
     case "expired":
-      return "StandX Token 已过期，正在取消所有挂单";
+      return "StandX Token expired, cancelling all open orders";
     case "expired_with_position":
-      return "StandX Token 已过期，仅保留平仓/止损逻辑";
+      return "StandX Token expired, only close/stop-loss logic remains active";
     case "silent":
-      return "StandX Token 已过期，进入静默数据接收模式";
+      return "StandX Token expired, entering passive data-receive mode";
     default:
       return null;
   }

@@ -13,9 +13,9 @@ export interface BaseOrderIntent {
 
 export interface LimitOrderIntent extends BaseOrderIntent {
   price: number;
-  // StandX TPSL 参数
-  slPrice?: number; // 止损价格
-  tpPrice?: number; // 止盈价格
+  // StandX TPSL parameters
+  slPrice?: number; // stop-loss price
+  tpPrice?: number; // take-profit price
 }
 
 export interface MarketOrderIntent extends BaseOrderIntent {

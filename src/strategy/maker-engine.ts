@@ -31,7 +31,7 @@ import { t } from "../i18n";
 
 interface DesiredOrder {
   side: "BUY" | "SELL";
-  price: string; // 改为字符串价格
+  price: string; // Use string price to avoid precision drift.
   amount: number;
   reduceOnly: boolean;
 }
@@ -302,13 +302,13 @@ export class MakerEngine {
         return;
       }
 
-      // 直接使用orderbook价格，格式化为字符串避免精度问题
+      // Use orderbook prices directly and stringify to avoid precision issues.
       const priceDecimals = this.getPriceDecimals();
-      // 平仓价格始终使用买1/卖1
+      // Close prices always use best bid/ask.
       const closeBidPrice = formatPriceToString(topBid, priceDecimals);
       const closeAskPrice = formatPriceToString(topAsk, priceDecimals);
 
-      // 开仓价格根据 entryDepthLevel 使用指定档位
+      // Entry prices use configured entryDepthLevel.
       const entryLevel = this.config.entryDepthLevel ?? 1;
       const { bidAtLevel: entryBid, askAtLevel: entryAsk } = getPricesAtLevel(depth, entryLevel);
       const entryBidBase = entryBid ?? topBid;
@@ -444,7 +444,7 @@ export class MakerEngine {
           this.timers,
           this.pending,
           target.side,
-          target.price, // 已经是字符串价格
+          target.price, // Already a normalized string price.
           target.amount,
           (type, detail) => this.tradeLog.push(type, detail),
           target.reduceOnly,
@@ -492,7 +492,7 @@ export class MakerEngine {
     const triggerStop = shouldStopLoss(position, bidPrice, askPrice, this.config.lossLimit);
 
     if (triggerStop) {
-      // 价格操纵保护：只有平仓方向价格与标记价格在阈值内才允许市价平仓
+      // Price-deviation guard: only allow market close within mark-price threshold.
       const closeSideIsSell = position.positionAmt > 0;
       const closeSidePrice = closeSideIsSell ? bidPrice : askPrice;
       this.tradeLog.push(
@@ -541,7 +541,7 @@ export class MakerEngine {
         this.config.symbol,
         order,
         () => {
-          // 成功撤销不记录日志，保持现有行为
+          // Keep current behavior: no log on successful cancel.
         },
         () => {
           this.tradeLog.push("order", t("log.maker.orderMissing"));

@@ -56,10 +56,10 @@ export function isNearlyZero(value: number, epsilon = 1e-5): boolean {
 }
 
 /**
- * 将价格格式化为指定小数位数的字符串
- * @param price 原始价格
- * @param decimals 小数位数
- * @returns 格式化后的价格字符串
+ * Format price to a fixed decimal string.
+ * @param price raw price
+ * @param decimals decimal places
+ * @returns formatted price string
  */
 export function formatPriceToString(price: number, decimals: number): string {
   if (!Number.isFinite(price)) return "0";

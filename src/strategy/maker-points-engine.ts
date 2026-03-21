@@ -91,11 +91,11 @@ type MakerPointsListener = (snapshot: MakerPointsSnapshot) => void;
 const EPS = 1e-5;
 const INSUFFICIENT_BALANCE_COOLDOWN_MS = 15_000;
 const STOP_LOSS_COOLDOWN_MS = 5_000;
-const STOP_LOSS_CHECK_INTERVAL_MS = 250; // 止损检查最大间隔
-const STOP_LOSS_RETRY_INTERVAL_MS = 500; // 止损失败后重试间隔
-const DATA_STALE_THRESHOLD_MS = 5_000; // 数据过时阈值（5秒）
-const DEFENSE_MODE_CHECK_INTERVAL_MS = 1000; // 防御模式检查间隔
-const ACCOUNT_DATA_STALE_THRESHOLD_MS = 20_000; // 账户数据长期无更新阈值（会先尝试通过 REST 补拉验证，不直接进入防御模式）
+const STOP_LOSS_CHECK_INTERVAL_MS = 250; // Max stop-loss check interval
+const STOP_LOSS_RETRY_INTERVAL_MS = 500; // Retry interval after stop-loss failure
+const DATA_STALE_THRESHOLD_MS = 5_000; // Data staleness threshold (5s)
+const DEFENSE_MODE_CHECK_INTERVAL_MS = 1000; // Defense-mode check interval
+const ACCOUNT_DATA_STALE_THRESHOLD_MS = 20_000; // Account-data stale threshold (REST probe first, no immediate defense mode)
 const STANDX_REST_ERROR_DEFENSE_THRESHOLD = 3;
 const STANDX_MARGIN_MODE_CHECK_INTERVAL_MS = 500;
 const STANDX_MARGIN_MODE_MAX_ATTEMPTS = 10;
@@ -139,7 +139,7 @@ export class MakerPointsEngine {
   private lastSkipSell = false;
   private lastQuoteBid1: number | null = null;
   private lastQuoteAsk1: number | null = null;
-  // 跟踪各档位深度是否足够的状态 (按 bps 值索引)
+  // Track whether depth is sufficient per band (indexed by bps).
   private lastDepthOkStatus: Record<number, { buy: boolean; sell: boolean }> = {};
 
   private readinessLogged = {
@@ -168,25 +168,25 @@ export class MakerPointsEngine {
   private lastPositionAmt = 0;
   private lastPositionSide: "LONG" | "SHORT" | "FLAT" = "FLAT";
 
-  // 连接保护相关状态（用于断连/重连事件处理）
+  // Connection-protection state (for disconnect/reconnect handling).
   private _standxConnectionState: "connected" | "disconnected" = "connected";
   private reconnectResetPending = false;
   private lastRepriceQueryTime = 0;
-  private readonly repriceQueryIntervalMs = 3000; // 最小查询间隔
+  private readonly repriceQueryIntervalMs = 3000; // Minimum query interval.
 
-  // ========== 数据过时防御模式 ==========
-  // 各数据源最后更新时间
+  // ========== Data-staleness defense mode ==========
+  // Last update timestamp per data source
   private lastStandxDepthTime = 0;
   private lastStandxAccountTime = 0;
   private lastBinanceDepthTime = 0;
   private accountStaleRestProbeInFlight: Promise<void> | null = null;
   private accountStaleRestProbeLastAttempt = 0;
   private accountStaleRestProbeConsecutiveFailures = 0;
-  // 防御模式状态
+  // Defense-mode state
   private defenseMode = false;
   private defenseModeNotified = false;
   private defenseModeTimer: ReturnType<typeof setInterval> | null = null;
-  // 防御模式下的 REST 轮询定时器
+  // REST polling timer during defense mode
   private defenseRestPollTimer: ReturnType<typeof setTimeout> | null = null;
   private defenseRestPollActive = false;
   private standxRestConsecutiveErrors = 0;
@@ -214,7 +214,7 @@ export class MakerPointsEngine {
         : 3,
       speedMs: 100,
       logger: (context, error) => {
-        this.tradeLog.push("warn", `Binance ${context} 异常: ${extractMessage(error)}`);
+        this.tradeLog.push("warn", `Binance ${context} error: ${extractMessage(error)}`);
       },
     });
     this.binanceDepth.onUpdate(() => {
@@ -222,17 +222,17 @@ export class MakerPointsEngine {
       this.lastBinanceDepthTime = Date.now();
       this.emitUpdate();
     });
-    // 监听 Binance 连接状态变化
+    // Listen for Binance connection status changes.
     this.binanceDepth.onConnectionChange((state) => {
       if (state === "disconnected") {
         this.feedStatus.binance = false;
-        this.tradeLog.push("warn", "Binance 深度连接断开");
+        this.tradeLog.push("warn", "Binance depth connection disconnected");
       } else if (state === "stale") {
         this.feedStatus.binance = false;
-        this.tradeLog.push("warn", "Binance 深度数据过时");
+        this.tradeLog.push("warn", "Binance depth data is stale");
       } else if (state === "connected") {
         this.feedStatus.binance = true;
-        this.tradeLog.push("info", "Binance 深度连接恢复");
+        this.tradeLog.push("info", "Binance depth connection restored");
       }
       this.emitUpdate();
     });
@@ -242,7 +242,7 @@ export class MakerPointsEngine {
 
   start(): void {
     if (this.timer) return;
-    // 初始化数据时间戳
+    // Initialize data timestamps.
     const now = Date.now();
     this.lastStandxDepthTime = now;
     this.lastStandxAccountTime = now;
@@ -256,7 +256,7 @@ export class MakerPointsEngine {
         void this.checkStopLoss();
       }, Math.min(STOP_LOSS_CHECK_INTERVAL_MS, this.config.refreshIntervalMs));
     }
-    // 启动防御模式检测定时器
+    // Start defense-mode detection timer.
     if (!this.defenseModeTimer) {
       this.defenseModeTimer = setInterval(() => {
         this.checkDataStaleAndDefense();
@@ -372,13 +372,13 @@ export class MakerPointsEngine {
       }
     );
 
-    // 注册连接事件监听（如果交易所支持）
+    // Register connection-event listener (if exchange supports it).
     this.setupConnectionProtection();
   }
 
   private applyAccountSnapshot(snapshot: AsterAccountSnapshot): void {
     this.accountSnapshot = snapshot;
-    // StandX: WS 推送使用本地接收时间戳；REST 快照使用响应里的 time 字段映射到 snapshot.updateTime
+    // StandX: WS updates use local receive timestamp; REST snapshots map `time` to `snapshot.updateTime`.
     this.lastStandxAccountTime =
       this.exchange.id === "standx" && Number.isFinite(snapshot.updateTime) && snapshot.updateTime > 0
         ? snapshot.updateTime
@@ -422,8 +422,8 @@ export class MakerPointsEngine {
   }
 
   /**
-   * 设置连接保护机制
-   * 监听断连/重连事件，实现保护逻辑
+   * Configure connection protection.
+   * Listen to disconnect/reconnect events and apply protection logic.
    */
   private setupConnectionProtection(): void {
     if (!this.exchange.onConnectionEvent) return;
@@ -470,76 +470,76 @@ export class MakerPointsEngine {
   }
 
   /**
-   * 处理断连事件
+   * Handle disconnect events.
    */
   private handleDisconnect(symbol: string): void {
     this._standxConnectionState = "disconnected";
-    this.tradeLog.push("warn", `WebSocket 断连 (${symbol})，启动断连保护`);
+    this.tradeLog.push("warn", `WebSocket disconnected (${symbol}), starting disconnect protection`);
     this.notify({
       type: "token_expired",
       level: "warn",
       symbol: this.config.symbol,
-      title: "连接断开",
-      message: "WebSocket 断连，正在尝试取消所有挂单",
+      title: "Connection lost",
+      message: "WebSocket disconnected, attempting to cancel all open orders",
       details: { symbol },
     });
   }
 
   /**
-   * 处理重连事件
-   * 重连后需要重新查询挂单并取消所有挂单
+   * Handle reconnect events.
+   * After reconnect, re-query open orders and cancel all of them.
    */
   private async handleReconnect(symbol: string): Promise<void> {
     this._standxConnectionState = "connected";
     this.reconnectResetPending = true;
-    this.tradeLog.push("info", `WebSocket 重连成功 (${symbol})，开始重连保护流程`);
+    this.tradeLog.push("info", `WebSocket reconnected (${symbol}), starting reconnect protection flow`);
 
     try {
-      // 查询真实挂单状态
+      // Query real open-order state.
       if (this.exchange.queryOpenOrders) {
         const realOrders = await this.exchange.queryOpenOrders();
-        this.tradeLog.push("info", `重连后查询到 ${realOrders.length} 个挂单`);
+        this.tradeLog.push("info", `Found ${realOrders.length} open orders after reconnect`);
 
         if (realOrders.length > 0) {
-          // 取消所有挂单
+          // Cancel all open orders.
           if (this.exchange.forceCancelAllOrders) {
             const success = await this.exchange.forceCancelAllOrders();
             if (success) {
-              this.tradeLog.push("order", "重连保护：已取消所有挂单");
+              this.tradeLog.push("order", "Reconnect protection: cancelled all open orders");
             } else {
-              this.tradeLog.push("warn", "重连保护：取消挂单未完全成功，将在下次循环重试");
+              this.tradeLog.push("warn", "Reconnect protection: cancel-all incomplete, will retry next cycle");
             }
           } else {
             await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-            this.tradeLog.push("order", "重连保护：已取消所有挂单");
+            this.tradeLog.push("order", "Reconnect protection: cancelled all open orders");
           }
         }
       }
 
-      // 重置本地挂单状态
+      // Reset local open-order state.
       this.openOrders = [];
       this.pendingCancelOrders.clear();
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
 
-      // 重置 reprice 基准，强制下一次重新计算
+      // Reset reprice baseline and force next recomputation.
       this.lastQuoteBid1 = null;
       this.lastQuoteAsk1 = null;
       this.desiredOrders = [];
       this.lastDesiredSummary = null;
 
-      // 标记启动重置需要重新执行
+      // Mark startup reset to run again.
       this.initialOrderResetDone = false;
 
       this.notify({
         type: "position_opened",
         level: "info",
         symbol: this.config.symbol,
-        title: "重连完成",
-        message: "WebSocket 重连成功，已清理挂单状态",
+        title: "Reconnect complete",
+        message: "WebSocket reconnected and order state cleaned up",
         details: { symbol },
       });
     } catch (error) {
-      this.tradeLog.push("error", `重连保护流程失败: ${extractMessage(error)}`);
+      this.tradeLog.push("error", `Reconnect protection flow failed: ${extractMessage(error)}`);
     } finally {
       this.reconnectResetPending = false;
     }
@@ -568,11 +568,11 @@ export class MakerPointsEngine {
 
   private async tick(): Promise<void> {
     if (this.processing) return;
-    // 重连处理期间不执行主循环，避免状态竞争
+    // Skip main loop during reconnect handling to avoid state races.
     if (this.reconnectResetPending) return;
-    // 止损执行期间不执行主循环，避免订单冲突
+    // Skip main loop while stop-loss execution is running to avoid order conflicts.
     if (this.stopLossProcessing) return;
-    // 防御模式下不执行正常挂单逻辑
+    // Do not run normal quoting logic in defense mode.
     if (this.defenseMode) return;
     this.processing = true;
     let hadRateLimit = false;
@@ -664,7 +664,7 @@ export class MakerPointsEngine {
         absPosition >= closeThreshold - EPS);
       const prevCloseOnly = this.lastCloseOnly;
       if (closeOnly !== prevCloseOnly) {
-        this.tradeLog.push("info", closeOnly ? "进入平仓模式，仅挂 reduce-only" : "退出平仓模式");
+        this.tradeLog.push("info", closeOnly ? "Entering close-only mode, reduce-only orders only" : "Exiting close-only mode");
         this.lastCloseOnly = closeOnly;
       }
 
@@ -679,9 +679,9 @@ export class MakerPointsEngine {
       if (skipBuy !== prevSkipBuy || skipSell !== prevSkipSell) {
         if (skipBuy || skipSell) {
           const summary = `${skipBuy ? "BUY" : ""}${skipBuy && skipSell ? "/" : ""}${skipSell ? "SELL" : ""}`;
-          this.tradeLog.push("info", `Binance 深度失衡，暂停 ${summary} 挂单`);
+          this.tradeLog.push("info", `Binance depth imbalance, pausing ${summary} quotes`);
         } else {
-          this.tradeLog.push("info", "Binance 深度恢复，继续挂单");
+          this.tradeLog.push("info", "Binance depth recovered, resuming quotes");
         }
         this.lastSkipBuy = skipBuy;
         this.lastSkipSell = skipSell;
@@ -730,9 +730,9 @@ export class MakerPointsEngine {
       if (isRateLimitError(error)) {
         hadRateLimit = true;
         this.rateLimit.registerRateLimit("maker-points");
-        this.tradeLog.push("warn", `限频触发，暂停挂单: ${extractMessage(error)}`);
+        this.tradeLog.push("warn", `Rate limit triggered, pausing quotes: ${extractMessage(error)}`);
       } else {
-        this.tradeLog.push("error", `MakerPoints 主循环异常: ${extractMessage(error)}`);
+        this.tradeLog.push("error", `MakerPoints main loop error: ${extractMessage(error)}`);
       }
       this.emitUpdate();
     } finally {
@@ -772,7 +772,7 @@ export class MakerPointsEngine {
       const amount = getAmountForBps(bps);
       if (!Number.isFinite(amount) || amount <= 0) continue;
 
-      // 所有档位都检查深度
+      // Check depth for all bands.
       const shouldCheckDepth = minDepth > 0;
 
       if (!skipBuy) {
@@ -833,8 +833,8 @@ export class MakerPointsEngine {
   }
 
   /**
-   * 检查各档位的深度状态是否发生变化
-   * 当深度从足够变为不足，或从不足变为足够时，需要触发重新计算
+   * Check whether depth sufficiency changed across bands.
+   * Recompute when depth flips between sufficient and insufficient.
    */
   private checkDepthStatusChanged(
     depth: AsterDepth | null,
@@ -845,7 +845,7 @@ export class MakerPointsEngine {
     if (minDepth <= 0) return false;
     const priceDecimals = this.getPriceDecimals();
 
-    // 获取启用的所有档位
+    // Get all enabled bands.
     const targets = buildBpsTargets({
       band0To10: this.config.enableBand0To10,
       band10To30: this.config.enableBand10To30,
@@ -877,7 +877,8 @@ export class MakerPointsEngine {
   }
 
   /**
-   * 当深度从“满足阈值”切换到“不满足阈值”时，立即触发一次主循环，优先撤销不再安全的挂单。
+   * When depth flips from above-threshold to below-threshold, trigger an immediate cycle
+   * to cancel now-unsafe quotes first.
    */
   private shouldTriggerImmediateDepthProtection(depth: AsterDepth | null): boolean {
     if (!depth) return false;
@@ -915,7 +916,8 @@ export class MakerPointsEngine {
   }
 
   /**
-   * 当盘口相对上次报价偏移超过 minRepriceBps 时，立即触发一次主循环，优先撤销旧报价。
+   * When book movement exceeds `minRepriceBps` versus last quote baseline,
+   * trigger an immediate cycle to cancel stale quotes.
    */
   private shouldTriggerImmediateReprice(depth: AsterDepth | null): boolean {
     if (!depth) return false;
@@ -986,32 +988,32 @@ export class MakerPointsEngine {
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
       this.openOrders = [];
       this.emitUpdate();
-      this.tradeLog.push("order", "启动时清理历史挂单");
+      this.tradeLog.push("order", "Startup: cleaned historical open orders");
       this.initialOrderResetDone = true;
       return true;
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "历史挂单已消失，跳过启动清理");
+        this.tradeLog.push("order", "Historical orders already gone, skipping startup cleanup");
         this.initialOrderResetDone = true;
         this.openOrders = [];
         this.emitUpdate();
         return true;
       }
-      this.tradeLog.push("error", `启动撤单失败: ${String(error)}`);
+      this.tradeLog.push("error", `Startup cancel failed: ${String(error)}`);
       return false;
     }
   }
 
   private async syncOrders(targets: DesiredOrder[], _closeOnly: boolean): Promise<void> {
-    // 止损执行期间不进行挂单操作，避免订单冲突
+    // Skip quoting while stop-loss execution runs to avoid conflicts.
     if (this.stopLossProcessing) return;
-    // 重连处理期间不进行挂单操作
+    // Skip quoting during reconnect handling.
     if (this.reconnectResetPending) return;
 
-    // 价格变化保护：如果需要 reprice 且距上次查询已过足够时间，先查询真实挂单
+    // Price-change protection: if reprice is needed and query interval elapsed, verify real open orders first.
     const shouldVerifyOrders = await this.verifyOrdersIfNeeded();
     if (shouldVerifyOrders) {
-      // 如果发现有未预期的挂单，先取消所有挂单
+      // If unexpected open orders are found, cancel all first.
       return;
     }
 
@@ -1029,16 +1031,16 @@ export class MakerPointsEngine {
         () => {
           this.tradeLog.push(
             "order",
-            `撤销不匹配订单 ${order.side} @ ${order.price} reduceOnly=${order.reduceOnly}`
+            `Cancelled mismatched order ${order.side} @ ${order.price} reduceOnly=${order.reduceOnly}`
           );
         },
         () => {
-          this.tradeLog.push("order", "撤销时发现订单已被成交/取消，忽略");
+          this.tradeLog.push("order", "Order already filled/cancelled during cancel, ignoring");
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", `Cancel order failed: ${String(error)}`);
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
@@ -1054,7 +1056,7 @@ export class MakerPointsEngine {
       if (!target) continue;
       if (target.amount < EPS) continue;
       try {
-        // reduce-only 订单不能设置 tp/sl，仅开仓单设置止损
+        // Reduce-only orders cannot set tp/sl; only entry orders set stop-loss.
         const priceNum = Number(target.price);
         const slPrice = target.reduceOnly
           ? undefined
@@ -1087,27 +1089,27 @@ export class MakerPointsEngine {
           break;
         }
         if (isPrecisionError(error)) {
-          this.tradeLog.push("warn", `检测到精度错误，重新同步: ${extractMessage(error)}`);
+          this.tradeLog.push("warn", `Precision error detected, resyncing: ${extractMessage(error)}`);
           this.syncPrecision(true);
         }
         this.tradeLog.push(
           "error",
-          `挂单失败 ${target.side} @ ${target.price}: ${extractMessage(error)}`
+          `Place order failed ${target.side} @ ${target.price}: ${extractMessage(error)}`
         );
       }
     }
   }
 
   /**
-   * 验证真实挂单状态，防止取消请求丢失
-   * 在每次 reprice 时查询真实挂单，发现未预期的挂单时取消所有挂单
-   * @returns true 表示发现问题并执行了取消操作，调用方应跳过本轮挂单
+   * Verify real open-order state to guard against missed cancel requests.
+   * Query real orders on each reprice and cancel-all if unexpected orders exist.
+   * @returns true when an issue is found and cancel action executed; caller should skip placement this cycle
    */
   private async verifyOrdersIfNeeded(): Promise<boolean> {
-    // 如果交易所不支持查询挂单，跳过验证
+    // Skip verification if exchange cannot query open orders.
     if (!this.exchange.queryOpenOrders) return false;
 
-    // 限制查询频率
+    // Rate-limit verification queries.
     const now = Date.now();
     if (now - this.lastRepriceQueryTime < this.repriceQueryIntervalMs) {
       return false;
@@ -1117,18 +1119,18 @@ export class MakerPointsEngine {
       const realOrders = await this.exchange.queryOpenOrders();
       this.lastRepriceQueryTime = now;
 
-      // 比较真实挂单与本地记录
+      // Compare real open orders with local records.
       const realOrderIds = new Set(realOrders.map((o) => String(o.orderId)));
       const localOrderIds = new Set(this.openOrders.map((o) => String(o.orderId)));
 
-      // 查找本地以为已取消但实际还存在的订单
+      // Find orders thought cancelled locally but still live remotely.
       const unexpectedOrders = realOrders.filter((order) => {
         const orderId = String(order.orderId);
-        // 如果本地没有这个订单，说明我们以为它已经被取消了
+        // Missing in local state means we assumed it was cancelled.
         if (!localOrderIds.has(orderId)) {
           return true;
         }
-        // 如果本地记录这个订单在等待取消，但实际还存在
+        // Local state says pending cancel but remote still has it.
         if (this.pendingCancelOrders.has(orderId)) {
           return true;
         }
@@ -1138,38 +1140,38 @@ export class MakerPointsEngine {
       if (unexpectedOrders.length > 0) {
         this.tradeLog.push(
           "warn",
-          `发现 ${unexpectedOrders.length} 个未预期挂单，执行强制取消`
+          `Found ${unexpectedOrders.length} unexpected open orders, forcing cancel-all`
         );
 
-        // 强制取消所有挂单
+        // Force-cancel all open orders.
         if (this.exchange.forceCancelAllOrders) {
           await this.exchange.forceCancelAllOrders();
         } else {
           await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
         }
 
-        // 重置本地状态
+        // Reset local state.
         this.openOrders = [];
         this.pendingCancelOrders.clear();
-        this.tradeLog.push("order", "已强制取消所有挂单，重置本地状态");
+        this.tradeLog.push("order", "Force-cancelled all open orders and reset local state");
         return true;
       }
 
-      // 更新本地挂单状态以匹配真实状态
+      // Sync local order state with remote truth.
       if (realOrders.length !== this.openOrders.length) {
-        // 移除本地记录中不存在于服务器的订单
+        // Remove local entries that no longer exist remotely.
         this.openOrders = this.openOrders.filter((o) => realOrderIds.has(String(o.orderId)));
       }
     } catch (error) {
-      this.tradeLog.push("error", `验证挂单状态失败: ${extractMessage(error)}`);
+      this.tradeLog.push("error", `Open-order state verification failed: ${extractMessage(error)}`);
     }
 
     return false;
   }
 
   /**
-   * 使用实时深度数据计算仓位的未实现盈亏
-   * 优先使用实时数据，回退到账户快照数据
+   * Compute unrealized PnL from real-time depth data.
+   * Prefer real-time values and fall back to account snapshot data.
    */
   private computeRealtimePnl(position: PositionSnapshot): number | null {
     const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
@@ -1186,7 +1188,7 @@ export class MakerPointsEngine {
     const absPosition = Math.abs(position.positionAmt);
     if (absPosition < EPS) return;
 
-    // 使用实时计算的 PnL
+    // Use real-time computed PnL.
     const realtimePnl = this.computeRealtimePnl(position);
     if (realtimePnl == null) return;
 
@@ -1195,17 +1197,17 @@ export class MakerPointsEngine {
     if (realtimePnl > -lossLimit) return;
 
     this.stopLossProcessing = true;
-    // 不在这里设置冷却期，只有成功平仓后才设置
+    // Do not set cooldown here; only set after successful close.
     this.tradeLog.push(
       "stop",
-      `触发止损: 实时未实现亏损 ${realtimePnl.toFixed(4)} USDT`
+      `Stop-loss triggered: real-time unrealized loss ${realtimePnl.toFixed(4)} USDT`
     );
     this.notify({
       type: "stop_loss",
       level: "error",
       symbol: this.config.symbol,
-      title: "止损触发",
-      message: `实时未实现亏损 ${realtimePnl.toFixed(4)} USDT，强制平仓`,
+      title: "Stop-loss triggered",
+      message: `Real-time unrealized loss ${realtimePnl.toFixed(4)} USDT, forcing close`,
       details: {
         side: position.positionAmt > 0 ? "LONG" : "SHORT",
         size: absPosition,
@@ -1214,12 +1216,12 @@ export class MakerPointsEngine {
       },
     });
 
-    // 循环重试止损，直到仓位为0
+    // Retry stop-loss in a loop until position is zero.
     await this.executeStopLossWithRetry(position.positionAmt > 0 ? "SELL" : "BUY");
   }
 
   /**
-   * 执行止损平仓，失败后自动重试直到仓位为0
+   * Execute stop-loss close; auto-retry on failure until position is zero.
    */
   private async executeStopLossWithRetry(side: "BUY" | "SELL"): Promise<void> {
     const maxRetries = 10;
@@ -1227,25 +1229,25 @@ export class MakerPointsEngine {
 
     try {
       while (retryCount < maxRetries) {
-        // 每次重试前重新检查仓位
+        // Re-check position before each retry.
         const currentPosition = getPosition(this.accountSnapshot, this.config.symbol);
         const currentAbsPosition = Math.abs(currentPosition.positionAmt);
 
-        // 仓位已清零，止损成功
+        // Position is zero, stop-loss succeeded.
         if (currentAbsPosition < EPS) {
-          this.tradeLog.push("stop", "止损成功: 仓位已清零");
+          this.tradeLog.push("stop", "Stop-loss successful: position is zero");
           this.stopLossCooldownUntil = Date.now() + STOP_LOSS_COOLDOWN_MS;
           break;
         }
 
         try {
-          // 强制解锁 MARKET 类型，确保不被之前的操作阻塞
+          // Force-unlock MARKET type to prevent prior-operation blocking.
           unlockOperating(this.locks, this.timers, this.pending, "MARKET");
 
-          // 先取消所有挂单
+          // Cancel all open orders first.
           await this.flushOrders();
 
-          // 执行市价平仓
+          // Execute market close.
           await marketClose(
             this.exchange,
             this.config.symbol,
@@ -1260,21 +1262,21 @@ export class MakerPointsEngine {
             { qtyStep: this.qtyStep }
           );
 
-          // 等待一小段时间让账户数据更新
+          // Wait briefly for account data refresh.
           await this.sleep(STOP_LOSS_RETRY_INTERVAL_MS);
 
         } catch (error) {
           retryCount++;
           if (isUnknownOrderError(error)) {
-            this.tradeLog.push("order", "止损平仓时订单已不存在，继续检查仓位");
+            this.tradeLog.push("order", "Order missing during stop-loss close, continue checking position");
           } else if (isPrecisionError(error)) {
-            this.tradeLog.push("warn", `止损平仓精度错误，重新同步: ${extractMessage(error)}`);
+            this.tradeLog.push("warn", `Stop-loss close precision error, resyncing: ${extractMessage(error)}`);
             this.syncPrecision(true);
           } else {
-            this.tradeLog.push("error", `止损平仓失败 (重试 ${retryCount}/${maxRetries}): ${extractMessage(error)}`);
+            this.tradeLog.push("error", `Stop-loss close failed (retry ${retryCount}/${maxRetries}): ${extractMessage(error)}`);
           }
 
-          // 失败后等待一段时间再重试
+          // Wait briefly before next retry on failure.
           if (retryCount < maxRetries) {
             await this.sleep(STOP_LOSS_RETRY_INTERVAL_MS);
           }
@@ -1282,8 +1284,8 @@ export class MakerPointsEngine {
       }
 
       if (retryCount >= maxRetries) {
-        this.tradeLog.push("error", `止损重试已达上限 (${maxRetries} 次)，请手动检查仓位`);
-        // 达到重试上限后设置冷却期，避免持续重试
+        this.tradeLog.push("error", `Stop-loss retries reached limit (${maxRetries}), please check position manually`);
+        // Set cooldown once max retries reached to avoid continuous retries.
         this.stopLossCooldownUntil = Date.now() + STOP_LOSS_COOLDOWN_MS;
       }
     } finally {
@@ -1309,12 +1311,12 @@ export class MakerPointsEngine {
           // No log on successful cancel
         },
         () => {
-          this.tradeLog.push("order", "撤销时发现订单已被成交/取消，忽略");
+          this.tradeLog.push("order", "Order already filled/cancelled during cancel, ignoring");
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", `Cancel order failed: ${String(error)}`);
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
@@ -1379,10 +1381,10 @@ export class MakerPointsEngine {
     try {
       const snapshot = this.buildSnapshot();
       this.events.emit("update", snapshot, (error) => {
-        this.tradeLog.push("error", `更新监听异常: ${String(error)}`);
+        this.tradeLog.push("error", `Update listener error: ${String(error)}`);
       });
     } catch (err) {
-      this.tradeLog.push("error", `快照生成异常: ${String(err)}`);
+      this.tradeLog.push("error", `Snapshot generation error: ${String(err)}`);
     }
   }
 
@@ -1479,7 +1481,7 @@ export class MakerPointsEngine {
   private logDesiredOrders(desired: DesiredOrder[]): void {
     if (!desired.length) {
       if (this.lastDesiredSummary !== "none") {
-        this.tradeLog.push("info", "暂无目标挂单");
+        this.tradeLog.push("info", "No target orders currently");
         this.lastDesiredSummary = "none";
       }
       return;
@@ -1488,17 +1490,17 @@ export class MakerPointsEngine {
       .map((order) => `${order.side}@${order.price}${order.reduceOnly ? "(RO)" : ""}`)
       .join(" | ");
     if (summary !== this.lastDesiredSummary) {
-      this.tradeLog.push("info", `目标挂单: ${summary}`);
+      this.tradeLog.push("info", `Target orders: ${summary}`);
       this.lastDesiredSummary = summary;
     }
   }
 
-  // 跟踪各档位的深度跳过状态 (按 bps 和 side 索引)
+  // Track depth-skip state per band (indexed by bps and side).
   private thinDepthSkipStatus: Record<string, boolean> = {};
 
   /**
-   * 记录因深度不足而跳过挂单的日志
-   * 使用状态跟踪避免重复日志
+   * Log when order placement is skipped due to insufficient depth.
+   * Uses state tracking to avoid duplicate logs.
    */
   private logThinDepthSkip(side: "BUY" | "SELL", bps: number, depthQty: number, minDepth: number): void {
     const key = `${side}_${bps}`;
@@ -1507,19 +1509,19 @@ export class MakerPointsEngine {
     if (!alreadySkipped) {
       this.tradeLog.push(
         "info",
-        `跳过 ${side} ${bps}bps 挂单: 深度 ${depthQty.toFixed(4)} BTC < ${minDepth} BTC`
+        `Skip ${side} ${bps}bps order: depth ${depthQty.toFixed(4)} BTC < ${minDepth} BTC`
       );
       this.thinDepthSkipStatus[key] = true;
     }
   }
 
   /**
-   * 当深度恢复时重置跳过状态，允许下次再次记录
+   * Reset skip state when depth recovers so future skips can be logged again.
    */
   private resetThinDepthSkip(side: "BUY" | "SELL", bps: number): void {
     const key = `${side}_${bps}`;
     if (this.thinDepthSkipStatus[key]) {
-      this.tradeLog.push("info", `${side} ${bps}bps 深度恢复，继续挂单`);
+      this.tradeLog.push("info", `${side} ${bps}bps depth recovered, resuming placement`);
       this.thinDepthSkipStatus[key] = false;
     }
   }
@@ -1535,14 +1537,14 @@ export class MakerPointsEngine {
     this.insufficientBalanceCooldownUntil = now + INSUFFICIENT_BALANCE_COOLDOWN_MS;
     this.lastInsufficientMessage = detail;
     const seconds = Math.ceil(INSUFFICIENT_BALANCE_COOLDOWN_MS / 1000);
-    this.tradeLog.push("warn", `余额不足，暂停挂单 ${seconds}s: ${detail}`);
+    this.tradeLog.push("warn", `Insufficient balance, pause quoting for ${seconds}s: ${detail}`);
     this.insufficientBalanceNotified = true;
   }
 
   private applyInsufficientBalanceState(now: number): boolean {
     const active = now < this.insufficientBalanceCooldownUntil;
     if (!active && this.insufficientBalanceNotified) {
-      this.tradeLog.push("info", "余额恢复，继续挂单");
+      this.tradeLog.push("info", "Balance recovered, resuming quoting");
       this.insufficientBalanceNotified = false;
       this.lastInsufficientMessage = null;
     }
@@ -1568,8 +1570,8 @@ export class MakerPointsEngine {
         type: "position_opened",
         level: "info",
         symbol: this.config.symbol,
-        title: "开仓",
-        message: `${currentSide === "LONG" ? "做多" : "做空"} ${Math.abs(currentAmt).toFixed(6)}`,
+        title: "Open position",
+        message: `${currentSide === "LONG" ? "Long" : "Short"} ${Math.abs(currentAmt).toFixed(6)}`,
         details: {
           side: currentSide,
           size: Math.abs(currentAmt),
@@ -1578,13 +1580,13 @@ export class MakerPointsEngine {
       });
     } else if (currentSide === "FLAT" && prevSide !== "FLAT") {
       const pnl = position.unrealizedProfit;
-      const closeType = this.tokenExpiredCloseOnlyMode ? "Token过期平仓" : "平仓";
+      const closeType = this.tokenExpiredCloseOnlyMode ? "Token-expired close" : "Close";
       this.notify({
         type: "position_closed",
         level: "success",
         symbol: this.config.symbol,
         title: closeType,
-        message: `已平仓 ${Math.abs(prevAmt).toFixed(6)} (${prevSide === "LONG" ? "多" : "空"})`,
+        message: `Closed ${Math.abs(prevAmt).toFixed(6)} (${prevSide === "LONG" ? "LONG" : "SHORT"})`,
         details: {
           prevSide,
           closedSize: Math.abs(prevAmt),
@@ -1598,8 +1600,8 @@ export class MakerPointsEngine {
           type: "order_filled",
           level: "info",
           symbol: this.config.symbol,
-          title: "加仓",
-          message: `${currentSide === "LONG" ? "做多" : "做空"} +${absChange.toFixed(6)} → ${Math.abs(currentAmt).toFixed(6)}`,
+          title: "Increase position",
+          message: `${currentSide === "LONG" ? "Long" : "Short"} +${absChange.toFixed(6)} -> ${Math.abs(currentAmt).toFixed(6)}`,
           details: {
             side: currentSide,
             added: absChange,
@@ -1611,8 +1613,8 @@ export class MakerPointsEngine {
           type: "order_filled",
           level: "info",
           symbol: this.config.symbol,
-          title: "减仓",
-          message: `${currentSide === "LONG" ? "多" : "空"} -${absChange.toFixed(6)} → ${Math.abs(currentAmt).toFixed(6)}`,
+          title: "Reduce position",
+          message: `${currentSide === "LONG" ? "LONG" : "SHORT"} -${absChange.toFixed(6)} -> ${Math.abs(currentAmt).toFixed(6)}`,
           details: {
             side: currentSide,
             reduced: absChange,
@@ -1625,8 +1627,8 @@ export class MakerPointsEngine {
         type: "position_opened",
         level: "info",
         symbol: this.config.symbol,
-        title: "反向开仓",
-        message: `${prevSide === "LONG" ? "多→空" : "空→多"} ${Math.abs(currentAmt).toFixed(6)}`,
+        title: "Reverse position",
+        message: `${prevSide === "LONG" ? "LONG->SHORT" : "SHORT->LONG"} ${Math.abs(currentAmt).toFixed(6)}`,
         details: {
           prevSide,
           newSide: currentSide,
@@ -1676,10 +1678,10 @@ export class MakerPointsEngine {
         type: "token_expired",
         level: "warn",
         symbol: this.config.symbol,
-        title: "Token 已过期",
+        title: "Token expired",
         message: expiryStatus.hasPosition
-          ? "Token 已过期，进入平仓模式，不再开新仓"
-          : "Token 已过期，策略进入静默模式",
+          ? "Token expired, entering close-only mode and no new entries"
+          : "Token expired, strategy enters silent mode",
         details: {
           hasPosition: expiryStatus.hasPosition,
           hasOpenOrders: expiryStatus.hasOpenOrders,
@@ -1692,15 +1694,15 @@ export class MakerPointsEngine {
     if (!this.tokenExpiryCancelDone && this.openOrders.length > 0) {
       try {
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-        this.tradeLog.push("order", "Token 过期，已撤销所有挂单");
+        this.tradeLog.push("order", "Token expired, cancelled all open orders");
         this.openOrders = [];
         this.tokenExpiryCancelDone = true;
       } catch (error) {
         if (isUnknownOrderError(error)) {
-          this.tradeLog.push("order", "Token 过期撤单时订单已不存在");
+          this.tradeLog.push("order", "Order already missing during token-expired cancel");
           this.tokenExpiryCancelDone = true;
         } else {
-          this.tradeLog.push("error", `Token 过期撤单失败: ${extractMessage(error)}`);
+          this.tradeLog.push("error", `Token-expired cancel failed: ${extractMessage(error)}`);
         }
       }
     }
@@ -1708,14 +1710,14 @@ export class MakerPointsEngine {
     if (expiryStatus.state === "expired_with_position") {
       if (!this.tokenExpiredCloseOnlyMode) {
         this.tokenExpiredCloseOnlyMode = true;
-        this.tradeLog.push("info", "Token 过期，强制进入平仓模式，仅允许 reduce-only 订单");
+        this.tradeLog.push("info", "Token expired, forcing close-only mode with reduce-only orders");
       }
       return false;
     }
 
     if (expiryStatus.state === "silent") {
       if (prevState !== "silent") {
-        this.tradeLog.push("info", "进入静默数据接收模式，不再进行任何交易操作");
+        this.tradeLog.push("info", "Entering silent data-receive mode with no trading operations");
       }
       return true;
     }
@@ -1723,11 +1725,12 @@ export class MakerPointsEngine {
     return true;
   }
 
-  // ========== 数据过时防御模式方法 ==========
+  // ========== Data-staleness defense methods ==========
 
   /**
-   * 检查数据是否过时，进入或退出防御模式
-   * StandX 账户数据在 WS 推送异常时会通过 REST 补拉；长期无更新通常意味着 WS/REST 均异常，应进入防御模式
+   * Check whether data is stale and enter/exit defense mode.
+   * StandX account data may recover via REST when WS stream is abnormal; prolonged inactivity usually
+   * means both WS/REST are problematic and should trigger defense mode.
    */
   private checkDataStaleAndDefense(): void {
     const now = Date.now();
@@ -1743,7 +1746,7 @@ export class MakerPointsEngine {
     }
     const standxAccountStale =
       standxAccountStaleByAge &&
-      // WS 推送间隔可能较长，先给 REST 补拉一次机会；只有补拉失败后才进入防御模式
+      // WS update gaps can be long; give REST one recovery attempt before entering defense mode.
       this.accountStaleRestProbeConsecutiveFailures > 0 &&
       this.accountStaleRestProbeInFlight == null;
     const accountHealth = validateAccountSnapshotForSymbol(this.accountSnapshot, this.config.symbol);
@@ -1763,7 +1766,7 @@ export class MakerPointsEngine {
       marginModeNotIsolated;
 
     if (shouldDefend && !this.defenseMode) {
-      // 进入防御模式
+      // Enter defense mode.
       this.enterDefenseMode({
         standxDepthStale,
         binanceStale,
@@ -1782,14 +1785,14 @@ export class MakerPointsEngine {
         accountIssues: accountInvalid ? accountHealth.issues : [],
       });
     } else if (!shouldDefend && this.defenseMode) {
-      // 退出防御模式
+      // Exit defense mode.
       this.exitDefenseMode();
     }
   }
 
   /**
-   * 进入防御模式
-   * 取消所有挂单，启动 REST 轮询保护仓位
+   * Enter defense mode.
+   * Cancel all open orders and start REST polling to protect positions.
    */
   private enterDefenseMode(staleInfo: {
     standxDepthStale: boolean;
@@ -1810,76 +1813,76 @@ export class MakerPointsEngine {
   }): void {
     this.defenseMode = true;
 
-    // 构建过时信息描述
+    // Build stale-data summary.
     const staleItems: string[] = [];
     if (staleInfo.standxDepthStale) {
-      staleItems.push(`StandX深度(${Math.round(staleInfo.standxDepthAge / 1000)}s)`);
+      staleItems.push(`StandX depth (${Math.round(staleInfo.standxDepthAge / 1000)}s)`);
     }
     if (staleInfo.standxAccountStale) {
-      staleItems.push(`StandX账户(${Math.round(staleInfo.standxAccountAge / 1000)}s)`);
+      staleItems.push(`StandX account (${Math.round(staleInfo.standxAccountAge / 1000)}s)`);
     }
     if (staleInfo.accountInvalid) {
-      staleItems.push(`StandX仓位数据异常(${staleInfo.accountIssues.join(",") || "unknown"})`);
+      staleItems.push(`StandX position data abnormal (${staleInfo.accountIssues.join(",") || "unknown"})`);
     }
     if (staleInfo.standxRestUnhealthy) {
-      staleItems.push(`StandX REST错误(${staleInfo.standxRestConsecutiveErrors}次)`);
+      staleItems.push(`StandX REST errors (${staleInfo.standxRestConsecutiveErrors})`);
     }
     if (staleInfo.marginModeNotIsolated) {
-      staleItems.push(`保证金模式(${staleInfo.marginMode ?? "unknown"})`);
+      staleItems.push(`Margin mode (${staleInfo.marginMode ?? "unknown"})`);
     }
     if (staleInfo.binanceStale) {
-      staleItems.push(`Binance深度(${Math.round(staleInfo.binanceAge / 1000)}s)`);
+      staleItems.push(`Binance depth (${Math.round(staleInfo.binanceAge / 1000)}s)`);
     }
     if (staleInfo.binanceUnhealthy && staleInfo.binanceHealthReason) {
-      staleItems.push(`Binance簿记异常(${staleInfo.binanceHealthReason})`);
+      staleItems.push(`Binance book health abnormal (${staleInfo.binanceHealthReason})`);
     }
 
     const staleSummary = staleItems.length > 0 ? staleItems.join(", ") : "unknown";
 
-    this.tradeLog.push("warn", `数据过时检测: ${staleSummary}，进入防御模式`);
+    this.tradeLog.push("warn", `Data staleness detected: ${staleSummary}, entering defense mode`);
 
-    // 发送通知
+    // Send notification.
     if (!this.defenseModeNotified) {
       this.notify({
         type: "token_expired",
         level: "warn",
         symbol: this.config.symbol,
-        title: "防御模式",
-        message: `数据推送中断: ${staleSummary}，已取消所有挂单`,
+        title: "Defense mode",
+        message: `Data stream interrupted: ${staleSummary}, all open orders cancelled`,
         details: staleInfo,
       });
       this.defenseModeNotified = true;
     }
 
-    // 立即取消所有挂单
+    // Cancel all open orders immediately.
     void this.defenseCancelAllOrders();
 
-    // 启动 REST 轮询保护仓位
+    // Start REST polling to protect position handling.
     this.startDefenseRestPoll();
   }
 
   /**
-   * 退出防御模式
+   * Exit defense mode.
    */
   private exitDefenseMode(): void {
     this.defenseMode = false;
     this.defenseModeNotified = false;
 
-    this.tradeLog.push("info", "数据推送恢复正常，退出防御模式");
+    this.tradeLog.push("info", "Data stream recovered, exiting defense mode");
 
     this.notify({
       type: "position_opened",
       level: "info",
       symbol: this.config.symbol,
-      title: "防御模式解除",
-      message: "数据推送恢复正常，恢复正常交易",
+      title: "Defense mode cleared",
+      message: "Data stream recovered, resuming normal trading",
       details: {},
     });
 
-    // 停止 REST 轮询
+    // Stop REST polling.
     this.stopDefenseRestPoll();
 
-    // 重置本地状态，强制下一轮重新计算挂单
+    // Reset local state and force quote recomputation next cycle.
     this.desiredOrders = [];
     this.lastDesiredSummary = null;
     this.lastQuoteBid1 = null;
@@ -1887,46 +1890,46 @@ export class MakerPointsEngine {
   }
 
   /**
-   * 防御模式下取消所有挂单
+   * Cancel all open orders during defense mode.
    */
   private async defenseCancelAllOrders(): Promise<void> {
     try {
       if (this.exchange.forceCancelAllOrders) {
         const success = await this.exchange.forceCancelAllOrders();
         if (success) {
-          this.tradeLog.push("order", "防御模式: 已强制取消所有挂单");
+          this.tradeLog.push("order", "Defense mode: force-cancelled all open orders");
         } else {
-          this.tradeLog.push("warn", "防御模式: 取消挂单未完全成功，将继续重试");
+          this.tradeLog.push("warn", "Defense mode: cancel-all incomplete, will keep retrying");
         }
       } else {
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-        this.tradeLog.push("order", "防御模式: 已取消所有挂单");
+        this.tradeLog.push("order", "Defense mode: cancelled all open orders");
       }
 
-      // 重置本地挂单状态
+      // Reset local open-order state.
       this.openOrders = [];
       this.pendingCancelOrders.clear();
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "防御模式: 挂单已不存在");
+        this.tradeLog.push("order", "Defense mode: open orders already absent");
         this.openOrders = [];
         this.pendingCancelOrders.clear();
       } else {
-        this.tradeLog.push("error", `防御模式取消挂单失败: ${extractMessage(error)}`);
+        this.tradeLog.push("error", `Defense mode cancel-all failed: ${extractMessage(error)}`);
       }
     }
   }
 
   /**
-   * 启动防御模式下的 REST 轮询
-   * 使用 REST API 拉取数据，确保止损逻辑能正常工作
+   * Start REST polling while in defense mode.
+   * Pull data via REST API so stop-loss logic can continue working.
    */
   private startDefenseRestPoll(): void {
     if (this.defenseRestPollActive) return;
     this.defenseRestPollActive = true;
 
-    this.tradeLog.push("info", "防御模式: 启动 REST 数据轮询");
+    this.tradeLog.push("info", "Defense mode: start REST data polling");
 
     const poll = async () => {
       if (!this.defenseRestPollActive || !this.defenseMode) return;
@@ -1938,19 +1941,19 @@ export class MakerPointsEngine {
             this.applyAccountSnapshot(nextAccount);
             const health = validateAccountSnapshotForSymbol(nextAccount, this.config.symbol);
             if (!health.ok) {
-              this.tradeLog.push("warn", `防御模式: 仓位数据仍异常: ${health.issues.join(",")}`);
+              this.tradeLog.push("warn", `Defense mode: position data still abnormal: ${health.issues.join(",")}`);
             }
           } else {
-            this.tradeLog.push("warn", "防御模式: REST 获取账户快照为空");
+            this.tradeLog.push("warn", "Defense mode: REST returned empty account snapshot");
           }
         }
 
-        // 防御模式下也尝试修复保证金模式（StandX）
+        // Also attempt margin-mode repair in defense mode (StandX).
         if (this.exchange.id === "standx") {
           await this.ensureStandxIsolatedMarginMode();
         }
 
-        // 防御模式下持续通过 REST 刷新挂单，并尽力撤销所有挂单（避免本地状态/WS 丢失导致遗留挂单）
+        // Continuously refresh orders via REST and best-effort cancel all to avoid orphaned orders.
         if (this.exchange.queryOpenOrders) {
           try {
             const realOrders = await this.exchange.queryOpenOrders();
@@ -1966,25 +1969,25 @@ export class MakerPointsEngine {
             this.feedStatus.orders = true;
 
             if (realOrders.length > 0) {
-              this.tradeLog.push("warn", `防御模式: 发现 ${realOrders.length} 个挂单，执行取消`);
+              this.tradeLog.push("warn", `Defense mode: found ${realOrders.length} open orders, cancelling`);
               await this.defenseCancelAllOrders();
             }
           } catch (error) {
-            this.tradeLog.push("error", `防御模式查询挂单失败: ${extractMessage(error)}`);
-            // 查询失败时仍然尝试撤销所有挂单（宁可多撤，也不遗留）
+            this.tradeLog.push("error", `Defense mode query-open-orders failed: ${extractMessage(error)}`);
+            // Still attempt cancel-all on query failure (prefer over-cancel to orphaned orders).
             await this.defenseCancelAllOrders();
           }
         } else {
           await this.defenseCancelAllOrders();
         }
 
-        // 检查止损条件（使用当前账户快照中的数据）
-        // checkStopLoss 会继续运行，使用最后收到的数据进行止损判断
+        // Check stop-loss conditions using latest available account snapshot data.
+        // `checkStopLoss` keeps running with the most recently received data.
       } catch (error) {
-        this.tradeLog.push("error", `防御模式 REST 轮询失败: ${extractMessage(error)}`);
+        this.tradeLog.push("error", `Defense mode REST polling failed: ${extractMessage(error)}`);
       }
 
-      // 继续下一次轮询
+      // Continue to next polling cycle.
       if (this.defenseRestPollActive && this.defenseMode) {
         this.defenseRestPollTimer = setTimeout(() => void poll(), 2000);
       }
@@ -2024,15 +2027,15 @@ export class MakerPointsEngine {
           }
           const mode = this.getStandxMarginMode(this.accountSnapshot);
           if (mode === "isolated") {
-            this.tradeLog.push("info", "已切换为逐仓模式 (isolated)，恢复策略运行");
+            this.tradeLog.push("info", "Switched to isolated margin mode, resuming strategy");
             return true;
           }
           await this.sleep(STANDX_MARGIN_MODE_CHECK_INTERVAL_MS);
         }
-        this.tradeLog.push("warn", `逐仓模式切换未确认，当前模式: ${this.getStandxMarginMode(this.accountSnapshot) ?? "unknown"}`);
+        this.tradeLog.push("warn", `Isolated-mode switch not confirmed, current mode: ${this.getStandxMarginMode(this.accountSnapshot) ?? "unknown"}`);
         return false;
       } catch (error) {
-        this.tradeLog.push("error", `切换逐仓模式失败: ${extractMessage(error)}`);
+        this.tradeLog.push("error", `Failed to switch to isolated mode: ${extractMessage(error)}`);
         return false;
       } finally {
         this.marginModeEnsuring = null;
@@ -2043,7 +2046,7 @@ export class MakerPointsEngine {
   }
 
   /**
-   * 停止防御模式下的 REST 轮询
+   * Stop REST polling in defense mode.
    */
   private stopDefenseRestPoll(): void {
     if (!this.defenseRestPollActive) return;
@@ -2052,7 +2055,7 @@ export class MakerPointsEngine {
       clearTimeout(this.defenseRestPollTimer);
       this.defenseRestPollTimer = null;
     }
-    this.tradeLog.push("info", "防御模式: 停止 REST 数据轮询");
+    this.tradeLog.push("info", "Defense mode: stop REST data polling");
   }
 }
 

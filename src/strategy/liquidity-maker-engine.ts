@@ -37,7 +37,7 @@ interface DesiredOrder {
   reduceOnly: boolean;
 }
 
-/** 成交记录，用于追踪平仓价格 */
+/** Fill record used to track close pricing. */
 interface FillRecord {
   side: "BUY" | "SELL";
   price: number;
@@ -55,7 +55,7 @@ export interface LiquidityMakerEngineSnapshot extends MakerEngineSnapshot {
   baseAsset?: string | null;
   quoteAsset?: string | null;
   spotBalances?: { baseAvailable: number; quoteAvailable: number; baseWallet?: number } | null;
-  /** 最近一次成交记录 */
+  /** Most recent fill record. */
   lastFill?: FillRecord | null;
 }
 
@@ -127,12 +127,12 @@ export class LiquidityMakerEngine {
     SELL: null,
   };
 
-  // ====== 新增: 成交追踪和平仓逻辑 ======
-  /** 上一轮的订单ID快照，用于检测成交 */
+  // Fill tracking and close-price logic
+  /** Previous tick's order-id snapshot for fill detection. */
   private lastOrderIds: Set<string> = new Set();
-  /** 最近成交记录 */
+  /** Most recent fill record. */
   private lastFill: FillRecord | null = null;
-  /** 当前持仓的入场价（用于不亏本平仓计算） */
+  /** Current entry price, used for non-loss close calculation. */
   private positionEntryPrice: number | null = null;
 
   constructor(private readonly config: LiquidityMakerConfig, private readonly exchange: ExchangeAdapter) {
@@ -219,8 +219,8 @@ export class LiquidityMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅账户失败: ${String(error)}`,
-        processFail: (error) => `账户推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => `Account subscription failed: ${String(error)}`,
+        processFail: (error) => `Account stream processing error: ${String(error)}`,
       }
     );
 
@@ -230,7 +230,7 @@ export class LiquidityMakerEngine {
         this.syncLocksWithOrders(orders);
         this.feedStatus.orders = true;
 
-        // 检测成交：对比上一轮的订单ID
+        // Detect fills by comparing with previous tick order IDs.
         const currentIds = new Set<string>();
         const activeOrders: AsterOrder[] = [];
 
@@ -247,7 +247,7 @@ export class LiquidityMakerEngine {
           }
         }
 
-        // 检测被成交的订单（上一轮存在但这一轮消失的订单）
+        // Detect filled orders (present previously, missing now).
         this.detectFills(orders);
 
         this.openOrders = activeOrders;
@@ -263,8 +263,8 @@ export class LiquidityMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅订单失败: ${String(error)}`,
-        processFail: (error) => `订单推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => `Order subscription failed: ${String(error)}`,
+        processFail: (error) => `Order stream processing error: ${String(error)}`,
       }
     );
 
@@ -277,8 +277,8 @@ export class LiquidityMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅深度失败: ${String(error)}`,
-        processFail: (error) => `深度推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => `Depth subscription failed: ${String(error)}`,
+        processFail: (error) => `Depth stream processing error: ${String(error)}`,
       }
     );
 
@@ -291,8 +291,8 @@ export class LiquidityMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`,
-        processFail: (error) => `价格推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => `Ticker subscription failed: ${String(error)}`,
+        processFail: (error) => `Price stream processing error: ${String(error)}`,
       }
     );
 
@@ -311,17 +311,17 @@ export class LiquidityMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅K线失败: ${String(error)}`,
-        processFail: (error) => `K线推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => `Kline subscription failed: ${String(error)}`,
+        processFail: (error) => `Kline stream processing error: ${String(error)}`,
       }
     );
   }
 
-  /** 检测成交订单 */
+  /** Detect filled orders. */
   private detectFills(orders: AsterOrder[] | null | undefined): void {
     if (!Array.isArray(orders)) return;
 
-    // 查找已成交或部分成交的订单
+    // Find fully or partially filled orders.
     for (const order of orders) {
       if (order.symbol !== this.config.symbol) continue;
 
@@ -329,7 +329,7 @@ export class LiquidityMakerEngine {
       const wasActive = this.lastOrderIds.has(orderId);
       const isFilled = order.status === "FILLED" || order.status === "PARTIALLY_FILLED";
 
-      // 如果订单之前是活跃的，现在已成交
+      // If order was active before and now filled.
       if (wasActive && isFilled) {
         const filledQty = Number(order.executedQty ?? 0);
         const avgPrice = Number(order.avgPrice ?? order.price);
@@ -342,7 +342,7 @@ export class LiquidityMakerEngine {
             timestamp: Date.now(),
           };
 
-          // 更新入场价
+          // Update entry price.
           if ((order.side === "BUY" && !order.reduceOnly) ||
               (order.side === "SELL" && !order.reduceOnly)) {
             this.positionEntryPrice = avgPrice;
@@ -350,7 +350,7 @@ export class LiquidityMakerEngine {
 
           this.tradeLog.push(
             "order",
-            `检测到成交: ${order.side} ${filledQty.toFixed(6)} @ ${avgPrice.toFixed(this.getPriceDecimals())}`
+            `Fill detected: ${order.side} ${filledQty.toFixed(6)} @ ${avgPrice.toFixed(this.getPriceDecimals())}`
           );
         }
       }
@@ -395,7 +395,7 @@ export class LiquidityMakerEngine {
         return;
       }
 
-      // 确保使用最新的深度数据
+      // Ensure latest depth snapshot is used.
       const depth = this.depthSnapshot!;
       const { topBid, topAsk } = getTopPrices(depth);
       if (topBid == null || topAsk == null) {
@@ -403,7 +403,7 @@ export class LiquidityMakerEngine {
         return;
       }
 
-      // 使用更敏感的偏移判断（2倍阈值）
+      // Use more sensitive imbalance detection (2x threshold).
       const { buySum, sellSum, skipBuySide, skipSellSide, imbalance } = this.evaluateDepth(depth);
       this.lastBuyDepthSum10 = buySum;
       this.lastSellDepthSum10 = sellSum;
@@ -422,19 +422,19 @@ export class LiquidityMakerEngine {
         return;
       }
 
-      // 在计算挂单价格前，重新获取最新的深度数据以确保价格同步
+      // Re-read latest depth before pricing to keep quotes in sync.
       const latestDepth = this.depthSnapshot!;
       const { topBid: latestBid, topAsk: latestAsk } = getTopPrices(latestDepth);
       const finalBid = latestBid ?? topBid!;
       const finalAsk = latestAsk ?? topAsk!;
 
-      // 直接使用orderbook价格，格式化为字符串避免精度问题
+      // Use orderbook prices directly; stringify to avoid precision issues.
       const priceDecimals = this.getPriceDecimals();
-      // 平仓价格始终使用买1/卖1
+      // Close prices always use best bid/ask.
       const closeBidPrice = formatPriceToString(finalBid, priceDecimals);
       const closeAskPrice = formatPriceToString(finalAsk, priceDecimals);
 
-      // 开仓价格根据 entryDepthLevel 使用指定档位
+      // Entry prices use configured `entryDepthLevel`.
       const entryLevel = this.config.entryDepthLevel ?? 1;
       const { bidAtLevel: entryBid, askAtLevel: entryAsk } = getPricesAtLevel(latestDepth, entryLevel);
       const entryBidBase = entryBid ?? finalBid;
@@ -470,16 +470,16 @@ export class LiquidityMakerEngine {
         const baseWallet = balancesForSpot?.baseWallet ?? baseAvail;
         const maxBase = Math.max(baseAvail, baseWallet);
         if (isSpotMarket && minSell > 0 && maxBase + EPS < minSell) {
-          // 无法卖出，跳过卖单，允许买单累计
+          // Cannot sell yet; skip sell and allow buy accumulation.
           this.lastSellPriceViable = false;
           if (!skipSellSide) {
-            this.tradeLog.push("info", "现货持仓低于最小卖单量，暂不挂卖单");
+            this.tradeLog.push("info", "Spot position is below minimum sell size, skipping sell quote");
           }
         }
         if (!skipBuySide && canEnter) {
           if (!allowSpotBuy) {
             if (this.lastBuyPriceViable) {
-              this.tradeLog.push("info", "现货买入仅在1m阳线，当前跳过买单");
+              this.tradeLog.push("info", "Spot buy is allowed only on 1m bullish candle, skipping buy");
               this.lastBuyPriceViable = false;
             }
           } else {
@@ -496,8 +496,8 @@ export class LiquidityMakerEngine {
               this.lastBuyPriceViable = false;
               const reason =
                 buyAmount < EPS && isSpotMarket
-                  ? "现货可用报价资产不足，跳过买单"
-                  : "跳过买单：价差不足以构造maker价格";
+                  ? "Insufficient spot quote balance, skipping buy"
+                  : "Skipping buy: spread is too narrow to build maker price";
               this.tradeLog.push("info", reason);
             }
           }
@@ -507,10 +507,10 @@ export class LiquidityMakerEngine {
           const baseWallet = balancesForSpot?.baseWallet ?? baseAvail;
           const maxBase = Math.max(baseAvail, baseWallet);
           if (isSpotMarket && minSell > 0 && maxBase + EPS < minSell) {
-            // 持仓低于最小卖单量，跳过卖单，等待累积
+            // Position below minimum sell size; skip sell and keep accumulating.
             if (this.lastSellPriceViable) {
               this.lastSellPriceViable = false;
-              this.tradeLog.push("info", "现货持仓低于最小卖单量，跳过卖单");
+              this.tradeLog.push("info", "Spot position is below minimum sell size, skipping sell");
             }
           } else {
             const desiredSellAmount =
@@ -528,19 +528,19 @@ export class LiquidityMakerEngine {
               this.lastSellPriceViable = false;
               const reason =
                 sellAmount < EPS && isSpotMarket
-                  ? "现货可用基础资产不足，跳过卖单"
-                  : "跳过卖单：价差不足以构造maker价格";
+                  ? "Insufficient spot base balance, skipping sell"
+                  : "Skipping sell: spread is too narrow to build maker price";
               this.tradeLog.push("info", reason);
             }
           }
         }
       } else if (absPosition < EPS) {
-        // 永续合约无持仓
+        // No perpetual position.
         this.entryPricePendingLogged = false;
         if (!skipBuySide && canEnter) {
           if (isSpotMarket && !allowSpotBuy) {
             if (this.lastBuyPriceViable) {
-              this.tradeLog.push("info", "现货买入仅在1m阳线，当前跳过买单");
+              this.tradeLog.push("info", "Spot buy is allowed only on 1m bullish candle, skipping buy");
               this.lastBuyPriceViable = false;
             }
           } else if (bidPrice != null) {
@@ -553,7 +553,7 @@ export class LiquidityMakerEngine {
             const baseWallet = balancesForSpot?.baseWallet ?? baseAvail;
             if (Math.max(baseAvail, baseWallet) + EPS < minSell) {
               this.lastSellPriceViable = false;
-              this.tradeLog.push("info", "现货持仓低于最小卖单量，跳过卖单");
+              this.tradeLog.push("info", "Spot position is below minimum sell size, skipping sell");
             }
           }
           if (askPrice != null) {
@@ -561,10 +561,10 @@ export class LiquidityMakerEngine {
           }
         }
       } else {
-        // ====== 有持仓：使用改进的平仓逻辑 ======
+        // Position exists: use improved close logic.
         const closeSide: "BUY" | "SELL" = position.positionAmt > 0 ? "SELL" : "BUY";
 
-        // 计算平仓价格：基于成交价或入场价，确保不亏本
+        // Compute close price from fill/entry while avoiding loss.
         const closePrice = this.computeClosePrice(
           closeSide,
           position,
@@ -574,7 +574,7 @@ export class LiquidityMakerEngine {
         );
 
         if (isSpotMarket && minSell > 0 && rawAbsPosition + EPS < minSell) {
-          // 持仓未达最小卖出量，等待累积，不下单
+          // Position has not reached minimum sell size; wait and do not place order.
           this.lastSellPriceViable = false;
           this.lastBuyPriceViable = false;
           this.desiredOrders = [];
@@ -608,7 +608,7 @@ export class LiquidityMakerEngine {
         await this.enforceRateLimitStop();
         this.tradeLog.push("warn", `LiquidityMakerEngine 429: ${String(error)}`);
       } else {
-        this.tradeLog.push("error", `流动性做市循环异常: ${String(error)}`);
+        this.tradeLog.push("error", `Liquidity-maker loop error: ${String(error)}`);
       }
       this.emitUpdate();
     } finally {
@@ -618,10 +618,10 @@ export class LiquidityMakerEngine {
   }
 
   /**
-   * 计算平仓价格：
-   * 1. 如果有最近成交，在成交价基础上偏移指定档位
-   * 2. 确保不亏本（多头平仓价 >= 入场价，空头平仓价 <= 入场价）
-   * 3. 如果计算的价格无法盈利，返回null（等待市价平仓或重新计算）
+   * Compute close price:
+   * 1) If recent fill exists, offset from fill by configured ticks.
+   * 2) Ensure non-loss close (long close >= entry, short close <= entry).
+   * 3) Return null when no profitable/valid maker close price exists.
    */
   private computeClosePrice(
     closeSide: "BUY" | "SELL",
@@ -635,23 +635,23 @@ export class LiquidityMakerEngine {
 
     let targetPrice: number;
 
-    // 基于最近成交或入场价计算目标价，应用 closeTickOffset
+    // Build target from recent fill or entry, then apply closeTickOffset.
     if (this.lastFill && Date.now() - this.lastFill.timestamp < 60000) {
-      // 最近1分钟内有成交，基于成交价计算
+      // Recent fill within one minute: base on fill price.
       if (closeSide === "SELL") {
         targetPrice = this.lastFill.price + tickOffset;
       } else {
         targetPrice = this.lastFill.price - tickOffset;
       }
     } else if (entryPrice && Number.isFinite(entryPrice) && entryPrice > 0) {
-      // 没有最近成交但有入场价，基于入场价计算
+      // No recent fill but has entry: base on entry price.
       if (closeSide === "SELL") {
         targetPrice = entryPrice + tickOffset;
       } else {
         targetPrice = entryPrice - tickOffset;
       }
     } else {
-      // 没有成交也没有入场价，使用orderbook价格
+      // No fill and no entry: fallback to orderbook price.
       if (closeSide === "SELL") {
         targetPrice = topAsk;
       } else {
@@ -659,24 +659,24 @@ export class LiquidityMakerEngine {
       }
     }
 
-    // 确保不亏本（仅当目标价低于入场价时调整）
+    // Ensure non-loss close (adjust only when target is worse than entry).
     if (entryPrice && Number.isFinite(entryPrice) && entryPrice > 0) {
       if (closeSide === "SELL") {
-        // 多头平仓：卖价必须 >= 入场价
+        // Long close: sell price must be >= entry.
         if (targetPrice < entryPrice) {
           targetPrice = entryPrice + this.priceTick;
-          this.tradeLog.push("info", `平仓价调整为入场价+1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
+          this.tradeLog.push("info", `Adjusted close price to entry+1tick to avoid loss: ${targetPrice.toFixed(priceDecimals)}`);
         }
       } else {
-        // 空头平仓：买价必须 <= 入场价
+        // Short close: buy price must be <= entry.
         if (targetPrice > entryPrice) {
           targetPrice = entryPrice - this.priceTick;
-          this.tradeLog.push("info", `平仓价调整为入场价-1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
+          this.tradeLog.push("info", `Adjusted close price to entry-1tick to avoid loss: ${targetPrice.toFixed(priceDecimals)}`);
         }
       }
     }
 
-    // 确保是有效的maker价格
+    // Ensure the result is still a valid maker price.
     const safePrice = this.ensureMakerPrice(closeSide, targetPrice, topBid, topAsk);
     if (safePrice == null || safePrice <= 0) {
       return null;
@@ -719,9 +719,9 @@ export class LiquidityMakerEngine {
       );
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "限频强制平仓时订单已不存在");
+        this.tradeLog.push("order", "Order already missing during rate-limit forced close");
       } else {
-        this.tradeLog.push("error", `限频强制平仓失败: ${String(error)}`);
+        this.tradeLog.push("error", `Rate-limit forced close failed: ${String(error)}`);
       }
     }
   }
@@ -739,25 +739,25 @@ export class LiquidityMakerEngine {
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
       this.openOrders = [];
       this.emitUpdate();
-      this.tradeLog.push("order", "启动时清理历史挂单");
+      this.tradeLog.push("order", "Startup: cleaned historical open orders");
       this.initialOrderResetDone = true;
       return true;
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "历史挂单已消失，跳过启动清理");
+        this.tradeLog.push("order", "Historical orders already gone, skipping startup cleanup");
         this.initialOrderResetDone = true;
         this.openOrders = [];
         this.emitUpdate();
         return true;
       }
-      this.tradeLog.push("error", `启动撤单失败: ${String(error)}`);
+      this.tradeLog.push("error", `Startup cancel failed: ${String(error)}`);
       return false;
     }
   }
 
   /**
-   * 更敏感的偏移判断：当一侧深度超出另一侧 depthImbalanceRatio 倍时，
-   * 取消订单簿较薄一端的订单
+   * More sensitive imbalance logic: when one side exceeds the other by
+   * `depthImbalanceRatio`, cancel orders on the thinner side.
    */
   private evaluateDepth(depth: AsterDepth): {
     buySum: number;
@@ -767,7 +767,7 @@ export class LiquidityMakerEngine {
     imbalance: "balanced" | "buy_dominant" | "sell_dominant";
   } {
     const levels = 10;
-    const ratio = this.config.depthImbalanceRatio; // 使用配置的阈值（默认2倍）
+    const ratio = this.config.depthImbalanceRatio; // Configured threshold (default 2x).
 
     const topBids = (depth.bids ?? []).slice(0, levels);
     const topAsks = (depth.asks ?? []).slice(0, levels);
@@ -782,7 +782,7 @@ export class LiquidityMakerEngine {
       return Number.isFinite(qty) ? total + qty : total;
     }, 0);
 
-    // 更敏感的判断：只要一侧超出另一侧2倍，就取消薄端
+    // Sensitive rule: if one side exceeds the other by 2x, skip thinner side.
     const skipSellSide = sellSum === 0 || sellSum * ratio < buySum;
     const skipBuySide = buySum === 0 || buySum * ratio < sellSum;
 
@@ -797,15 +797,15 @@ export class LiquidityMakerEngine {
   }
 
   /**
-   * 流动性做市商禁用深度极端不平衡市价平仓逻辑
-   * 仅依赖 evaluateDepth 中的 skipBuySide/skipSellSide 来取消薄端挂单
+   * Liquidity maker disables market-close on extreme depth imbalance.
+   * It only uses `skipBuySide`/`skipSellSide` from `evaluateDepth`.
    */
   private async handleImbalanceExit(
     _position: PositionSnapshot,
     _buySum: number,
     _sellSum: number
   ): Promise<boolean> {
-    // 流动性做市商不执行深度不平衡市价平仓，始终返回 false
+    // Liquidity maker does not do market-close on imbalance; always return false.
     return false;
   }
 
@@ -849,19 +849,19 @@ export class LiquidityMakerEngine {
         () => {
           this.tradeLog.push(
             "order",
-            `撤销不匹配订单 ${order.side} @ ${order.price} reduceOnly=${order.reduceOnly}`
+            `Cancelled mismatched order ${order.side} @ ${order.price} reduceOnly=${order.reduceOnly}`
           );
-          // 保持与原逻辑一致：成功撤销不立即修改本地 openOrders，等待订单流重建
+          // Keep previous behavior: do not mutate local openOrders until stream rebuilds.
         },
         () => {
-          this.tradeLog.push("order", "撤销时发现订单已被成交/取消，忽略");
+          this.tradeLog.push("order", "Order already filled/cancelled during cancel, ignoring");
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", `Cancel order failed: ${String(error)}`);
           this.pendingCancelOrders.delete(String(order.orderId));
-          // 避免同一轮内重复操作同一张已出错的本地挂单，直接从本地缓存移除，等待下一次订单推送重建
+          // Remove failed local order to avoid repeated operations in same cycle.
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
       );
@@ -879,7 +879,7 @@ export class LiquidityMakerEngine {
         // Skip placing sells that would be bumped by venue minimums
         if (this.lastSellPriceViable) {
           this.lastSellPriceViable = false;
-          this.tradeLog.push("info", "现货卖单低于最小成交量，跳过挂单等待累积");
+          this.tradeLog.push("info", "Spot sell order is below minimum trade size, waiting to accumulate");
         }
         continue;
       }
@@ -893,7 +893,7 @@ export class LiquidityMakerEngine {
           this.timers,
           this.pending,
           target.side,
-          target.price, // 已经是字符串价格
+          target.price, // Price is already normalized as string.
           target.amount,
           (type, detail) => this.tradeLog.push(type, detail),
           reduceOnlyFlag,
@@ -921,10 +921,10 @@ export class LiquidityMakerEngine {
           if (isRateLimitError(dustError)) {
             throw dustError;
           }
-          this.tradeLog.push("error", `小额市价平仓失败: ${String(dustError)}`);
+          this.tradeLog.push("error", `Dust market close failed: ${String(dustError)}`);
         }
         if (dustClosed) continue;
-        this.tradeLog.push("error", `挂单失败(${target.side} ${target.price}): ${String(error)}`);
+        this.tradeLog.push("error", `Place order failed (${target.side} ${target.price}): ${String(error)}`);
       }
     }
   }
@@ -940,7 +940,7 @@ export class LiquidityMakerEngine {
       const minStopQty = Number.isFinite(this.minBaseAmount) ? this.minBaseAmount! : null;
       if (minStopQty != null && minStopQty > 0 && absPosition + EPS < minStopQty) {
         if (!this.lastSpotStopSkipped) {
-          this.tradeLog.push("info", "现货持仓低于最小平仓数量，跳过止损检查");
+          this.tradeLog.push("info", "Spot position is below minimum close size, skipping stop-loss check");
           this.lastSpotStopSkipped = true;
         }
         return;
@@ -949,9 +949,9 @@ export class LiquidityMakerEngine {
       const pnl = computePositionPnl(position, bidPrice, askPrice);
       const triggerStop = shouldStopLoss(position, bidPrice, askPrice, this.config.lossLimit);
       if (!triggerStop) return;
-      this.tradeLog.push("stop", `现货止损，当前仓位=${absPosition.toFixed(6)} PnL=${pnl.toFixed(4)} USDT`);
+      this.tradeLog.push("stop", `Spot stop-loss triggered, position=${absPosition.toFixed(6)} PnL=${pnl.toFixed(4)} USDT`);
       try {
-        // 尽力撤销所有未完成挂单，避免锁定基础资产导致余额不足
+        // Best-effort cancel all pending orders to unlock balances before close.
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol }).catch(() => {});
         await this.flushOrders();
         await marketClose(
@@ -974,9 +974,9 @@ export class LiquidityMakerEngine {
       } catch (error) {
         if (isRateLimitError(error)) throw error;
         if (isUnknownOrderError(error)) {
-          this.tradeLog.push("order", "止损平仓时订单已不存在");
+          this.tradeLog.push("order", "Order already missing during stop-loss close");
         } else {
-          this.tradeLog.push("error", `现货止损失败: ${String(error)}`);
+          this.tradeLog.push("error", `Spot stop-loss close failed: ${String(error)}`);
         }
       }
       return;
@@ -987,7 +987,7 @@ export class LiquidityMakerEngine {
     const hasEntryPrice = Number.isFinite(position.entryPrice) && Math.abs(position.entryPrice) > 1e-8;
     if (!hasEntryPrice) {
       if (!this.entryPricePendingLogged) {
-        this.tradeLog.push("info", "做市持仓均价未同步，等待账户快照刷新后再执行止损判断");
+        this.tradeLog.push("info", "Maker position average entry not synced yet, waiting for account snapshot");
         this.entryPricePendingLogged = true;
       }
       return;
@@ -1000,7 +1000,7 @@ export class LiquidityMakerEngine {
     if (triggerStop) {
       this.tradeLog.push(
         "stop",
-        `触发止损，方向=${position.positionAmt > 0 ? "多" : "空"} 当前亏损=${pnl.toFixed(4)} USDT`
+        `Stop-loss triggered, side=${position.positionAmt > 0 ? "LONG" : "SHORT"} current loss=${pnl.toFixed(4)} USDT`
       );
       try {
         await this.flushOrders();
@@ -1023,9 +1023,9 @@ export class LiquidityMakerEngine {
         );
       } catch (error) {
         if (isUnknownOrderError(error)) {
-          this.tradeLog.push("order", "止损平仓时订单已不存在");
+          this.tradeLog.push("order", "Order already missing during stop-loss close");
         } else {
-          this.tradeLog.push("error", `止损平仓失败: ${String(error)}`);
+          this.tradeLog.push("error", `Stop-loss close failed: ${String(error)}`);
         }
       }
     }
@@ -1041,17 +1041,17 @@ export class LiquidityMakerEngine {
         this.config.symbol,
         order,
         () => {
-          // 与原逻辑保持一致：成功撤销不记录日志且不修改本地 openOrders
+          // Keep previous behavior: no log and no local mutation on successful cancel.
         },
         () => {
-          this.tradeLog.push("order", "订单已不存在，撤销跳过");
+          this.tradeLog.push("order", "Order no longer exists, skip cancel");
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", `Cancel order failed: ${String(error)}`);
           this.pendingCancelOrders.delete(String(order.orderId));
-          // 与同步撤单路径保持一致，移除本地异常订单，等待订单流重建
+          // Keep consistent with sync-cancel path: remove bad local order and wait for stream rebuild.
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         }
       );
@@ -1088,12 +1088,12 @@ export class LiquidityMakerEngine {
         if (updated) {
           this.tradeLog.push(
             "info",
-            `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
+            `Synced exchange precision: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
           );
         }
       })
       .catch((error) => {
-        this.tradeLog.push("error", `同步精度失败: ${String(error)}`);
+        this.tradeLog.push("error", `Precision sync failed: ${String(error)}`);
         this.precisionSync = null;
         setTimeout(() => this.syncPrecision(), 2000);
       });
@@ -1110,10 +1110,10 @@ export class LiquidityMakerEngine {
     try {
       const snapshot = this.buildSnapshot();
       this.events.emit("update", snapshot, (error) => {
-        this.tradeLog.push("error", `更新回调处理异常: ${String(error)}`);
+        this.tradeLog.push("error", `Update callback handler error: ${String(error)}`);
       });
     } catch (err) {
-      this.tradeLog.push("error", `快照或更新分发异常: ${String(err)}`);
+      this.tradeLog.push("error", `Snapshot/update dispatch error: ${String(err)}`);
     }
   }
 
@@ -1313,13 +1313,13 @@ export class LiquidityMakerEngine {
         },
         { qtyStep: this.qtyStep }
       );
-      this.tradeLog.push("order", `小额仓位使用市价平仓 ${target.side} 数量 ${absQty.toFixed(6)}`);
+      this.tradeLog.push("order", `Using market close for dust position: ${target.side} qty ${absQty.toFixed(6)}`);
       return true;
     } catch (closeError) {
       if (isRateLimitError(closeError)) {
         throw closeError;
       }
-      this.tradeLog.push("error", `小额市价平仓失败: ${String(closeError)}`);
+      this.tradeLog.push("error", `Dust market close failed: ${String(closeError)}`);
       return false;
     }
   }

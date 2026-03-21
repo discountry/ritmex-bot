@@ -41,7 +41,7 @@ function enforceMarkPriceGuard(
     const markStr = Number.isFinite(Number(guard.markPrice)) ? Number(guard.markPrice).toFixed(2) : String(guard.markPrice);
     log(
       "info",
-      `${context} 保护触发：side=${side} price=${priceStr} mark=${markStr} 超过 ${(guard.maxPct! * 100).toFixed(2)}%`
+      `${context} guard triggered: side=${side} price=${priceStr} mark=${markStr} exceeds ${(guard.maxPct! * 100).toFixed(2)}%`
     );
     return false;
   }
@@ -67,7 +67,7 @@ export function lockOperating(
   timers[type] = setTimeout(() => {
     locks[type] = false;
     pendings[type] = null;
-    log("info", `${type} 操作超时自动解锁`);
+    log("info", `${type} operation timed out, auto-unlocked`);
   }, timeout);
 }
 
@@ -116,12 +116,12 @@ export async function deduplicateOrders(
   try {
     lockOperating(locks, timers, pendings, type, log);
     await adapter.cancelOrders({ symbol, orderIdList });
-    log("order", `去重撤销重复 ${type} 单: ${orderIdList.join(",")}`);
+    log("order", `Dedup: cancelled duplicate ${type} orders: ${orderIdList.join(",")}`);
   } catch (err) {
     if (isUnknownOrderError(err)) {
-      log("order", "去重时发现订单已不存在，跳过删除");
+      log("order", "Dedup: order already missing, skip removal");
     } else {
-      log("error", `去重撤单失败: ${String(err)}`);
+      log("error", `Dedup cancel failed: ${String(err)}`);
     }
   } finally {
     unlockOperating(locks, timers, pendings, type);
@@ -144,7 +144,7 @@ export async function placeOrder(
   timers: OrderTimerMap,
   pendings: OrderPendingMap,
   side: "BUY" | "SELL",
-  price: string, // 改为字符串价格
+  price: string, // Use string price to avoid precision loss.
   amount: number,
   log: LogHandler,
   reduceOnly = false,
@@ -154,13 +154,13 @@ export async function placeOrder(
   const type = "LIMIT";
   if (isOperating(locks, type)) return;
   const priceNum = Number(price);
-  if (!enforceMarkPriceGuard(side, priceNum, guard, log, "限价单")) return;
+  if (!enforceMarkPriceGuard(side, priceNum, guard, log, "Limit order")) return;
   const qtyStep = opts?.qtyStep ?? 0.001;
   const rawQuantity = Math.abs(amount);
   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
   const quantity = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
   if (quantity <= 0) {
-    log("error", "限价单数量无效，跳过下单");
+    log("error", "Invalid limit order quantity, skipping");
     return;
   }
   if (!opts?.skipDedupe) {
@@ -182,12 +182,12 @@ export async function placeOrder(
       tpPrice: opts?.tpPrice,
     });
     pendings[type] = String(order.orderId);
-    log("order", `挂限价单: ${side} @ ${priceNum} 数量 ${quantity} reduceOnly=${reduceOnly}${opts?.slPrice ? ` sl=${opts.slPrice}` : ""}`);
+    log("order", `Placed limit: ${side} @ ${priceNum} qty ${quantity} reduceOnly=${reduceOnly}${opts?.slPrice ? ` sl=${opts.slPrice}` : ""}`);
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
     if (isUnknownOrderError(err)) {
-      log("order", "订单已成交或被撤销，跳过新单");
+      log("order", "Order already filled/cancelled, skip new order");
       return undefined;
     }
     throw err;
@@ -210,13 +210,13 @@ export async function placeMarketOrder(
 ): Promise<AsterOrder | undefined> {
   const type = "MARKET";
   if (isOperating(locks, type)) return;
-  if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, "市价单")) return;
+  if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, "Market order")) return;
   const qtyStep = opts?.qtyStep ?? 0.001;
   const rawQuantity = Math.abs(amount);
   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
   const quantity = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
   if (quantity <= 0) {
-    log("error", "市价单数量无效，跳过下单");
+    log("error", "Invalid market order quantity, skipping");
     return;
   }
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
@@ -232,12 +232,12 @@ export async function placeMarketOrder(
       closePosition,
     });
     pendings[type] = String(order.orderId);
-    log("order", `市价单: ${side} 数量 ${quantity} reduceOnly=${reduceOnly}`);
+    log("order", `Placed market: ${side} qty ${quantity} reduceOnly=${reduceOnly}`);
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
     if (isUnknownOrderError(err)) {
-      log("order", "市价单失败但订单已不存在，忽略");
+      log("order", "Market order failed but order already missing, ignoring");
       return undefined;
     }
     throw err;
@@ -261,14 +261,14 @@ export async function placeStopLossOrder(
 ): Promise<AsterOrder | undefined> {
   const type = "STOP_MARKET";
   if (isOperating(locks, type)) return;
-  if (!enforceMarkPriceGuard(side, stopPrice, guard, log, "止损单")) return;
+  if (!enforceMarkPriceGuard(side, stopPrice, guard, log, "Stop-loss order")) return;
   if (lastPrice != null) {
     if (side === "SELL" && stopPrice >= lastPrice) {
-      log("error", `止损价 ${stopPrice} 高于或等于当前价 ${lastPrice}，取消挂单`);
+      log("error", `Stop price ${stopPrice} is >= last price ${lastPrice}, skip placing`);
       return;
     }
     if (side === "BUY" && stopPrice <= lastPrice) {
-      log("error", `止损价 ${stopPrice} 低于或等于当前价 ${lastPrice}，取消挂单`);
+      log("error", `Stop price ${stopPrice} is <= last price ${lastPrice}, skip placing`);
       return;
     }
   }
@@ -279,7 +279,7 @@ export async function placeStopLossOrder(
   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
   const normalizedQty = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
   if (normalizedQty <= 0) {
-    log("error", "止损单数量无效，跳过下单");
+    log("error", "Invalid stop-loss quantity, skipping");
     return;
   }
 
@@ -299,12 +299,12 @@ export async function placeStopLossOrder(
       triggerType: "STOP_LOSS",
     });
     pendings[type] = String(order.orderId);
-    log("stop", `挂止损单: ${side} STOP_MARKET @ ${normalizedStop}`);
+    log("stop", `Placed stop-loss: ${side} STOP_MARKET @ ${normalizedStop}`);
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
     if (isUnknownOrderError(err)) {
-      log("order", "止损单已失效，跳过");
+      log("order", "Stop-loss order is no longer valid, skipped");
       return undefined;
     }
     throw err;
@@ -329,10 +329,10 @@ export async function placeTrailingStopOrder(
   const type = "TRAILING_STOP_MARKET";
   if (isOperating(locks, type)) return;
   if (!adapter.supportsTrailingStops()) {
-    log("error", "当前交易所不支持动态止盈单");
+    log("error", "Current exchange does not support trailing stop");
     return;
   }
-  if (!enforceMarkPriceGuard(side, activationPrice, guard, log, "动态止盈单")) return;
+  if (!enforceMarkPriceGuard(side, activationPrice, guard, log, "Trailing-stop order")) return;
   const priceTick = opts?.priceTick ?? 0.1;
   const qtyStep = opts?.qtyStep ?? 0.001;
   const normalizedActivation = roundDownToTick(activationPrice, priceTick);
@@ -340,7 +340,7 @@ export async function placeTrailingStopOrder(
   const roundedQuantity = roundQtyDownToStep(rawQuantity, qtyStep);
   const normalizedQty = roundedQuantity > 0 ? roundedQuantity : rawQuantity;
   if (normalizedQty <= 0) {
-    log("error", "动态止盈单数量无效，跳过下单");
+    log("error", "Invalid trailing-stop quantity, skipping");
     return;
   }
   await deduplicateOrders(adapter, symbol, openOrders, locks, timers, pendings, type, side, log);
@@ -359,13 +359,13 @@ export async function placeTrailingStopOrder(
     pendings[type] = String(order.orderId);
     log(
       "order",
-      `挂动态止盈单: ${side} activation=${normalizedActivation} callbackRate=${callbackRate}`
+      `Placed trailing stop: ${side} activation=${normalizedActivation} callbackRate=${callbackRate}`
     );
     return order;
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
     if (isUnknownOrderError(err)) {
-      log("order", "动态止盈单已失效，跳过");
+      log("order", "Trailing-stop order is no longer valid, skipped");
       return undefined;
     }
     throw err;
@@ -387,7 +387,7 @@ export async function marketClose(
 ): Promise<void> {
   const type = "MARKET";
   if (isOperating(locks, type)) return;
-  if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, "市价平仓")) return;
+  if (!enforceMarkPriceGuard(side, guard?.expectedPrice ?? null, guard, log, "Market close")) return;
 
   const qtyStep = opts?.qtyStep;
   const rawQuantity = Math.abs(quantity);
@@ -400,7 +400,7 @@ export async function marketClose(
     }
   }
   if (normalizedQty <= 0) {
-    log("error", "市价平仓数量无效，跳过下单");
+    log("error", "Invalid market-close quantity, skipping");
     return;
   }
 
@@ -416,11 +416,11 @@ export async function marketClose(
       closePosition: true,
     });
     pendings[type] = String(order.orderId);
-    log("close", `市价平仓: ${side}`);
+    log("close", `Market close: ${side}`);
   } catch (err) {
     unlockOperating(locks, timers, pendings, type);
     if (isUnknownOrderError(err)) {
-      log("order", "市场平仓时订单已不存在");
+      log("order", "Order already missing during market close");
       return;
     }
     throw err;

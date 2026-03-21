@@ -2,7 +2,7 @@ import type { AsterOrder } from "../../exchanges/types";
 
 export interface OrderTarget {
   side: "BUY" | "SELL";
-  price: string; // 改为字符串避免精度问题
+  price: string; // Keep as string to avoid precision loss.
   amount: number;
   reduceOnly: boolean;
 }

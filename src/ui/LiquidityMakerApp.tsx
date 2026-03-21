@@ -122,7 +122,7 @@ export function LiquidityMakerApp({ onExit }: LiquidityMakerAppProps) {
         : t("offset.imbalance.sell");
   const readyStatus = snapshot.ready ? t("status.live") : t("status.waitingData");
 
-  // 显示最近成交信息
+  // Show latest fill information.
   const lastFillInfo = snapshot.lastFill
     ? `${snapshot.lastFill.side} ${formatNumber(snapshot.lastFill.amount, 6)} @ ${formatNumber(snapshot.lastFill.price, priceDigits)}`
     : t("liquidityMaker.noFill");
