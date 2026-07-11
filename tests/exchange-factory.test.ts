@@ -1,11 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { createExchangeAdapter, resolveExchangeId } from "../src/exchanges/create-adapter";
+import { buildAdapterFromEnv } from "../src/exchanges/resolve-from-env";
 import { AsterExchangeAdapter } from "../src/exchanges/aster/adapter";
 import { GrvtExchangeAdapter } from "../src/exchanges/grvt/adapter";
 import { BackpackExchangeAdapter } from "../src/exchanges/backpack/adapter";
 import { ParadexExchangeAdapter } from "../src/exchanges/paradex/adapter";
 import { StandxExchangeAdapter } from "../src/exchanges/standx/adapter";
 import { BinanceExchangeAdapter } from "../src/exchanges/binance/adapter";
+import { OndoperpsExchangeAdapter } from "../src/exchanges/ondoperps/adapter";
 
 const ORIGINAL_ENV = { ...process.env };
 
@@ -34,6 +36,8 @@ describe("exchange factory", () => {
     expect(resolveExchangeId("PaRaDeX")).toBe("paradex");
     expect(resolveExchangeId("StandX")).toBe("standx");
     expect(resolveExchangeId("BiNaNcE")).toBe("binance");
+    expect(resolveExchangeId("OndoPerps")).toBe("ondoperps");
+    expect(resolveExchangeId("OndoPerp")).toBe("ondoperps");
   });
 
   it("creates grvt adapter when EXCHANGE=grvt", () => {
@@ -91,5 +95,42 @@ describe("exchange factory", () => {
     const adapter = createExchangeAdapter({ symbol: "BTCUSDT" });
     expect(adapter).toBeInstanceOf(BinanceExchangeAdapter);
     expect(adapter.id).toBe("binance");
+  });
+
+  it("creates ondoperps adapter when EXCHANGE=ondoperps", () => {
+    process.env.EXCHANGE = "ondoperps";
+    process.env.ONDOPERPS_API_KEY_ID = "ondoKeyId_test";
+    process.env.ONDOPERPS_API_SECRET = "ondoApiSecret_test";
+    process.env.ONDOPERPS_SYMBOL = "XAU-USD.P";
+
+    const adapter = createExchangeAdapter({ symbol: "XAU-USD.P" });
+    expect(adapter).toBeInstanceOf(OndoperpsExchangeAdapter);
+    expect(adapter.id).toBe("ondoperps");
+  });
+
+  it("accepts the legacy ondoperp id and environment prefix", () => {
+    delete process.env.ONDOPERPS_API_KEY_ID;
+    delete process.env.ONDOPERPS_API_SECRET;
+    delete process.env.ONDOPERPS_SYMBOL;
+    process.env.ONDOPERP_API_KEY_ID = "ondoKeyId_legacy";
+    process.env.ONDOPERP_API_SECRET = "ondoApiSecret_legacy";
+    process.env.ONDOPERP_SYMBOL = "ETH-USD.P";
+
+    const adapter = buildAdapterFromEnv({ exchangeId: "ondoperp", symbol: "BTC-USD.P" });
+    expect(adapter).toBeInstanceOf(OndoperpsExchangeAdapter);
+    expect(adapter.id).toBe("ondoperps");
+  });
+
+  it("accepts the legacy ondoperp factory option", () => {
+    const adapter = createExchangeAdapter({
+      exchange: "ondoperp",
+      symbol: "BTC-USD.P",
+      ondoperp: {
+        apiKeyId: "ondoKeyId_legacy",
+        apiSecret: "ondoApiSecret_legacy",
+      },
+    });
+    expect(adapter).toBeInstanceOf(OndoperpsExchangeAdapter);
+    expect(adapter.id).toBe("ondoperps");
   });
 });

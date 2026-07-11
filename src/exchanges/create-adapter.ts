@@ -7,6 +7,7 @@ import { ParadexExchangeAdapter, type ParadexCredentials } from "./paradex/adapt
 import { NadoExchangeAdapter, type NadoCredentials } from "./nado/adapter";
 import { StandxExchangeAdapter, type StandxCredentials } from "./standx/adapter";
 import { BinanceExchangeAdapter, type BinanceCredentials } from "./binance/adapter";
+import { OndoperpsExchangeAdapter, type OndoperpsCredentials } from "./ondoperps/adapter";
 
 export const SUPPORTED_EXCHANGE_IDS = [
   "aster",
@@ -17,6 +18,7 @@ export const SUPPORTED_EXCHANGE_IDS = [
   "nado",
   "standx",
   "binance",
+  "ondoperps",
 ] as const;
 
 export const BASIS_SUPPORTED_EXCHANGE_IDS = [
@@ -37,6 +39,8 @@ export interface ExchangeFactoryOptions {
   nado?: NadoCredentials;
   standx?: StandxCredentials;
   binance?: BinanceCredentials;
+  ondoperps?: OndoperpsCredentials;
+  ondoperp?: OndoperpsCredentials;
 }
 
 export type SupportedExchangeId = (typeof SUPPORTED_EXCHANGE_IDS)[number];
@@ -51,6 +55,7 @@ const EXCHANGE_DISPLAY_NAME: Record<SupportedExchangeId, string> = {
   nado: "Nado",
   standx: "StandX",
   binance: "Binance",
+  ondoperps: "Ondo Perps",
 };
 
 const EXCHANGE_ALIAS_MAP: Record<string, SupportedExchangeId> = {
@@ -63,6 +68,9 @@ const EXCHANGE_ALIAS_MAP: Record<string, SupportedExchangeId> = {
   standx: "standx",
   binance: "binance",
   bnb: "binance",
+  ondoperps: "ondoperps",
+  ondoperp: "ondoperps",
+  ondo: "ondoperps",
 };
 
 export function isSupportedExchangeId(value: string): value is SupportedExchangeId {
@@ -104,5 +112,10 @@ export function createExchangeAdapter(options: ExchangeFactoryOptions): Exchange
       return new StandxExchangeAdapter({ ...options.standx, symbol: options.symbol });
     case "binance":
       return new BinanceExchangeAdapter({ ...options.binance, symbol: options.symbol });
+    case "ondoperps":
+      return new OndoperpsExchangeAdapter({
+        ...(options.ondoperps ?? options.ondoperp),
+        symbol: options.symbol,
+      });
   }
 }

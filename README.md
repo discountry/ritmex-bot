@@ -11,6 +11,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 如果您希望获取优惠并支持本项目，请考虑使用以下注册链接：
 
 * [Lighter 手续费优惠注册链接](https://app.lighter.xyz/?referral=111909FA)
+* [Ondo Perps 邀请注册链接](https://app.ondoperps.xyz/?ref=4A3ACQ)
 * [Aster 手续费优惠注册链接](https://www.asterdex.com/zh-CN/referral/4665f3)
 * [StandX 手续费优惠注册链接](https://standx.com/referral?code=xingxingjun)
 * [Binance 手续费优惠注册链接](https://www.binance.com/join?ref=KNKCA9XC)
@@ -41,6 +42,7 @@ npx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
 - [ritmex-bot CLI User Guide (English)](cli-guide.en.md)
 - [简明上手指南（零基础）](simple-readme.md)
 - [基础网格策略使用教程](grid-trading.md)
+- [Ondo Perps 接入说明](docs/ondoperps/README.md)
 
 ## 核心特性
 - **实时行情与风控**：Websocket + REST 自动同步账户、挂单与仓位，断线后自动恢复。
@@ -59,6 +61,7 @@ npx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
 | Backpack | USDC 永续 | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | `BACKPACK_SANDBOX=true` 启用沙盒
 | Paradex | StarkEx 永续 | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | `PARADEX_SANDBOX=true` 使用测试网
 | Nado | USDC 永续 | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | `NADO_ENV` 可切换 `inkMainnet`/`inkTestnet`
+| Ondo Perps | USD 加密资产/股票/商品永续 | `ONDOPERPS_API_KEY_ID`, `ONDOPERPS_API_SECRET` | API Key HMAC 鉴权；支持生产与沙盒环境
 
 ## 系统要求
 - Bun ≥ 1.2（需同时包含 `bun`、`bunx` 命令）
@@ -103,7 +106,7 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 
 | 变量 | 说明 |
 | --- | --- |
-| `EXCHANGE` | 选择交易所（`aster`/`binance`/`standx`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`） |
+| `EXCHANGE` | 选择交易所（`aster`/`binance`/`standx`/`grvt`/`lighter`/`backpack`/`paradex`/`nado`/`ondoperps`） |
 | `TRADE_SYMBOL` | 交易对（默认 `BTCUSDT`） |
 | `TRADE_AMOUNT` | 单笔下单数量（标的资产计） |
 | `LOSS_LIMIT` | 单笔最大亏损触发的强平额度（USDT） |
@@ -159,6 +162,17 @@ EXCHANGE=binance BINANCE_MARKET_TYPE=perp BINANCE_SYMBOL=BTCUSDT_PERP bun run in
 ```bash
 EXCHANGE=binance BINANCE_MARKET_TYPE=spot BINANCE_SYMBOL=BTCUSDT bun run index.ts --strategy grid
 ```
+
+### Ondo Perps
+1. 使用[邀请链接](https://app.ondoperps.xyz/?ref=4A3ACQ)注册并在账户页面创建具备交易权限的 API Key。
+2. 设置 `EXCHANGE=ondoperps`，填写 `ONDOPERPS_API_KEY_ID` 与 `ONDOPERPS_API_SECRET`。
+3. 设置官方市场格式的 `ONDOPERPS_SYMBOL`，默认 `BTC-USD.P`；其他示例包括 `XAU-USD.P` 与 `NVDA-USD.P`。
+4. 沙盒环境设置 `ONDOPERPS_SANDBOX=true`；自定义端点可使用 `ONDOPERPS_BASE_URL` 与 `ONDOPERPS_WS_URL`。
+5. Builder 接入可选配置 `ONDOPERPS_BUILDER_CODE` 与 `ONDOPERPS_BUILDER_FEE_RATE_BPS`，费率上限为 10 bps。
+
+兼容配置：`ondoperp` 可作为 `ondoperps` 的交易所别名，旧 `ONDOPERP_*` 环境变量前缀继续生效。
+
+适配器使用 REST HMAC 签名执行下单、撤单和账户查询，通过 WebSocket 接收深度、标记价、K 线、订单、仓位与余额更新。仓位级止损映射为统一的 `STOP_MARKET` 订单。官方接入索引：[Ondo Perps llms.txt](https://ondoperps.mintlify.app/llms.txt)。
 
 ### StandX
 

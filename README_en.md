@@ -7,6 +7,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 If you'd like to support this project and get fee discounts, please consider using these referral links:
 
 * [Lighter referral link](https://app.lighter.xyz/?referral=111909FA)
+* [Ondo Perps invite link](https://app.ondoperps.xyz/?ref=4A3ACQ)
 * [Aster referral link](https://www.asterdex.com/en/referral/4665f3)
 * [StandX referral link](https://standx.com/referral?code=xingxingjun)
 * [Binance referral link](https://www.binance.com/join?ref=KNKCA9XC)
@@ -37,6 +38,7 @@ Full guide: [ritmex-bot CLI User Guide (English)](cli-guide.en.md)
 - [ritmex-bot CLI 使用手册（中文）](cli-guide.md)
 - [Beginner-friendly Quick Start](simple-readme.md)
 - [Grid Trading Strategy Guide](grid-trading.md)
+- [Ondo Perps Integration Guide](docs/ondoperps/README.md)
 
 ## Highlights
 - **Live data & risk sync** via websockets with REST fallbacks and full reconciliation on restart.
@@ -55,6 +57,7 @@ Full guide: [ritmex-bot CLI User Guide (English)](cli-guide.en.md)
 | Backpack | USDC perpetuals | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | Set `BACKPACK_SANDBOX=true` for the sandbox |
 | Paradex | StarkEx perpetuals | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | Toggle `PARADEX_SANDBOX=true` for the testnet |
 | Nado | USDC perpetuals | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | Switch `NADO_ENV` between `inkMainnet` and `inkTestnet` |
+| Ondo Perps | USD crypto/equity/commodity perpetuals | `ONDOPERPS_API_KEY_ID`, `ONDOPERPS_API_SECRET` | API-key HMAC authentication with production and sandbox endpoints |
 
 ## Requirements
 - Bun >= 1.2 (both `bun` and `bunx` on PATH)
@@ -99,7 +102,7 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 
 | Variable | Purpose |
 | --- | --- |
-| `EXCHANGE` | Choose the venue (`aster` / `binance` / `standx` / `grvt` / `lighter` / `backpack` / `paradex` / `nado`) |
+| `EXCHANGE` | Choose the venue (`aster` / `binance` / `standx` / `grvt` / `lighter` / `backpack` / `paradex` / `nado` / `ondoperps`) |
 | `TRADE_SYMBOL` | Contract symbol (defaults to `BTCUSDT`) |
 | `TRADE_AMOUNT` | Order size in base asset units |
 | `LOSS_LIMIT` | Max per-trade loss in USDT before forced close |
@@ -156,6 +159,17 @@ EXCHANGE=binance BINANCE_MARKET_TYPE=perp BINANCE_SYMBOL=BTCUSDT_PERP bun run in
 ```bash
 EXCHANGE=binance BINANCE_MARKET_TYPE=spot BINANCE_SYMBOL=BTCUSDT bun run index.ts --strategy grid
 ```
+
+### Ondo Perps
+1. Register through the [invite link](https://app.ondoperps.xyz/?ref=4A3ACQ) and create an API key with trading permissions from the account page.
+2. Set `EXCHANGE=ondoperps`, `ONDOPERPS_API_KEY_ID`, and `ONDOPERPS_API_SECRET`.
+3. Set `ONDOPERPS_SYMBOL` with the official market format. The default is `BTC-USD.P`; other examples include `XAU-USD.P` and `NVDA-USD.P`.
+4. Use `ONDOPERPS_SANDBOX=true` for sandbox endpoints. `ONDOPERPS_BASE_URL` and `ONDOPERPS_WS_URL` provide explicit endpoint overrides.
+5. Builder integrations can set `ONDOPERPS_BUILDER_CODE` and `ONDOPERPS_BUILDER_FEE_RATE_BPS`; the fee is capped at 10 bps.
+
+Compatibility: `ondoperp` remains an exchange alias for `ondoperps`, and legacy `ONDOPERP_*` environment variables remain supported.
+
+The adapter signs REST requests with the Ondo API-key HMAC scheme and consumes WebSocket depth, mark price, kline, order, position, and balance updates. Position-level stops map into the shared `STOP_MARKET` order contract. Official integration index: [Ondo Perps llms.txt](https://ondoperps.mintlify.app/llms.txt).
 
 ### StandX
 

@@ -81,6 +81,16 @@ describe("command parser", () => {
     });
   });
 
+  it("parses the Ondo Perps exchange alias", () => {
+    for (const exchange of ["ondoperps", "ondoperp"]) {
+      const command = parseCommandArgv(["exchange", "capabilities", "--exchange", exchange]);
+      expect(command).toMatchObject({
+        kind: "exchange-capabilities",
+        exchange: "ondoperps",
+      });
+    }
+  });
+
   it("throws for unsupported option", () => {
     expect(() => parseCommandArgv(["doctor", "--unknown"])).toThrow(CommandParseError);
   });

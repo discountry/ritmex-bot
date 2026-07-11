@@ -117,6 +117,15 @@ const STATIC_CAPABILITIES: Record<
     changeMarginMode: true,
     forceCancelAllOrders: true,
   },
+  ondoperps: {
+    trailingStops: false,
+    fundingRate: true,
+    precision: true,
+    queryOpenOrders: true,
+    queryAccountSnapshot: true,
+    changeMarginMode: false,
+    forceCancelAllOrders: true,
+  },
 };
 
 export interface CommandExecutorDependencies {

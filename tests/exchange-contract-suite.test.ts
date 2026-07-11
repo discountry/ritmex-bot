@@ -42,7 +42,7 @@ const REQUIRED_ENV_BY_EXCHANGE: Record<SupportedExchangeId, Record<string, strin
   },
   lighter: {
     LIGHTER_ACCOUNT_INDEX: "1",
-    LIGHTER_API_PRIVATE_KEY: "lighter-private-key",
+    LIGHTER_API_PRIVATE_KEY: "0xed636277f3753b6c0275f7a28c2678a7f3a95655e09deaebec15179b50c5da7f903152e50f594f7b",
     LIGHTER_API_KEY_INDEX: "0",
   },
   backpack: {
@@ -63,6 +63,10 @@ const REQUIRED_ENV_BY_EXCHANGE: Record<SupportedExchangeId, Record<string, strin
   binance: {
     BINANCE_API_KEY: "binance-key",
     BINANCE_API_SECRET: "binance-secret",
+  },
+  ondoperps: {
+    ONDOPERPS_API_KEY_ID: "ondoKeyId_test",
+    ONDOPERPS_API_SECRET: "ondoApiSecret_test",
   },
 };
 
@@ -151,6 +155,7 @@ describe("exchange contract suite", () => {
     for (const id of SUPPORTED_EXCHANGE_IDS) {
       expect(output).toContain(id);
     }
+    expect(parseCliArgs(["--exchange", "ondoperp"]).exchange).toBe("ondoperps");
     spy.mockRestore();
   });
 
@@ -257,5 +262,22 @@ describe("exchange contract suite", () => {
         expect(message).toMatch(/does not support trailing stop/i);
       }
     }
+  });
+
+  it("routes orders from adapters that still report the legacy ondoperp id", async () => {
+    delete process.env.EXCHANGE;
+    delete process.env.TRADE_EXCHANGE;
+    const adapter = new RecorderAdapter("ondoperps");
+    (adapter as unknown as { id: string }).id = "ondoperp";
+
+    await routeLimitOrder({
+      adapter,
+      symbol: "BTC-USD.P",
+      side: "BUY",
+      quantity: 0.01,
+      price: 100_000,
+    });
+
+    expect(adapter.lastCreateOrderParams?.type).toBe("LIMIT");
   });
 });

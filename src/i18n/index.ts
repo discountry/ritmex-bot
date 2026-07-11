@@ -426,6 +426,10 @@ const translations: Record<string, TranslationEntry> = {
     zh: "StandX 需要配置 STANDX_TOKEN",
     en: "StandX requires STANDX_TOKEN",
   },
+  "env.missingOndoperps": {
+    zh: "Ondo Perps 需要配置 ONDOPERPS_API_KEY_ID 与 ONDOPERPS_API_SECRET（兼容旧 ONDOPERP_ 前缀）",
+    en: "Ondo Perps requires ONDOPERPS_API_KEY_ID and ONDOPERPS_API_SECRET (legacy ONDOPERP_ prefix is supported)",
+  },
   "log.subscribe.accountFail": {
     zh: "订阅账户失败: {error}",
     en: "Failed to subscribe account: {error}",

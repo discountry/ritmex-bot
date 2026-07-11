@@ -98,6 +98,7 @@ const SYMBOL_PRIORITY_BY_EXCHANGE: Record<SupportedExchangeId, { envKeys: string
   nado: { envKeys: ["NADO_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-PERP" },
   standx: { envKeys: ["STANDX_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-USD" },
   binance: { envKeys: ["BINANCE_SYMBOL", "TRADE_SYMBOL"], fallback: "BTCUSDT" },
+  ondoperps: { envKeys: ["ONDOPERPS_SYMBOL", "ONDOPERP_SYMBOL", "TRADE_SYMBOL"], fallback: "BTC-USD.P" },
 };
 
 export function resolveSymbolFromEnv(explicitExchangeId?: SupportedExchangeId | string | null): string {

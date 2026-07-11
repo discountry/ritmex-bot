@@ -17,6 +17,7 @@ import * as paradexOrders from "./paradex/order";
 import * as nadoOrders from "./nado/order";
 import * as standxOrders from "./standx/order";
 import * as binanceOrders from "./binance/order";
+import * as ondoperpsOrders from "./ondoperps/order";
 
 type ExchangeKey = SupportedExchangeId;
 
@@ -85,13 +86,21 @@ const handlerMap: Record<ExchangeKey, ExchangeOrderHandlers> = {
     trailingStop: binanceOrders.createTrailingStopOrder,
     close: binanceOrders.createClosePositionOrder,
   },
+  ondoperps: {
+    limit: ondoperpsOrders.createLimitOrder,
+    market: ondoperpsOrders.createMarketOrder,
+    stop: ondoperpsOrders.createStopOrder,
+    trailingStop: ondoperpsOrders.createTrailingStopOrder,
+    close: ondoperpsOrders.createClosePositionOrder,
+  },
 };
 
 const knownExchanges: ExchangeKey[] = [...SUPPORTED_EXCHANGE_IDS];
 
 function normalizeExchangeId(value: string | undefined | null): string | undefined {
   if (!value) return undefined;
-  return value.trim().toLowerCase();
+  const normalized = value.trim().toLowerCase();
+  return normalized === "ondoperp" ? "ondoperps" : normalized;
 }
 
 function resolveExchangeKey(adapter: ExchangeAdapter): ExchangeKey {

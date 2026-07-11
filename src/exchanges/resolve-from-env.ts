@@ -7,6 +7,7 @@ import type { ParadexCredentials } from "./paradex/adapter";
 import type { NadoCredentials } from "./nado/adapter";
 import type { StandxCredentials } from "./standx/adapter";
 import type { BinanceCredentials } from "./binance/adapter";
+import type { OndoperpsCredentials } from "./ondoperps/adapter";
 import { t } from "../i18n";
 import type { Address } from "viem";
 
@@ -49,6 +50,10 @@ export function buildAdapterFromEnv(options: BuildAdapterOptions): ExchangeAdapt
     case "binance": {
       const credentials = resolveBinanceCredentials(symbol);
       return createExchangeAdapter({ exchange: id, symbol, binance: credentials });
+    }
+    case "ondoperps": {
+      const credentials = resolveOndoperpsCredentials(symbol);
+      return createExchangeAdapter({ exchange: id, symbol, ondoperps: credentials });
     }
   }
 }
@@ -197,6 +202,26 @@ function resolveBinanceCredentials(symbol: string): BinanceCredentials {
     futuresRestUrl: process.env.BINANCE_FUTURES_REST_URL ?? undefined,
     spotWsUrl: process.env.BINANCE_SPOT_WS_URL ?? undefined,
     futuresWsUrl: process.env.BINANCE_FUTURES_WS_URL ?? undefined,
+  };
+}
+
+function resolveOndoperpsCredentials(symbol: string): OndoperpsCredentials {
+  const apiKeyId = process.env.ONDOPERPS_API_KEY_ID ?? process.env.ONDOPERP_API_KEY_ID ?? process.env.ONDO_KEY_ID;
+  const apiSecret = process.env.ONDOPERPS_API_SECRET ?? process.env.ONDOPERP_API_SECRET ?? process.env.ONDO_API_SECRET;
+  if (!apiKeyId || !apiSecret) {
+    throw new Error(t("env.missingOndoperps"));
+  }
+  const sandbox = parseOptionalBoolean(process.env.ONDOPERPS_SANDBOX ?? process.env.ONDOPERP_SANDBOX) === true;
+  return {
+    apiKeyId,
+    apiSecret,
+    symbol: process.env.ONDOPERPS_SYMBOL ?? process.env.ONDOPERP_SYMBOL ?? symbol,
+    baseUrl: process.env.ONDOPERPS_BASE_URL ?? process.env.ONDOPERP_BASE_URL ?? (sandbox ? "https://api.ondoperps-sandbox.xyz" : undefined),
+    wsUrl: process.env.ONDOPERPS_WS_URL ?? process.env.ONDOPERP_WS_URL ?? (sandbox ? "wss://api.ondoperps-sandbox.xyz/ws" : undefined),
+    builderCode: process.env.ONDOPERPS_BUILDER_CODE ?? process.env.ONDOPERP_BUILDER_CODE ?? undefined,
+    builderFeeRateBps: parseOptionalNumber(
+      process.env.ONDOPERPS_BUILDER_FEE_RATE_BPS ?? process.env.ONDOPERP_BUILDER_FEE_RATE_BPS,
+    ),
   };
 }
 

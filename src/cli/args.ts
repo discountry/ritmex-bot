@@ -88,6 +88,8 @@ function assignExchange(options: CliOptions, raw: string): void {
     options.exchange = normalized as CliOptions["exchange"];
   } else if (normalized === "gravity" || normalized === "grav" || normalized === "grv") {
     options.exchange = "grvt";
+  } else if (normalized === "ondo" || normalized === "ondoperp") {
+    options.exchange = "ondoperps";
   }
 }
 

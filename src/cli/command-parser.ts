@@ -470,6 +470,7 @@ function normalizeExchange(value: string | undefined): SupportedExchangeId | und
   const normalized = value.trim().toLowerCase();
   if (normalized === "gravity" || normalized === "grav" || normalized === "grv") return "grvt";
   if (normalized === "bnb") return "binance";
+  if (normalized === "ondo" || normalized === "ondoperp") return "ondoperps";
   if (isSupportedExchangeId(normalized)) return normalized;
   throw new CommandParseError(`Unsupported exchange '${value}'`);
 }

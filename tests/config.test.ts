@@ -56,4 +56,19 @@ describe("resolveSymbolFromEnv", () => {
 
     expect(resolveSymbolFromEnv("binance")).toBe("ETHUSDT");
   });
+
+  it("supports Ondo Perps symbol defaults when explicit exchange id is provided", () => {
+    delete process.env.EXCHANGE;
+    process.env.ONDOPERPS_SYMBOL = "NVDA-USD.P";
+
+    expect(resolveSymbolFromEnv("ondoperps")).toBe("NVDA-USD.P");
+  });
+
+  it("supports the legacy Ondo Perps exchange id and symbol prefix", () => {
+    delete process.env.EXCHANGE;
+    delete process.env.ONDOPERPS_SYMBOL;
+    process.env.ONDOPERP_SYMBOL = "ETH-USD.P";
+
+    expect(resolveSymbolFromEnv("ondoperp")).toBe("ETH-USD.P");
+  });
 });
