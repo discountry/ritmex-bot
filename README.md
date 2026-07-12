@@ -32,7 +32,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 
 ### 安装当前项目 Skill（skills add）
 ```bash
-npx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
+bunx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
 ```
 如需指定分支，可追加 `--ref <branch-or-tag>`。
 
@@ -43,6 +43,7 @@ npx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
 - [ritmex-bot CLI User Guide (English)](cli-guide.en.md)
 - [简明上手指南（零基础）](simple-readme.md)
 - [基础网格策略使用教程](grid-trading.md)
+- [各交易所中英文配置教程](#交易所配置指南)
 - [Ondo Perps 接入说明](docs/ondoperps/README.md)
 
 ## 核心特性
@@ -53,16 +54,18 @@ npx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
 - **模块化架构**：策略引擎、交易所适配器与 Ink CLI 相互解耦，新增交易所或策略更容易。
 
 ## 支持的交易所
-| 交易所 | 合约类型 | 必填环境变量 | 备注 |
+
+| 交易所 | 市场类型 | 标准配置必填项 | 备注 |
 | --- | --- | --- | --- |
-| Aster | USDT 永续 | `ASTER_API_KEY`, `ASTER_API_SECRET` | 默认交易所；兼容脚本引导
-| StandX | USD 永续 | `STANDX_TOKEN` | 使用 JWT Token 登录，优先走 WebSocket 推送
-| GRVT | USDT 永续 | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID` | `GRVT_ENV` 可切换 `prod`/`testnet`
-| Lighter | zkLighter 永续 | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | 默认 `LIGHTER_ENV=testnet`
-| Backpack | USDC 永续 | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | `BACKPACK_SANDBOX=true` 启用沙盒
-| Paradex | StarkEx 永续 | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | `PARADEX_SANDBOX=true` 使用测试网
-| Nado | USDC 永续 | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | `NADO_ENV` 可切换 `inkMainnet`/`inkTestnet`
-| Ondo Perps | USD 加密资产/股票/商品永续 | `ONDOPERPS_API_KEY_ID`, `ONDOPERPS_API_SECRET` | API Key HMAC 鉴权；支持生产与沙盒环境
+| Aster | USDT 永续 | `ASTER_API_KEY`, `ASTER_API_SECRET` | 生产环境；默认交易所 |
+| Binance | 现货 + USDⓈ-M 永续 | `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `BINANCE_MARKET_TYPE` 选择市场 |
+| StandX | USD 永续 | `STANDX_TOKEN`, `STANDX_REQUEST_PRIVATE_KEY` | JWT 认证 + Ed25519 交易签名 |
+| GRVT | USDT 永续 | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID`, `GRVT_INSTRUMENT` | `GRVT_ENV` 支持 `prod`/`testnet` |
+| Lighter | 永续 + 部分现货 | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_KEY_INDEX`, `LIGHTER_API_PRIVATE_KEY` | 默认 `LIGHTER_ENV=testnet` |
+| Backpack | 现货 + USDC 永续 | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET` | 永续应显式使用 `*_PERP` 符号 |
+| Paradex | USD 永续 | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | `PARADEX_SANDBOX=true` 使用测试网 |
+| Nado | USDC 永续 | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | `NADO_ENV` 支持 `inkMainnet`/`inkTestnet` |
+| Ondo Perps | 加密资产/股票/商品永续 | `ONDOPERPS_API_KEY_ID`, `ONDOPERPS_API_SECRET` | HMAC 鉴权；支持生产与沙盒环境 |
 
 ## 系统要求
 - Bun ≥ 1.2（需同时包含 `bun`、`bunx` 命令）
@@ -126,115 +129,20 @@ curl -fsSL https://github.com/discountry/ritmex-bot/raw/refs/heads/main/setup.sh
 > ```
 
 ## 交易所配置指南
-### Aster
-1. 将 `EXCHANGE` 保持为 `aster`（默认值）。
-2. 填写 `ASTER_API_KEY` 与 `ASTER_API_SECRET`。
-3. 根据交易对调整 `TRADE_SYMBOL`、`PRICE_TICK`、`QTY_STEP` 等精度参数。
-4. 一键脚本会自动写入这些变量，手动部署时需自行维护。
 
-### Binance
-1. 设置 `EXCHANGE=binance`。
-2. 填写 `BINANCE_API_KEY`、`BINANCE_API_SECRET`。
-3. 设置市场模式 `BINANCE_MARKET_TYPE`：
-   - `perp`：永续（默认）
-   - `spot`：现货
-   - `auto`：按符号自动匹配（同名现货/永续并存时建议不要使用）
-4. 设置交易符号 `BINANCE_SYMBOL`（或使用 `TRADE_SYMBOL`）：
-   - 永续建议写 `BTCUSDT_PERP`（或直接 `BTCUSDT` + `BINANCE_MARKET_TYPE=perp`）
-   - 现货建议写 `BTCUSDT`（也支持 `BTCUSDT_SPOT`）
-5. 需要做期现套利（Basis）时，建议显式拆分：
-   - `BASIS_FUTURES_SYMBOL=BTCUSDT_PERP`
-   - `BASIS_SPOT_SYMBOL=BTCUSDT`
-6. 可选测试网/自定义端点：
-   - `BINANCE_SANDBOX=true`
-   - `BINANCE_SPOT_REST_URL` / `BINANCE_FUTURES_REST_URL`
-   - `BINANCE_SPOT_WS_URL` / `BINANCE_FUTURES_WS_URL`
+每个受支持交易所均提供独立的中文与英文配置教程。教程覆盖凭证获取、必填变量、网络选择、符号格式、只读验证和安全要求。
 
-> Binance 适配器默认优先使用 WebSocket（盘口、ticker、kline、账户/订单用户流），仅在必要时使用 REST 补偿与兜底。
->
-> 若使用现货模式，部分“仅合约可用”的保护单能力会受交易所限制，策略会按交易所能力自动降级。
-
-**示例（永续做市）**
-```bash
-EXCHANGE=binance BINANCE_MARKET_TYPE=perp BINANCE_SYMBOL=BTCUSDT_PERP bun run index.ts --strategy maker
-```
-
-**示例（现货网格）**
-```bash
-EXCHANGE=binance BINANCE_MARKET_TYPE=spot BINANCE_SYMBOL=BTCUSDT bun run index.ts --strategy grid
-```
-
-### Ondo Perps
-1. 使用[邀请链接](https://app.ondoperps.xyz/?ref=4A3ACQ)注册并在账户页面创建具备交易权限的 API Key。
-2. 设置 `EXCHANGE=ondoperps`，填写 `ONDOPERPS_API_KEY_ID` 与 `ONDOPERPS_API_SECRET`。
-3. 设置官方市场格式的 `ONDOPERPS_SYMBOL`，默认 `BTC-USD.P`；其他示例包括 `XAU-USD.P` 与 `NVDA-USD.P`。
-4. 沙盒环境设置 `ONDOPERPS_SANDBOX=true`；自定义端点可使用 `ONDOPERPS_BASE_URL` 与 `ONDOPERPS_WS_URL`。
-5. Builder 接入可选配置 `ONDOPERPS_BUILDER_CODE` 与 `ONDOPERPS_BUILDER_FEE_RATE_BPS`，费率上限为 10 bps。
-
-兼容配置：`ondoperp` 可作为 `ondoperps` 的交易所别名，旧 `ONDOPERP_*` 环境变量前缀继续生效。
-
-适配器使用 REST HMAC 签名执行下单、撤单和账户查询，通过 WebSocket 接收深度、标记价、K 线、订单、仓位与余额更新。仓位级止损映射为统一的 `STOP_MARKET` 订单。官方接入索引：[Ondo Perps llms.txt](https://ondoperps.mintlify.app/llms.txt)。
-
-### StandX
-
-* [StandX 做市策略教程](docs/standx/maker-points-guide.md)
-
-策略需要 StandX 的 API Token 和签名私钥才能下单。
-
-**获取方式（使用 StandX 官方 API 生成功能）：**
-1. 打开 StandX 官方 API 创建页面：https://standx.com/user/session
-2. 连接钱包并登录
-3. 点击 **"Generate API Token"** 按钮
-4. 页面会显示以下信息：
-   - **Token**（以 `eyJ` 开头的 JWT 字符串）→ 填入 `STANDX_TOKEN`
-   - **Ed25519 Private Key**（Base58 格式私钥，类似 `HdsyJD7oWgT...`）→ 填入 `STANDX_REQUEST_PRIVATE_KEY`
-   - **创建日期** 和 **有效期天数** → 用于配置 Token 过期提醒
-
-> Ed25519 Private Key 是系统自动生成的签名私钥，仅用于交易请求签名，你的资产仍在主钱包中，非常安全。
-
-请妥善保存这些凭证，不要分享给他人。
-
-**配置步骤：**
-1. 设置 `EXCHANGE=standx`。
-2. 填写 `STANDX_TOKEN`（Perps API 的 JWT Token）。
-3. 填写 `STANDX_REQUEST_PRIVATE_KEY`（Ed25519 签名私钥，Base58 格式）。
-4. 设置 `STANDX_SYMBOL`（默认 `BTC-USD`），并校准 `PRICE_TICK` / `QTY_STEP`。
-5. 推荐配置 Token 过期时间：
-   - `STANDX_TOKEN_CREATE_DATE`（创建日期，格式 `YYYY-MM-DD`）
-   - `STANDX_TOKEN_VALIDITY_DAYS`（有效期天数）
-6. 可选：`STANDX_BASE_URL`、`STANDX_WS_URL`、`STANDX_SESSION_ID` 用于自定义环境。
-
-
-### GRVT
-1. 在 `.env` 中设置 `EXCHANGE=grvt`。
-2. 填写 `GRVT_API_KEY`、`GRVT_API_SECRET`、`GRVT_SUB_ACCOUNT_ID`。
-3. 若使用测试网，可将 `GRVT_ENV=testnet` 并调整 `GRVT_INSTRUMENT`/`GRVT_SYMBOL`。
-4. 可选：提供 `GRVT_COOKIE` 或自定义 `GRVT_SIGNER_PATH` 以复用已有登录态。
-
-### Lighter
-1. 设置 `EXCHANGE=lighter`。
-2. 填写 `LIGHTER_ACCOUNT_INDEX` 与 `LIGHTER_API_PRIVATE_KEY`（40 字节十六进制私钥），其中`LIGHTER_ACCOUNT_INDEX`是你的账户索引，需要你在官网按F12观察接口请求获取，`LIGHTER_API_PRIVATE_KEY`是你的API私钥。
-3. 如需切换环境，将 `LIGHTER_ENV` 改为 `mainnet`/`staging`/`dev`；必要时指定 `LIGHTER_BASE_URL`。
-4. 交易对默认为 `LIGHTER_SYMBOL=BTCUSDT`，也可按需重写价格与数量小数位。
-
-### Backpack
-1. 设置 `EXCHANGE=backpack`。
-2. 填写 `BACKPACK_API_KEY`、`BACKPACK_API_SECRET`、`BACKPACK_PASSWORD`；如有分账户，补充 `BACKPACK_SUBACCOUNT`，默认填写主账户ID。
-3. 使用测试环境时将 `BACKPACK_SANDBOX=true`，并确认 `BACKPACK_SYMBOL` 与实际符号一致（默认 `BTC_USD_PERP`）。
-4. 可通过 `BACKPACK_DEBUG=true` 观察适配器详细日志。
-
-### Paradex
-1. 设置 `EXCHANGE=paradex`。
-2. 提供 `PARADEX_PRIVATE_KEY`（EVM 私钥）与 `PARADEX_WALLET_ADDRESS` 注意这是你EVM钱包的地址和私钥，建议创建全新钱包，不要放置无关资产。
-3. 默认连接主网，若需测试网，将 `PARADEX_SANDBOX=true` 并根据需要调整 `PARADEX_SYMBOL`。
-4. 复杂环境可额外设置 `PARADEX_USE_PRO`、`PARADEX_RECONNECT_DELAY_MS` 或调试开关。
-
-### Nado
-1. 设置 `EXCHANGE=nado`。
-2. 在 Nado 官网（交易界面）打开开发者工具（F12）→ 切换到 `Application` → `Local Storage`，找到 `nado.userSettings`，在其内容中取出 `privateKey` 字段并填入 `.env` 的 `NADO_SIGNER_PRIVATE_KEY`。
-3. 提供 `NADO_SUBACCOUNT_OWNER`（或 `NADO_EVM_ADDRESS`）。
-4. 选择网络 `NADO_ENV=inkMainnet`（主网）或 `inkTestnet`（测试网）。
-5. 设置交易品种 `NADO_SYMBOL`（交易对格式类似 `BTC-PERP`；也支持输入 `BTCUSDT0`，会自动映射为 `BTC-PERP`）。
+| 交易所 | 中文教程 | English Guide |
+| --- | --- | --- |
+| Aster | [配置教程](docs/exchanges/aster.md) | [Configuration Guide](docs/exchanges/aster.en.md) |
+| Binance | [配置教程](docs/exchanges/binance.md) | [Configuration Guide](docs/exchanges/binance.en.md) |
+| StandX | [配置教程](docs/exchanges/standx.md) | [Configuration Guide](docs/exchanges/standx.en.md) |
+| GRVT | [配置教程](docs/exchanges/grvt.md) | [Configuration Guide](docs/exchanges/grvt.en.md) |
+| Lighter | [配置教程](docs/exchanges/lighter.md) | [Configuration Guide](docs/exchanges/lighter.en.md) |
+| Backpack | [配置教程](docs/exchanges/backpack.md) | [Configuration Guide](docs/exchanges/backpack.en.md) |
+| Paradex | [配置教程](docs/exchanges/paradex.md) | [Configuration Guide](docs/exchanges/paradex.en.md) |
+| Nado | [配置教程](docs/exchanges/nado.md) | [Configuration Guide](docs/exchanges/nado.en.md) |
+| Ondo Perps | [配置教程](docs/exchanges/ondoperps.md) | [Configuration Guide](docs/exchanges/ondoperps.en.md) |
 
 ## 命令速查
 ```bash
@@ -260,11 +168,10 @@ ritmex-bot strategy run --strategy maker --exchange standx --silent --dry-run
 ### 运行方式
 ```bash
 # 全局安装
-npm install -g ritmex-bot
+bun add -g ritmex-bot
 ritmex-bot doctor
 
 # 不安装直接运行
-npx ritmex-bot doctor
 bunx ritmex-bot doctor
 ```
 

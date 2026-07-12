@@ -28,7 +28,7 @@ If you'd like to support this project and get fee discounts, please consider usi
 
 ### Install This Project Skill (`skills add`)
 ```bash
-npx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
+bunx skills add https://github.com/discountry/ritmex-bot --skill use-ritmex-bot
 ```
 If you need a specific branch/tag, append `--ref <branch-or-tag>`.
 
@@ -39,6 +39,7 @@ Full guide: [ritmex-bot CLI User Guide (English)](cli-guide.en.md)
 - [ritmex-bot CLI 使用手册（中文）](cli-guide.md)
 - [Beginner-friendly Quick Start](simple-readme.md)
 - [Grid Trading Strategy Guide](grid-trading.md)
+- [Bilingual Exchange Configuration Guides](#exchange-setup-guides)
 - [Ondo Perps Integration Guide](docs/ondoperps/README.md)
 
 ## Highlights
@@ -49,16 +50,18 @@ Full guide: [ritmex-bot CLI User Guide (English)](cli-guide.en.md)
 - **Modular architecture** decoupling engines, exchange adapters, and the Ink CLI for easy venue or strategy extensions.
 
 ## Supported Exchanges
-| Exchange | Contract Type | Required Environment Variables | Notes |
+
+| Exchange | Market Type | Standard Required Settings | Notes |
 | --- | --- | --- | --- |
-| Aster | USDT perpetuals | `ASTER_API_KEY`, `ASTER_API_SECRET` | Default venue; works with the bootstrap script |
-| StandX | USD perpetuals | `STANDX_TOKEN` | Uses JWT token auth; prefer websocket streams |
-| GRVT | USDT perpetuals | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID` | Switch `GRVT_ENV` between `prod` and `testnet` |
-| Lighter | zkLighter perpetuals | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_PRIVATE_KEY` | Defaults to `LIGHTER_ENV=testnet` |
-| Backpack | USDC perpetuals | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, `BACKPACK_PASSWORD` | Set `BACKPACK_SANDBOX=true` for the sandbox |
-| Paradex | StarkEx perpetuals | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | Toggle `PARADEX_SANDBOX=true` for the testnet |
-| Nado | USDC perpetuals | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | Switch `NADO_ENV` between `inkMainnet` and `inkTestnet` |
-| Ondo Perps | USD crypto/equity/commodity perpetuals | `ONDOPERPS_API_KEY_ID`, `ONDOPERPS_API_SECRET` | API-key HMAC authentication with production and sandbox endpoints |
+| Aster | USDT perpetuals | `ASTER_API_KEY`, `ASTER_API_SECRET` | Production; default exchange |
+| Binance | Spot + USDⓈ-M perpetuals | `BINANCE_API_KEY`, `BINANCE_API_SECRET` | `BINANCE_MARKET_TYPE` selects the market |
+| StandX | USD perpetuals | `STANDX_TOKEN`, `STANDX_REQUEST_PRIVATE_KEY` | JWT authentication + Ed25519 trade signing |
+| GRVT | USDT perpetuals | `GRVT_API_KEY`, `GRVT_API_SECRET`, `GRVT_SUB_ACCOUNT_ID`, `GRVT_INSTRUMENT` | `GRVT_ENV` supports `prod`/`testnet` |
+| Lighter | Perpetuals + selected Spot markets | `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_KEY_INDEX`, `LIGHTER_API_PRIVATE_KEY` | Defaults to `LIGHTER_ENV=testnet` |
+| Backpack | Spot + USDC perpetuals | `BACKPACK_API_KEY`, `BACKPACK_API_SECRET` | Use an explicit `*_PERP` symbol for perpetuals |
+| Paradex | USD perpetuals | `PARADEX_PRIVATE_KEY`, `PARADEX_WALLET_ADDRESS` | `PARADEX_SANDBOX=true` selects testnet |
+| Nado | USDC perpetuals | `NADO_SIGNER_PRIVATE_KEY`, `NADO_SUBACCOUNT_OWNER` | `NADO_ENV` supports `inkMainnet`/`inkTestnet` |
+| Ondo Perps | Crypto/equity/commodity perpetuals | `ONDOPERPS_API_KEY_ID`, `ONDOPERPS_API_SECRET` | HMAC authentication with production and sandbox endpoints |
 
 ## Requirements
 - Bun >= 1.2 (both `bun` and `bunx` on PATH)
@@ -123,114 +126,19 @@ The script installs Bun, project dependencies, collects Aster API credentials, g
 
 ## Exchange Setup Guides
 
-### Aster
-1. Keep `EXCHANGE=aster` (default value).
-2. Supply `ASTER_API_KEY` and `ASTER_API_SECRET`.
-3. Adjust `TRADE_SYMBOL`, `PRICE_TICK`, and `QTY_STEP` to match the requested market.
-4. The bootstrap script auto-populates these variables; manual installs must maintain them.
+Each supported exchange has a standalone Chinese and English configuration guide covering credential creation, required variables, environment selection, symbol formats, read-only verification, and security controls.
 
-### Binance
-1. Set `EXCHANGE=binance`.
-2. Provide `BINANCE_API_KEY` and `BINANCE_API_SECRET`.
-3. Set market mode via `BINANCE_MARKET_TYPE`:
-   - `perp`: perpetual futures (default)
-   - `spot`: spot market
-   - `auto`: resolve by symbol (not recommended when both spot/perp share the same symbol)
-4. Set `BINANCE_SYMBOL` (or fallback to `TRADE_SYMBOL`):
-   - Perp recommended: `BTCUSDT_PERP` (or `BTCUSDT` with `BINANCE_MARKET_TYPE=perp`)
-   - Spot recommended: `BTCUSDT` (also accepts `BTCUSDT_SPOT`)
-5. For Basis arbitrage on Binance, explicitly split legs:
-   - `BASIS_FUTURES_SYMBOL=BTCUSDT_PERP`
-   - `BASIS_SPOT_SYMBOL=BTCUSDT`
-6. Optional sandbox/custom endpoints:
-   - `BINANCE_SANDBOX=true`
-   - `BINANCE_SPOT_REST_URL` / `BINANCE_FUTURES_REST_URL`
-   - `BINANCE_SPOT_WS_URL` / `BINANCE_FUTURES_WS_URL`
-
-> The Binance adapter is WS-first by default (depth/ticker/kline/account/order streams), with REST used only for reconciliation and fallback.
->
-> In spot mode, some derivatives-only protective order capabilities are exchange-limited, and the strategy will degrade gracefully based on venue capabilities.
-
-**Example (perp maker)**
-```bash
-EXCHANGE=binance BINANCE_MARKET_TYPE=perp BINANCE_SYMBOL=BTCUSDT_PERP bun run index.ts --strategy maker
-```
-
-**Example (spot grid)**
-```bash
-EXCHANGE=binance BINANCE_MARKET_TYPE=spot BINANCE_SYMBOL=BTCUSDT bun run index.ts --strategy grid
-```
-
-### Ondo Perps
-1. Register through the [invite link](https://app.ondoperps.xyz/?ref=4A3ACQ) and create an API key with trading permissions from the account page.
-2. Set `EXCHANGE=ondoperps`, `ONDOPERPS_API_KEY_ID`, and `ONDOPERPS_API_SECRET`.
-3. Set `ONDOPERPS_SYMBOL` with the official market format. The default is `BTC-USD.P`; other examples include `XAU-USD.P` and `NVDA-USD.P`.
-4. Use `ONDOPERPS_SANDBOX=true` for sandbox endpoints. `ONDOPERPS_BASE_URL` and `ONDOPERPS_WS_URL` provide explicit endpoint overrides.
-5. Builder integrations can set `ONDOPERPS_BUILDER_CODE` and `ONDOPERPS_BUILDER_FEE_RATE_BPS`; the fee is capped at 10 bps.
-
-Compatibility: `ondoperp` remains an exchange alias for `ondoperps`, and legacy `ONDOPERP_*` environment variables remain supported.
-
-The adapter signs REST requests with the Ondo API-key HMAC scheme and consumes WebSocket depth, mark price, kline, order, position, and balance updates. Position-level stops map into the shared `STOP_MARKET` order contract. Official integration index: [Ondo Perps llms.txt](https://ondoperps.mintlify.app/llms.txt).
-
-### StandX
-
-* [StandX Maker Points Strategy Guide](docs/standx/maker-points-guide.md)
-
-The strategy requires a StandX API Token and signing private key to place orders.
-
-**How to obtain (using StandX's official API generation feature):**
-1. Open the StandX official API creation page: https://standx.com/user/session
-2. Connect your wallet and log in
-3. Click the **"Generate API Token"** button
-4. The page will display the following information:
-   - **Token** (JWT string starting with `eyJ`) → Fill in `STANDX_TOKEN`
-   - **Ed25519 Private Key** (Base58 format, like `HdsyJD7oWgT...`) → Fill in `STANDX_REQUEST_PRIVATE_KEY`
-   - **Creation date** and **Validity days** → Used to configure token expiry reminders
-
-> The Ed25519 Private Key is an auto-generated signing key used only for trade request signatures. Your assets remain in your main wallet and are completely safe.
-
-Please keep these credentials safe and do not share them with anyone.
-
-**Configuration steps:**
-1. Set `EXCHANGE=standx`.
-2. Provide `STANDX_TOKEN` (JWT token for perps API).
-3. Provide `STANDX_REQUEST_PRIVATE_KEY` (Ed25519 signing private key, Base58 format).
-4. Set `STANDX_SYMBOL` (defaults to `BTC-USD`) and align `PRICE_TICK` / `QTY_STEP`.
-5. Recommended: configure token expiry settings:
-   - `STANDX_TOKEN_CREATE_DATE` (creation date, format `YYYY-MM-DD`)
-   - `STANDX_TOKEN_VALIDITY_DAYS` (validity days)
-6. Optional: `STANDX_BASE_URL`, `STANDX_WS_URL`, or `STANDX_SESSION_ID` for custom endpoints.
-
-### GRVT
-1. Set `EXCHANGE=grvt` inside `.env`.
-2. Fill `GRVT_API_KEY`, `GRVT_API_SECRET`, and `GRVT_SUB_ACCOUNT_ID`.
-3. Use `GRVT_ENV=testnet` when targeting the test environment, and align `GRVT_INSTRUMENT` / `GRVT_SYMBOL`.
-4. Optional: provide `GRVT_COOKIE` or a custom `GRVT_SIGNER_PATH` when reusing an existing session.
-
-### Lighter
-1. Set `EXCHANGE=lighter`.
-2. Provide `LIGHTER_ACCOUNT_INDEX` and `LIGHTER_API_PRIVATE_KEY` (40-byte hex private key). `LIGHTER_ACCOUNT_INDEX` is your account index, which you can find by opening DevTools (F12) on the official website and observing API requests. `LIGHTER_API_PRIVATE_KEY` is your API private key.
-3. Switch `LIGHTER_ENV` to `mainnet`, `staging`, or `dev` when necessary; override `LIGHTER_BASE_URL` if endpoints differ.
-4. `LIGHTER_SYMBOL` defaults to `BTCUSDT`; override price/size decimals when markets differ.
-
-### Backpack
-1. Set `EXCHANGE=backpack`.
-2. Populate `BACKPACK_API_KEY`, `BACKPACK_API_SECRET`, and `BACKPACK_PASSWORD`; add `BACKPACK_SUBACCOUNT` if you trade from a subaccount (defaults to main account ID).
-3. Toggle `BACKPACK_SANDBOX=true` for the sandbox environment and verify `BACKPACK_SYMBOL` matches the contract (defaults to `BTC_USD_PERP`).
-4. Enable `BACKPACK_DEBUG=true` for verbose adapter logging.
-
-### Paradex
-1. Set `EXCHANGE=paradex`.
-2. Provide `PARADEX_PRIVATE_KEY` (EVM private key) and `PARADEX_WALLET_ADDRESS`. Note: These are your EVM wallet address and private key. It is recommended to create a brand new wallet and avoid storing unrelated assets in it.
-3. The adapter connects to mainnet by default; enable `PARADEX_SANDBOX=true` and adjust `PARADEX_SYMBOL` for testnet usage.
-4. Advanced tuning: use `PARADEX_USE_PRO`, `PARADEX_RECONNECT_DELAY_MS`, or debug flags as needed.
-
-### Nado
-1. Set `EXCHANGE=nado`.
-2. On the Nado web app (trading interface), open DevTools (F12) -> switch to the `Application` tab -> `Local Storage`, locate `nado.userSettings`, then grab the `privateKey` field from its JSON value and paste it into `.env` as `NADO_SIGNER_PRIVATE_KEY`.
-3. Provide `NADO_SUBACCOUNT_OWNER` (or `NADO_EVM_ADDRESS`).
-4. Select network via `NADO_ENV=inkMainnet` (mainnet) or `inkTestnet` (testnet).
-5. Set `NADO_SYMBOL` using Nado product symbols like `BTC-PERP` (it also accepts `BTCUSDT0` and maps it to `BTC-PERP`).
+| Exchange | English Guide | 中文教程 |
+| --- | --- | --- |
+| Aster | [Configuration Guide](docs/exchanges/aster.en.md) | [配置教程](docs/exchanges/aster.md) |
+| Binance | [Configuration Guide](docs/exchanges/binance.en.md) | [配置教程](docs/exchanges/binance.md) |
+| StandX | [Configuration Guide](docs/exchanges/standx.en.md) | [配置教程](docs/exchanges/standx.md) |
+| GRVT | [Configuration Guide](docs/exchanges/grvt.en.md) | [配置教程](docs/exchanges/grvt.md) |
+| Lighter | [Configuration Guide](docs/exchanges/lighter.en.md) | [配置教程](docs/exchanges/lighter.md) |
+| Backpack | [Configuration Guide](docs/exchanges/backpack.en.md) | [配置教程](docs/exchanges/backpack.md) |
+| Paradex | [Configuration Guide](docs/exchanges/paradex.en.md) | [配置教程](docs/exchanges/paradex.md) |
+| Nado | [Configuration Guide](docs/exchanges/nado.en.md) | [配置教程](docs/exchanges/nado.md) |
+| Ondo Perps | [Configuration Guide](docs/exchanges/ondoperps.en.md) | [配置教程](docs/exchanges/ondoperps.md) |
 
 ## Command Cheatsheet
 ```bash
@@ -256,11 +164,10 @@ ritmex-bot strategy run --strategy maker --exchange standx --silent --dry-run
 ### Run Modes
 ```bash
 # Global install
-npm install -g ritmex-bot
+bun add -g ritmex-bot
 ritmex-bot doctor
 
 # No install
-npx ritmex-bot doctor
 bunx ritmex-bot doctor
 ```
 
