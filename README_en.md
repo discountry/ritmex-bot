@@ -17,6 +17,7 @@ If you'd like to support this project and get fee discounts, please consider usi
 * [edgex referral link](https://pro.edgex.exchange/referral/BULL)
 * [Paradex referral link](https://paradex.io/ref/xingxingjun)
 * [Apex referral link](https://join.omni.apex.exchange/SEA)
+* [Hyperliquid invite link](https://app.hyperliquid.xyz/join/RITMEX)
 
 ## CLI Command Mode (`ritmex-bot`)
 `ritmex-bot` provides an agent-friendly command interface for exchange capability checks, market data, account/position queries, order operations, and strategy execution.

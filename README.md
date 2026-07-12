@@ -21,6 +21,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 * [edgex 手续费优惠注册链接](https://pro.edgex.exchange/referral/BULL)
 * [Paradex 手续费优惠注册链接](https://paradex.io/ref/xingxingjun)
 * [Apex 手续费优惠注册链接](https://join.omni.apex.exchange/SEA)
+* [Hyperliquid 邀请注册链接](https://app.hyperliquid.xyz/join/RITMEX)
 
 ## CLI 命令模式（ritmex-bot）
 `ritmex-bot` 支持 Agent 友好的结构化命令调用，覆盖交易所能力查询、行情、账户、仓位、下单、撤单与策略启动。
