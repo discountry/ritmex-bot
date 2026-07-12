@@ -7,17 +7,17 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 If you'd like to support this project and get fee discounts, please consider using these referral links:
 
 * [Lighter referral link](https://app.lighter.xyz/?referral=111909FA)
-* [Ondo Perps invite link](https://app.ondoperps.xyz/?ref=4A3ACQ)
+* [Hyperliquid referral link](https://app.hyperliquid.xyz/join/RITMEX)
+* [Ondo Perps referral link](https://app.ondoperps.xyz/?ref=4A3ACQ)
 * [Aster referral link](https://www.asterdex.com/en/referral/4665f3)
 * [StandX referral link](https://standx.com/referral?code=xingxingjun)
 * [Binance referral link](https://www.binance.com/join?ref=KNKCA9XC)
-* [GRVT referral link](https://grvt.io/exchange/sign-up?ref=sea)
 * [Nado referral link](https://app.nado.xyz?join=LKbIUs5)
 * [Backpack referral link](https://backpack.exchange/join/ritmex)
 * [edgex referral link](https://pro.edgex.exchange/referral/BULL)
 * [Paradex referral link](https://paradex.io/ref/xingxingjun)
 * [Apex referral link](https://join.omni.apex.exchange/SEA)
-* [Hyperliquid invite link](https://app.hyperliquid.xyz/join/RITMEX)
+* [GRVT referral link](https://grvt.io/exchange/sign-up?ref=sea)
 
 ## CLI Command Mode (`ritmex-bot`)
 `ritmex-bot` provides an agent-friendly command interface for exchange capability checks, market data, account/position queries, order operations, and strategy execution.

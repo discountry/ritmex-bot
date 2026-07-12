@@ -11,17 +11,17 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 如果您希望获取优惠并支持本项目，请考虑使用以下注册链接：
 
 * [Lighter 手续费优惠注册链接](https://app.lighter.xyz/?referral=111909FA)
+* [Hyperliquid 邀请注册链接](https://app.hyperliquid.xyz/join/RITMEX)
 * [Ondo Perps 邀请注册链接](https://app.ondoperps.xyz/?ref=4A3ACQ)
 * [Aster 手续费优惠注册链接](https://www.asterdex.com/zh-CN/referral/4665f3)
 * [StandX 手续费优惠注册链接](https://standx.com/referral?code=xingxingjun)
 * [Binance 手续费优惠注册链接](https://www.binance.com/join?ref=KNKCA9XC)
-* [GRVT 手续费优惠注册链接](https://grvt.io/exchange/sign-up?ref=sea)
 * [Nado 手续费优惠注册链接](https://app.nado.xyz?join=LKbIUs5)
 * [Backpack 手续费优惠注册链接](https://backpack.exchange/join/ritmex)
 * [edgex 手续费优惠注册链接](https://pro.edgex.exchange/referral/BULL)
 * [Paradex 手续费优惠注册链接](https://paradex.io/ref/xingxingjun)
 * [Apex 手续费优惠注册链接](https://join.omni.apex.exchange/SEA)
-* [Hyperliquid 邀请注册链接](https://app.hyperliquid.xyz/join/RITMEX)
+* [GRVT 手续费优惠注册链接](https://grvt.io/exchange/sign-up?ref=sea)
 
 ## CLI 命令模式（ritmex-bot）
 `ritmex-bot` 支持 Agent 友好的结构化命令调用，覆盖交易所能力查询、行情、账户、仓位、下单、撤单与策略启动。
