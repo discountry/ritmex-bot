@@ -1,33 +1,46 @@
-import { describe, expect, it } from "vitest";
-import type { ExchangeAdapter } from "../src/exchanges/adapter";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { promises as fs } from "fs";
+import os from "os";
+import path from "path";
+import type { ConnectionEventListener, ExchangeAdapter } from "../src/exchanges/adapter";
 import type {
   AccountSnapshot,
-  Depth,
+  CreateOrderParams,
   Order,
   Ticker,
-  CreateOrderParams,
 } from "../src/exchanges/types";
 import type { GridConfig } from "../src/config";
 import { GridEngine } from "../src/strategy/grid-engine";
+import { saveGridState } from "../src/strategy/common/grid-storage";
+import { createInitialState, toStored, type GridLogicSettings } from "../src/strategy/grid-logic";
 
 let orderCounter = 0;
 
-class StubAdapter implements ExchangeAdapter {
+class FakeAdapter implements ExchangeAdapter {
   id = "aster";
+  triggerOrders = false;
 
   private accountHandler: ((snapshot: AccountSnapshot) => void) | null = null;
   private orderHandler: ((orders: Order[]) => void) | null = null;
-  private depthHandler: ((depth: Depth) => void) | null = null;
   private tickerHandler: ((ticker: Ticker) => void) | null = null;
-  private currentOrders: Order[] = [];
+  private depthHandler: ((depth: any) => void) | null = null;
+  private connectionListeners: ConnectionEventListener[] = [];
+  private lastAccount: AccountSnapshot | null = null;
 
-  public createdOrders: CreateOrderParams[] = [];
-  public marketOrders: CreateOrderParams[] = [];
-  public cancelAllCount = 0;
-  public cancelledOrders: Array<number | string> = [];
+  currentOrders: Order[] = [];
+  createdOrders: CreateOrderParams[] = [];
+  limitOrders: CreateOrderParams[] = [];
+  marketOrders: CreateOrderParams[] = [];
+  stopOrders: CreateOrderParams[] = [];
+  cancelledIds: string[] = [];
+  cancelAllCount = 0;
 
   supportsTrailingStops(): boolean {
     return false;
+  }
+
+  supportsTriggerOrders(): boolean {
+    return this.triggerOrders;
   }
 
   watchAccount(cb: (snapshot: AccountSnapshot) => void): void {
@@ -38,7 +51,7 @@ class StubAdapter implements ExchangeAdapter {
     this.orderHandler = cb;
   }
 
-  watchDepth(_symbol: string, cb: (depth: Depth) => void): void {
+  watchDepth(_symbol: string, cb: (depth: any) => void): void {
     this.depthHandler = cb;
   }
 
@@ -47,18 +60,35 @@ class StubAdapter implements ExchangeAdapter {
   }
 
   watchKlines(): void {
-    // not used in tests
+    // not used
+  }
+
+  onConnectionEvent(listener: ConnectionEventListener): void {
+    this.connectionListeners.push(listener);
+  }
+
+  async queryOpenOrders(): Promise<Order[]> {
+    return [...this.currentOrders];
+  }
+
+  async queryAccountSnapshot(): Promise<AccountSnapshot | null> {
+    return this.lastAccount;
+  }
+
+  emitConnection(event: "disconnected" | "reconnected", symbol = "BTCUSDT"): void {
+    for (const listener of this.connectionListeners) listener(event, symbol);
   }
 
   emitAccount(snapshot: AccountSnapshot): void {
+    this.lastAccount = snapshot;
     this.accountHandler?.(snapshot);
   }
 
-  emitOrders(orders: Order[]): void {
-    this.orderHandler?.(orders);
+  emitOrders(orders?: Order[]): void {
+    this.orderHandler?.(orders ?? [...this.currentOrders]);
   }
 
-  emitDepth(depth: Depth): void {
+  emitDepth(depth: any): void {
     this.depthHandler?.(depth);
   }
 
@@ -67,8 +97,8 @@ class StubAdapter implements ExchangeAdapter {
   }
 
   async createOrder(params: CreateOrderParams): Promise<Order> {
-    orderCounter++;
-    const orderId = params.clientOrderId ?? `stub-${orderCounter}`;
+    orderCounter += 1;
+    const orderId = `srv-${orderCounter}`;
     const order: Order = {
       orderId,
       clientOrderId: params.clientOrderId ?? orderId,
@@ -79,643 +109,682 @@ class StubAdapter implements ExchangeAdapter {
       price: Number(params.price ?? 0).toString(),
       origQty: Number(params.quantity ?? 0).toString(),
       executedQty: "0",
-      stopPrice: "0",
-      time: Date.now(),
-      updateTime: Date.now(),
+      stopPrice: Number(params.stopPrice ?? 0).toString(),
+      time: 0,
+      updateTime: 0,
       reduceOnly: params.reduceOnly === "true",
-      closePosition: false,
+      closePosition: params.closePosition === "true",
     };
     this.createdOrders.push(params);
     if (params.type === "MARKET") {
       this.marketOrders.push(params);
-      this.orderHandler?.([]);
-    } else {
+      this.emitOrders();
+    } else if (params.type === "STOP_MARKET") {
+      this.stopOrders.push(params);
       this.currentOrders.push(order);
-      this.orderHandler?.([...this.currentOrders]);
+      this.emitOrders();
+    } else {
+      this.limitOrders.push(params);
+      this.currentOrders.push(order);
+      this.emitOrders();
     }
     return order;
   }
 
   async cancelOrder(params: { symbol: string; orderId: number | string }): Promise<void> {
-    this.cancelledOrders.push(params.orderId);
-    this.currentOrders = this.currentOrders.filter(o => String(o.orderId) !== String(params.orderId));
+    this.cancelledIds.push(String(params.orderId));
+    this.currentOrders = this.currentOrders.filter((o) => String(o.orderId) !== String(params.orderId));
+    this.emitOrders();
   }
 
   async cancelOrders(params: { symbol: string; orderIdList: Array<number | string> }): Promise<void> {
-    this.cancelledOrders.push(...params.orderIdList);
-    const idSet = new Set(params.orderIdList.map(String));
-    this.currentOrders = this.currentOrders.filter(o => !idSet.has(String(o.orderId)));
+    const ids = new Set(params.orderIdList.map(String));
+    this.cancelledIds.push(...params.orderIdList.map(String));
+    this.currentOrders = this.currentOrders.filter((o) => !ids.has(String(o.orderId)));
+    this.emitOrders();
   }
 
   async cancelAllOrders(): Promise<void> {
     this.cancelAllCount += 1;
     this.currentOrders = [];
-    this.orderHandler?.([]);
+    this.emitOrders();
   }
 
-  clearCurrentOrders(): void {
-    this.currentOrders = [];
+  /** 模拟成交：先在订单流里出现 FILLED 终态，再从活跃单移除 */
+  fillOrder(orderId: string): Order | null {
+    const order = this.currentOrders.find((o) => String(o.orderId) === orderId);
+    if (!order) return null;
+    const filled: Order = { ...order, status: "FILLED", executedQty: order.origQty };
+    this.currentOrders = this.currentOrders.filter((o) => String(o.orderId) !== orderId);
+    this.emitOrders([...this.currentOrders, filled]);
+    return filled;
   }
 
-  getCurrentOrders(): Order[] {
-    return [...this.currentOrders];
+  findOrders(predicate: (o: Order) => boolean): Order[] {
+    return this.currentOrders.filter(predicate);
   }
 }
 
-function createAccountSnapshot(symbol: string, positionAmt: number): AccountSnapshot {
+function accountSnapshot(
+  symbol: string,
+  positionAmt: number,
+  entryPrice = 150,
+  markPrice?: number
+): AccountSnapshot {
   return {
     canTrade: true,
     canDeposit: true,
     canWithdraw: true,
-    updateTime: Date.now(),
-    totalWalletBalance: "0",
+    updateTime: 0,
+    totalWalletBalance: "1000",
     totalUnrealizedProfit: "0",
     positions: [
       {
         symbol,
         positionAmt: positionAmt.toString(),
-        entryPrice: "150",
+        entryPrice: entryPrice.toString(),
         unrealizedProfit: "0",
         positionSide: "BOTH",
-        updateTime: Date.now(),
+        updateTime: 0,
+        ...(markPrice != null ? { markPrice: markPrice.toString() } : {}),
       },
     ],
     assets: [],
   } as unknown as AccountSnapshot;
 }
 
-describe("GridEngine", () => {
-  const baseConfig: GridConfig = {
+function ticker(symbol: string, price: number): Ticker {
+  return {
+    symbol,
+    lastPrice: price.toString(),
+    openPrice: price.toString(),
+    highPrice: price.toString(),
+    lowPrice: price.toString(),
+    volume: "0",
+    quoteVolume: "0",
+  };
+}
+
+function makeConfig(overrides: Partial<GridConfig> = {}): GridConfig {
+  return {
     symbol: "BTCUSDT",
     lowerPrice: 100,
     upperPrice: 200,
-    gridLevels: 3,
+    gridLevels: 5,
     orderSize: 0.1,
-    maxPositionSize: 0.2,
+    maxPositionSize: 0.4,
     refreshIntervalMs: 10,
-    maxLogEntries: 50,
+    maxLogEntries: 200,
     priceTick: 0.1,
-    qtyStep: 0.01,
+    qtyStep: 0.001,
     direction: "both",
     stopLossPct: 0.01,
     restartTriggerPct: 0.01,
     autoRestart: true,
     gridMode: "geometric",
     maxCloseSlippagePct: 0.05,
+    gridShiftEnabled: false,
+    gridShiftTriggerPct: 0.05,
+    gridShiftRangePct: 0.05,
+    gridShiftConfirmMs: 3000,
+    useReduceOnlyForExit: false,
+    exchangeStopEnabled: false,
+    reconcileIntervalMs: 30_000,
+    uncoveredGraceMs: 5000,
+    ...overrides,
   };
+}
 
-  it("creates geometric desired orders when running in both directions", async () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
+const clock = { t: 1_000_000 };
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
-    });
+function settle(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
-    // use internal syncGrid to generate orders without waiting for timers
-    const desired = (engine as any).computeDesiredOrders(150) as Array<{ side: string; price: string }>;
-    expect(desired).toHaveLength(3);
-    const buyOrders = desired.filter((order) => order.side === "BUY");
-    const sellOrders = desired.filter((order) => order.side === "SELL");
-    expect(buyOrders).toHaveLength(2);
-    expect(sellOrders).toHaveLength(1);
-    expect(Number(buyOrders[0]?.price)).toBeCloseTo(141.4, 1);
-    expect(Number(buyOrders[1]?.price)).toBeCloseTo(100, 6);
-    expect(Number(sellOrders[0]?.price)).toBeCloseTo(200, 6);
+function releaseLimitLock(engine: GridEngine): void {
+  const anyEngine = engine as any;
+  for (const type of ["LIMIT", "STOP_MARKET"]) {
+    anyEngine.locks[type] = false;
+    anyEngine.pendings[type] = null;
+    if (anyEngine.timers[type]) {
+      clearTimeout(anyEngine.timers[type]);
+      anyEngine.timers[type] = null;
+    }
+  }
+}
 
-    engine.stop();
+async function drive(engine: GridEngine, ticks: number, stepMs = 100): Promise<void> {
+  for (let i = 0; i < ticks; i += 1) {
+    clock.t += stepMs;
+    await (engine as any).tick();
+    releaseLimitLock(engine);
+    await settle();
+  }
+}
+
+function bootFeeds(
+  adapter: FakeAdapter,
+  config: GridConfig,
+  options: { positionAmt?: number; entryPrice?: number; markPrice?: number; price?: number } = {}
+): void {
+  adapter.emitAccount(
+    accountSnapshot(
+      config.symbol,
+      options.positionAmt ?? 0,
+      options.entryPrice ?? 150,
+      options.markPrice
+    )
+  );
+  adapter.emitTicker(ticker(config.symbol, options.price ?? 150));
+  adapter.emitOrders();
+}
+
+async function bootEngine(
+  config: GridConfig,
+  adapter: FakeAdapter,
+  options: { positionAmt?: number; entryPrice?: number; markPrice?: number; price?: number; skipPersistence?: boolean } = {}
+): Promise<GridEngine> {
+  const engine = new GridEngine(config, adapter, {
+    now: () => clock.t,
+    skipPersistence: options.skipPersistence ?? true,
   });
+  bootFeeds(adapter, config, options);
+  await settle();
+  await drive(engine, 1);
+  return engine;
+}
 
-  it("limits sell orders for long-only direction when no position is available", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine({ ...baseConfig, direction: "long" }, adapter, { now: () => 0, skipPersistence: true });
+let tmpDir: string | null = null;
+let prevDataDir: string | undefined;
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
+beforeEach(() => {
+  clock.t = 1_000_000;
+  prevDataDir = process.env.GRID_DATA_DIR;
+});
 
-    const desired = (engine as any).computeDesiredOrders(150) as Array<{ side: string; reduceOnly: boolean }>;
-    const sells = desired.filter((order) => order.side === "SELL");
-    const buys = desired.filter((order) => order.side === "BUY");
+afterEach(async () => {
+  if (prevDataDir == null) delete process.env.GRID_DATA_DIR;
+  else process.env.GRID_DATA_DIR = prevDataDir;
+  if (tmpDir) {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+    tmpDir = null;
+  }
+});
 
-    expect(buys.length).toBeGreaterThan(0);
-    expect(sells).toHaveLength(0);
+async function useTmpStorage(): Promise<string> {
+  tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "grid-engine-test-"));
+  process.env.GRID_DATA_DIR = tmpDir;
+  return tmpDir;
+}
 
-    engine.stop();
-  });
+// ---------------------------------------------------------------------------
+// 三模式建格
+// ---------------------------------------------------------------------------
 
-  it("does not repopulate the same buy level until exposure is released", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
+describe("GridEngine modes", () => {
+  it("neutral splits entries at the anchor: BUY below, SELL above", async () => {
+    const adapter = new FakeAdapter();
+    const engine = await bootEngine(makeConfig(), adapter);
+    await drive(engine, 8);
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-
-    const desiredInitial = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
-    const nearestBuy = desiredInitial.find((order) => order.side === "BUY");
-    expect(nearestBuy).toBeTruthy();
-    const targetLevel = nearestBuy!.level;
-
-    (engine as any).longExposure.set(targetLevel, baseConfig.orderSize);
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
-
-    const desiredAfterFill = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
-    expect(desiredAfterFill.some((order) => order.level === targetLevel && order.side === "BUY")).toBe(false);
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    const desiredAfterExit = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string }>;
-    expect(desiredAfterExit.some((order) => order.level === targetLevel && order.side === "BUY")).toBe(true);
-
-    engine.stop();
-  });
-
-  it("keeps level side assignments stable regardless of price", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-
-    const desiredHigh = (engine as any).computeDesiredOrders(2.45) as Array<{ level: number; side: string }>;
-    expect(desiredHigh.every((order) => {
-      const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
-      return isBuyLevel ? order.side === "BUY" : order.side === "SELL";
-    })).toBe(true);
-
-    const desiredLow = (engine as any).computeDesiredOrders(1.55) as Array<{ level: number; side: string }>;
-    expect(desiredLow.every((order) => {
-      const isBuyLevel = order.level <= Math.floor((baseConfig.gridLevels - 1) / 2);
-      return isBuyLevel ? order.side === "BUY" : order.side === "SELL";
-    })).toBe(true);
-
-    engine.stop();
-  });
-
-  it("limits active sell orders by remaining short headroom", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-
-    const desiredFull = (engine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
-    const sellCountFull = desiredFull.filter((order) => order.side === "SELL").length;
-    expect(sellCountFull).toBeGreaterThan(0);
-
-    const limitedHeadroomConfig = { ...baseConfig, maxPositionSize: baseConfig.orderSize * 2 };
-    const limitedEngine = new GridEngine(limitedHeadroomConfig, adapter as any, { now: () => 0, skipPersistence: true });
-    (limitedEngine as any).shortExposure.set(12, baseConfig.orderSize * 2);
-
-    const desiredLimited = (limitedEngine as any).computeDesiredOrders(2.1) as Array<{ level: number; side: string }>;
-    const sellCountLimited = desiredLimited.filter((order) => order.side === "SELL").length;
-    expect(sellCountLimited).toBeLessThanOrEqual(1);
-
-    engine.stop();
-    limitedEngine.stop();
-  });
-
-  it("places reduce-only orders to close existing exposures", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
-    adapter.emitOrders([]);
-
-    const buyLevel = (engine as any).buyLevelIndices.slice(-1)[0];
-    (engine as any).longExposure.set(buyLevel, baseConfig.orderSize);
-
-    const desired = (engine as any).computeDesiredOrders(2.05) as Array<{
-      level: number;
-      side: string;
-      reduceOnly: boolean;
-      amount: number;
-    }>;
-
-    const closeOrder = desired.find((order) => order.reduceOnly && order.side === "SELL");
-    expect(closeOrder).toBeTruthy();
-    expect(closeOrder!.amount).toBeCloseTo(baseConfig.orderSize);
-
-    engine.stop();
-  });
-
-  it("restores exposures from existing reduce-only orders on restart", async () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize * 2));
-
-    const reduceOrder: Order = {
-      orderId: "existing-reduce",
-      clientOrderId: "existing-reduce",
-      symbol: baseConfig.symbol,
-      side: "SELL",
-      type: "LIMIT",
-      status: "NEW",
-      price: baseConfig.upperPrice.toFixed(1),
-      origQty: (baseConfig.orderSize * 2).toString(),
-      executedQty: "0",
-      stopPrice: "0",
-      time: Date.now(),
-      updateTime: Date.now(),
-      reduceOnly: true,
-      closePosition: false,
-    };
-
-    adapter.emitOrders([reduceOrder]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
-    });
-
-    await (engine as any).syncGrid(150);
-
-    const longExposure: Map<number, number> = (engine as any).longExposure;
-    const buyIndices: number[] = (engine as any).buyLevelIndices;
-
-    const totalExposure = [...longExposure.values()].reduce((acc, qty) => acc + qty, 0);
-    expect(totalExposure).toBeCloseTo(baseConfig.orderSize * 2, 6);
-    expect(longExposure.get(buyIndices.slice(-1)[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
-    expect(longExposure.get(buyIndices[0]!)).toBeCloseTo(baseConfig.orderSize, 6);
+    expect(adapter.limitOrders.length).toBeGreaterThan(1);
+    for (const params of adapter.limitOrders) {
+      if (params.side === "BUY") expect(Number(params.price)).toBeLessThan(150);
+      else expect(Number(params.price)).toBeGreaterThan(150);
+    }
+    expect(adapter.limitOrders.some((p) => p.side === "BUY")).toBe(true);
+    expect(adapter.limitOrders.some((p) => p.side === "SELL")).toBe(true);
 
     const snapshot = engine.getSnapshot();
-    const reduceDesired = snapshot.desiredOrders.find(
-      (order) => order.reduceOnly && order.side === "SELL"
-    );
-    expect(reduceDesired).toBeTruthy();
-    expect(reduceDesired!.amount).toBeCloseTo(baseConfig.orderSize * 2, 6);
-    expect(Number(reduceDesired!.price)).toBeCloseTo(baseConfig.upperPrice, 6);
-    // New engine cancels unrecognized orders (no grid- prefix) during recovery;
-    // legacy syncGrid still picks up exposure from position regardless.
-
+    expect(snapshot.gridVersion).toBe(1);
+    expect(snapshot.anchorPrice).toBeCloseTo(150, 6);
+    expect(snapshot.direction).toBe("both");
     engine.stop();
   });
 
-  it("halts the grid and closes positions when stop loss triggers", async () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
+  it("long mode only places BUY entries", async () => {
+    const adapter = new FakeAdapter();
+    const engine = await bootEngine(makeConfig({ direction: "long" }), adapter);
+    await drive(engine, 8);
+    expect(adapter.limitOrders.length).toBeGreaterThan(0);
+    expect(adapter.limitOrders.every((p) => p.side === "BUY")).toBe(true);
+    engine.stop();
+  });
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0.2));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
+  it("short mode only places SELL entries", async () => {
+    const adapter = new FakeAdapter();
+    const engine = await bootEngine(makeConfig({ direction: "short" }), adapter);
+    await drive(engine, 8);
+    expect(adapter.limitOrders.length).toBeGreaterThan(0);
+    expect(adapter.limitOrders.every((p) => p.side === "SELL")).toBe(true);
+    engine.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 生命周期：ENTRY 成交 → EXIT → 释放
+// ---------------------------------------------------------------------------
+
+describe("GridEngine lifecycle", () => {
+  it("fills ENTRY, places EXIT at adjacent line, releases level after EXIT fills", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    const engine = await bootEngine(config, adapter);
+    await drive(engine, 4);
+
+    // 找到 141.4 的 BUY ENTRY（最近的买线）并成交
+    const entry = adapter.findOrders((o) => o.side === "BUY" && Number(o.price) === 141.4)[0];
+    expect(entry).toBeTruthy();
+    adapter.fillOrder(String(entry!.orderId));
+    adapter.emitAccount(accountSnapshot(config.symbol, 0.1, 141.4));
+    await drive(engine, 3);
+
+    // 相邻线 168.2 出现 SELL EXIT
+    const exitParams = adapter.limitOrders.filter(
+      (p) =>
+        p.side === "SELL" &&
+        Math.abs(Number(p.price) - 168.2) < 0.2 &&
+        p.clientOrderId?.includes("-X-")
+    );
+    expect(exitParams.length).toBe(1);
+
+    const line = engine.getSnapshot().gridLines.find((l) => Math.abs(l.price - 141.4) < 0.2);
+    expect(line?.state).toBe("exit_placed");
+
+    // EXIT 成交 → 线释放 → 重新可开仓
+    const exitOrder = adapter.findOrders(
+      (o) =>
+        o.side === "SELL" &&
+        Math.abs(Number(o.price) - 168.2) < 0.2 &&
+        o.clientOrderId.includes("-X-")
+    )[0];
+    adapter.fillOrder(String(exitOrder!.orderId));
+    adapter.emitAccount(accountSnapshot(config.symbol, 0, 0));
+    await drive(engine, 3);
+
+    const lineAfter = engine.getSnapshot().gridLines.find((l) => Math.abs(l.price - 141.4) < 0.2);
+    expect(lineAfter?.state === "idle" || lineAfter?.state === "entry_placed").toBe(true);
+    await drive(engine, 4);
+    const buyEntriesAtLevel = adapter.limitOrders.filter(
+      (p) => p.side === "BUY" && Math.abs(Number(p.price) - 141.4) < 0.2
+    );
+    expect(buyEntriesAtLevel.length).toBe(2); // 首次 + 释放后重挂
+    engine.stop();
+  });
+
+  it("does not duplicate ENTRY while the level is holding across price crossings", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    const engine = await bootEngine(config, adapter);
+    await drive(engine, 4);
+
+    const entry = adapter.findOrders((o) => o.side === "BUY" && Number(o.price) === 141.4)[0];
+    adapter.fillOrder(String(entry!.orderId));
+    adapter.emitAccount(accountSnapshot(config.symbol, 0.1, 141.4));
+    await drive(engine, 2);
+
+    // 价格在该线两侧来回穿越
+    for (const price of [130, 155, 130, 155, 130]) {
+      adapter.emitTicker(ticker(config.symbol, price));
+      await drive(engine, 2);
+    }
+
+    const buyEntriesAtLevel = adapter.limitOrders.filter(
+      (p) => p.side === "BUY" && Math.abs(Number(p.price) - 141.4) < 0.2
+    );
+    expect(buyEntriesAtLevel.length).toBe(1);
+    const exitsAtTarget = adapter.limitOrders.filter(
+      (p) =>
+        p.side === "SELL" &&
+        Math.abs(Number(p.price) - 168.2) < 0.2 &&
+        p.clientOrderId?.includes("-X-")
+    );
+    expect(exitsAtTarget.length).toBe(1);
+    const entriesAtTarget = adapter.limitOrders.filter(
+      (p) =>
+        p.side === "SELL" &&
+        Math.abs(Number(p.price) - 168.2) < 0.2 &&
+        p.clientOrderId?.includes("-E-")
+    );
+    expect(entriesAtTarget.length).toBe(1); // 线 3 自身的空头开仓单可并存但不重复
+    engine.stop();
+  });
+
+  it("EXIT orders honor the reduce-only switch", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig({ useReduceOnlyForExit: true });
+    const engine = await bootEngine(config, adapter);
+    await drive(engine, 4);
+    const entry = adapter.findOrders((o) => o.side === "BUY" && Number(o.price) === 141.4)[0];
+    adapter.fillOrder(String(entry!.orderId));
+    adapter.emitAccount(accountSnapshot(config.symbol, 0.1, 141.4));
+    await drive(engine, 3);
+    const exitParams = adapter.limitOrders.find((p) => p.clientOrderId?.includes("-X-"));
+    expect(exitParams).toBeTruthy();
+    expect(exitParams!.reduceOnly).toBe("true");
+    engine.stop();
+  });
+
+  it("EXIT orders default to no reduce-only flag", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    const engine = await bootEngine(config, adapter);
+    await drive(engine, 4);
+    const entry = adapter.findOrders((o) => o.side === "BUY" && Number(o.price) === 141.4)[0];
+    adapter.fillOrder(String(entry!.orderId));
+    adapter.emitAccount(accountSnapshot(config.symbol, 0.1, 141.4));
+    await drive(engine, 3);
+    const exitParams = adapter.limitOrders.find((p) => p.clientOrderId?.includes("-X-"));
+    expect(exitParams).toBeTruthy();
+    expect(exitParams!.reduceOnly).not.toBe("true");
+    engine.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 恢复与对账
+// ---------------------------------------------------------------------------
+
+describe("GridEngine recovery", () => {
+  it("cancels stranger orders during startup reconcile", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    // 预置一张与任何档位不对齐的陌生单
+    adapter.currentOrders.push({
+      orderId: "stranger-1",
+      clientOrderId: "someone-else",
+      symbol: config.symbol,
+      side: "BUY",
+      type: "LIMIT",
+      status: "NEW",
+      price: "133.3",
+      origQty: "0.1",
+      executedQty: "0",
+      stopPrice: "0",
+      time: 0,
+      updateTime: 0,
+      reduceOnly: false,
+      closePosition: false,
     });
+    const engine = await bootEngine(config, adapter);
+    await drive(engine, 2);
+    expect(adapter.cancelledIds).toContain("stranger-1");
+    engine.stop();
+  });
 
-    (engine as any).stopReason = "test stop";
-    await (engine as any).haltGrid(90);
+  it("restores state from disk and does not duplicate orders after restart", async () => {
+    await useTmpStorage();
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    const engineA = await bootEngine(config, adapter, { skipPersistence: false });
+    await drive(engineA, 4);
+
+    const entry = adapter.findOrders((o) => o.side === "BUY" && Number(o.price) === 141.4)[0];
+    expect(entry).toBeTruthy();
+    adapter.fillOrder(String(entry!.orderId));
+    adapter.emitAccount(accountSnapshot(config.symbol, 0.1, 141.4));
+    await drive(engineA, 3);
+    engineA.stop();
+
+    const exitCountBefore = adapter.limitOrders.filter((p) => p.clientOrderId?.includes("-X-")).length;
+    expect(exitCountBefore).toBe(1);
+    const exitOrder = adapter.findOrders((o) => o.clientOrderId.includes("-X-"))[0];
+    expect(exitOrder).toBeTruthy();
+
+    // “重启”：新引擎实例，同一存储目录与交易所现场
+    const engineB = new GridEngine(config, adapter, { now: () => clock.t, skipPersistence: false });
+    bootFeeds(adapter, config, { positionAmt: 0.1, entryPrice: 141.4 });
+    await settle();
+    await drive(engineB, 3);
+
+    // 已有 EXIT 挂单被继承：没有撤销、没有重复 EXIT
+    expect(adapter.cancelledIds).toHaveLength(0);
+    const exitCount = adapter.limitOrders.filter((p) => p.clientOrderId?.includes("-X-")).length;
+    expect(exitCount).toBe(1);
+    const heldLine = engineB.getSnapshot().gridLines.find((l) => Math.abs(l.price - 141.4) < 0.2);
+    expect(heldLine?.state).toBe("exit_placed");
+    // 已持仓线不再重复挂 ENTRY
+    const buyAtHeld = adapter.limitOrders.filter(
+      (p) => p.side === "BUY" && Math.abs(Number(p.price) - 141.4) < 0.2
+    );
+    expect(buyAtHeld.length).toBe(1);
+    engineB.stop();
+  });
+
+  it("freezes on disconnect and reconciles via REST after reconnect", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    const engine = await bootEngine(config, adapter);
+    await drive(engine, 3);
+    const placedBefore = adapter.limitOrders.length;
+    expect(placedBefore).toBeGreaterThan(0);
+
+    // 断连：冻结，不再下新单
+    adapter.emitConnection("disconnected");
+    await drive(engine, 4);
+    expect(adapter.limitOrders.length).toBe(placedBefore);
+
+    // 断连期间某 ENTRY 在服务端成交（订单流不可用，直接改现场）
+    const entry = adapter.currentOrders.find((o) => o.side === "BUY" && Number(o.price) === 141.4);
+    expect(entry).toBeTruthy();
+    adapter.currentOrders = adapter.currentOrders.filter((o) => o.orderId !== entry!.orderId);
+    (adapter as any).lastAccount = accountSnapshot(config.symbol, 0.1, 141.4);
+
+    // 重连：REST 对账把成交归位到线 → 补挂 EXIT
+    adapter.emitConnection("reconnected");
+    await drive(engine, 4);
+    const heldLine = engine.getSnapshot().gridLines.find((l) => Math.abs(l.price - 141.4) < 0.2);
+    expect(heldLine?.state === "holding" || heldLine?.state === "exit_placed").toBe(true);
+    const exits = adapter.limitOrders.filter((p) => p.side === "SELL" && p.clientOrderId?.includes("-X-"));
+    expect(exits.length).toBeGreaterThanOrEqual(1);
+    engine.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 多重止损
+// ---------------------------------------------------------------------------
+
+describe("GridEngine stop-loss layers", () => {
+  it("layer 1: halts, cancels and closes when price breaks the band", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    const engine = await bootEngine(config, adapter, { positionAmt: 0.2, entryPrice: 150 });
+    await drive(engine, 2);
+
+    adapter.emitTicker(ticker(config.symbol, 95));
+    await drive(engine, 2);
 
     expect(adapter.cancelAllCount).toBeGreaterThanOrEqual(1);
-    expect(adapter.marketOrders).toHaveLength(1);
+    expect(adapter.marketOrders.length).toBe(1);
+    expect(adapter.marketOrders[0]!.side).toBe("SELL");
     expect(engine.getSnapshot().running).toBe(false);
-
     engine.stop();
   });
 
-  // -----------------------------------------------------------------------
-  // New tests for refactored level-state tracking & clientOrderId system
-  // -----------------------------------------------------------------------
-
-  it("encodes and decodes ENTRY clientOrderId correctly", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 1000, skipPersistence: true });
-
-    const makeId = (engine as any).__proto__.constructor; // access via module scope
-    // Access the private function through the engine's internal methods
-    // We test indirectly by placing an order and checking its clientOrderId
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
+  it("layer 1: slippage guard defers the close and keeps retrying", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    const engine = await bootEngine(config, adapter, {
+      positionAmt: 0.2,
+      entryPrice: 150,
+      markPrice: 95,
     });
+    await drive(engine, 2);
+    // 深度显示卖一/买一严重偏离标记价 → 守卫拦截
+    adapter.emitDepth({ lastUpdateId: 1, bids: [["80", "5"]], asks: [["80.5", "5"]] });
+    adapter.emitTicker(ticker(config.symbol, 95));
+    await drive(engine, 2);
+    expect(adapter.marketOrders.length).toBe(0);
+    expect(engine.getSnapshot().running).toBe(true); // 未完成止损，保持重试
 
-    // Force recovery to complete
-    (engine as any).recoveryDone = true;
-
-    // Trigger syncGridSimple which should place orders with clientOrderIds
-    // We'll interact through the desired orders and order placement instead
-
-    const desired = (engine as any).computeDesiredOrders(150) as Array<{ intent: string }>;
-    // All orders from computeDesiredOrders should have intent set
-    for (const d of desired) {
-      expect(d.intent).toBeDefined();
-      expect(["ENTRY", "EXIT"]).toContain(d.intent);
-    }
-
+    // 深度恢复正常 → 完成平仓与停机
+    adapter.emitDepth({ lastUpdateId: 2, bids: [["95", "5"]], asks: [["95.1", "5"]] });
+    await drive(engine, 2);
+    expect(adapter.marketOrders.length).toBe(1);
+    expect(engine.getSnapshot().running).toBe(false);
     engine.stop();
   });
 
-  it("marks level as filled when ENTRY disappears as filled", async () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
+  it("layer 2/3: orphan position beyond line capacity gets a protective exit", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    // BUY 线容量 0.3（3 线 × 0.1），净多 0.35 → 0.05 无法归档
+    const engine = await bootEngine(config, adapter, { positionAmt: 0.35, entryPrice: 141 });
+    await drive(engine, 2);
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
-    });
-
-    (engine as any).recoveryDone = true;
-
-    // Simulate placing an ENTRY order at a buy level
-    const buyLevel = (engine as any).buyLevelIndices[0] as number;
-    const levelPrice = (engine as any).gridLevels[buyLevel];
-    const priceStr = (engine as any).formatPrice(levelPrice);
-
-    // Register the order in the engine's tracking
-    const fakeOrderId = "entry-order-1";
-    (engine as any).orderIntentById.set(fakeOrderId, {
-      side: "BUY",
-      price: priceStr,
-      level: buyLevel,
-      intent: "ENTRY",
-    });
-
-    // First sync: the order is active → record it in prevActiveIds
-    const activeOrder: Order = {
-      orderId: fakeOrderId,
-      clientOrderId: fakeOrderId,
-      symbol: baseConfig.symbol,
-      side: "BUY",
-      type: "LIMIT",
-      status: "NEW",
-      price: priceStr,
-      origQty: baseConfig.orderSize.toString(),
-      executedQty: "0",
-      stopPrice: "0",
-      time: Date.now(),
-      updateTime: Date.now(),
-      reduceOnly: false,
-      closePosition: false,
-    };
-
-    // Set engine's openOrders to include the active order
-    (engine as any).openOrders = [activeOrder];
-    // Run syncGridSimple so prevActiveIds gets populated
-    await (engine as any).syncGridSimple(150);
-
-    // Verify level starts as idle
-    expect((engine as any).levelStates.get(buyLevel)).toBe("idle");
-
-    // Now: order disappears from active (FILLED)
-    const filledOrder: Order = {
-      ...activeOrder,
-      status: "FILLED",
-      executedQty: baseConfig.orderSize.toString(),
-    };
-
-    // Update engine openOrders: the order is now FILLED (not active)
-    // Also include a fake EXIT order so exit-first logic doesn't short-circuit
-    const fakeExitOrder: Order = {
-      orderId: "fake-exit",
-      clientOrderId: "grid-X-0-2-abc",
-      symbol: baseConfig.symbol,
-      side: "SELL",
-      type: "LIMIT",
-      status: "NEW",
-      price: "200.0",
-      origQty: baseConfig.orderSize.toString(),
-      executedQty: "0",
-      stopPrice: "0",
-      time: Date.now(),
-      updateTime: Date.now(),
-      reduceOnly: false,
-      closePosition: false,
-    };
-    (engine as any).orderIntentById.set("fake-exit", {
-      side: "SELL",
-      price: "200.0",
-      level: 2,
-      intent: "EXIT",
-      sourceLevel: 0,
-    });
-
-    (engine as any).openOrders = [filledOrder, fakeExitOrder];
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
-
-    // Trigger tick to process disappearance
-    await (engine as any).syncGridSimple(150);
-
-    // Level should now be "filled"
-    expect((engine as any).levelStates.get(buyLevel)).toBe("filled");
-
-    engine.stop();
-  });
-
-  it("refuses new ENTRY at a level that is already filled", async () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
-    });
-
-    (engine as any).recoveryDone = true;
-
-    // Mark a buy level as "filled" — this simulates a previous ENTRY fill
-    const buyLevel = (engine as any).buyLevelIndices[0] as number;
-    (engine as any).levelStates.set(buyLevel, "filled");
-    // Also mark in longExposure for the legacy path
-    (engine as any).longExposure.set(buyLevel, baseConfig.orderSize);
-
-    // The legacy computeDesiredOrders skips levels present in longExposure
-    const desired = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string; intent: string }>;
-    const entryAtFilledLevel = desired.find(
-      (d: { level: number; intent: string }) => d.level === buyLevel && d.intent === "ENTRY"
+    const orphanExit = adapter.limitOrders.find(
+      (p) => p.side === "SELL" && Math.abs(Number(p.quantity ?? 0) - 0.05) < 1e-9
     );
-    expect(entryAtFilledLevel).toBeUndefined();
+    expect(orphanExit).toBeTruthy();
+    expect(Number(orphanExit!.price)).toBeGreaterThan(141);
+    engine.stop();
+  });
 
-    // Also verify via syncGridSimple: filled levels don't generate ENTRY
-    // Reset position to have some qty so exit-first doesn't block entry generation
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    (engine as any).openOrders = [];
-    await (engine as any).syncGridSimple(150);
-    const desiredNew = (engine as any).desiredOrders as Array<{ level: number; intent: string }>;
-    const entryAtFilled = desiredNew.find(
-      (d: { level: number; intent: string }) => d.level === buyLevel && d.intent === "ENTRY"
+  it("layer 2: deep floating loss closes the uncovered part at market", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig();
+    // 入场价 160、现价 150 → 浮亏 6.25% > stopLossPct 1% → 未覆盖部分直接市价平
+    const engine = await bootEngine(config, adapter, { positionAmt: 0.35, entryPrice: 160 });
+    await drive(engine, 2);
+
+    const close = adapter.marketOrders.find(
+      (p) => p.side === "SELL" && Math.abs(Number(p.quantity ?? 0) - 0.05) < 1e-9
     );
-    expect(entryAtFilled).toBeUndefined();
-
+    expect(close).toBeTruthy();
     engine.stop();
   });
 
-  it("releases level back to idle when EXIT fills (via longExposure legacy)", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
+  it("layer 4: maintains an exchange STOP_MARKET backstop when supported", async () => {
+    const adapter = new FakeAdapter();
+    adapter.triggerOrders = true;
+    const config = makeConfig({ exchangeStopEnabled: true });
+    const engine = await bootEngine(config, adapter, { positionAmt: 0.2, entryPrice: 141 });
+    await drive(engine, 2);
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
-    adapter.emitOrders([]);
+    expect(adapter.stopOrders.length).toBe(1);
+    expect(adapter.stopOrders[0]!.side).toBe("SELL");
+    expect(Number(adapter.stopOrders[0]!.stopPrice)).toBeCloseTo(99, 6);
+    const snapshot = engine.getSnapshot();
+    expect(snapshot.stopProtection.exchangeStop?.side).toBe("SELL");
 
-    const buyLevel = (engine as any).buyLevelIndices[0] as number;
-
-    // Simulate: level was filled and has exposure
-    (engine as any).levelStates.set(buyLevel, "exit_placed");
-    (engine as any).longExposure.set(buyLevel, baseConfig.orderSize);
-
-    // Now clear the exposure (simulating EXIT fill)
-    (engine as any).longExposure.delete(buyLevel);
-    (engine as any).levelStates.set(buyLevel, "idle");
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-
-    // The level should now accept a new ENTRY
-    const desired = (engine as any).computeDesiredOrders(150) as Array<{ level: number; side: string; intent: string }>;
-    const entryAtLevel = desired.find(
-      (d: { level: number; intent: string }) => d.level === buyLevel && d.intent === "ENTRY"
-    );
-    expect(entryAtLevel).toBeTruthy();
-
+    // 仓位归零 → 撤销兜底单
+    const stopId = snapshot.stopProtection.exchangeStop!.orderId;
+    adapter.emitAccount(accountSnapshot(config.symbol, 0, 0));
+    clock.t += 6000;
+    await drive(engine, 2);
+    expect(adapter.cancelledIds).toContain(stopId);
+    expect(engine.getSnapshot().stopProtection.exchangeStop).toBeNull();
     engine.stop();
   });
 
-  it("EXIT orders are placed without reduceOnly flag", async () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, baseConfig.orderSize));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
-    });
-
-    (engine as any).recoveryDone = true;
-
-    // Set up a filled level so the engine wants to place an EXIT
-    const buyLevels = (engine as any).buyLevelIndices as number[];
-    const buyLevel = buyLevels[buyLevels.length - 1]!;
-    const target = (engine as any).levelMeta[buyLevel]?.closeTarget;
-
-    (engine as any).levelStates.set(buyLevel, "filled");
-    if (target != null) {
-      (engine as any).exitTargetBySource.set(buyLevel, target);
-    }
-
-    // Trigger syncGridSimple to attempt EXIT placement
-    await (engine as any).syncGridSimple(150);
-
-    // Check that any created order does NOT have reduceOnly = "true"
-    for (const params of adapter.createdOrders) {
-      if (params.clientOrderId?.includes("-X-")) {
-        expect(params.reduceOnly).not.toBe("true");
-      }
-    }
-
+  it("layer 4: no exchange stop when the capability is missing", async () => {
+    const adapter = new FakeAdapter();
+    adapter.triggerOrders = false;
+    const config = makeConfig({ exchangeStopEnabled: true });
+    const engine = await bootEngine(config, adapter, { positionAmt: 0.2, entryPrice: 141 });
+    await drive(engine, 3);
+    expect(adapter.stopOrders.length).toBe(0);
     engine.stop();
   });
+});
 
-  it("all desired orders from computeDesiredOrders have intent field set", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
+// ---------------------------------------------------------------------------
+// 智能移格
+// ---------------------------------------------------------------------------
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
+describe("GridEngine shift", () => {
+  it("full flow: debounce → cancel all → close position → rebuild around new anchor", async () => {
+    const adapter = new FakeAdapter();
+    const config = makeConfig({ gridShiftEnabled: true });
+    const engine = await bootEngine(config, adapter);
+    await drive(engine, 4);
+    expect(adapter.limitOrders.length).toBeGreaterThan(0);
 
-    const desired = (engine as any).computeDesiredOrders(150) as Array<{ intent?: string }>;
-    for (const d of desired) {
-      expect(d.intent).toBeDefined();
-      expect(["ENTRY", "EXIT"]).toContain(d.intent);
-    }
+    // 让引擎有持仓
+    const entry = adapter.findOrders((o) => o.side === "BUY" && Number(o.price) === 141.4)[0];
+    adapter.fillOrder(String(entry!.orderId));
+    adapter.emitAccount(accountSnapshot(config.symbol, 0.1, 141.4));
+    await drive(engine, 2);
 
-    engine.stop();
-  });
+    // 偏离锚定价 >5%，去抖 3s
+    adapter.emitTicker(ticker(config.symbol, 158));
+    await drive(engine, 1); // 开始计时
+    expect(engine.getSnapshot().shiftPhase).toBeNull();
+    clock.t += 3500;
+    await drive(engine, 1); // 触发 BEGIN_SHIFT
+    expect(engine.getSnapshot().shiftPhase).toBe("cancelling");
 
-  it("snapshot includes level state for each grid line", () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
-
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
-    });
+    await drive(engine, 2); // cancelAll
+    expect(adapter.cancelAllCount).toBeGreaterThanOrEqual(1);
+    await drive(engine, 2); // closing → 市价平仓
+    expect(adapter.marketOrders.length).toBe(1);
+    adapter.emitAccount(accountSnapshot(config.symbol, 0, 0));
+    await drive(engine, 3); // rebuilding → rebuild
 
     const snapshot = engine.getSnapshot();
-    expect(snapshot.gridLines.length).toBeGreaterThan(0);
-    for (const line of snapshot.gridLines) {
-      expect(line.state).toBeDefined();
-      expect(["idle", "filled", "exit_placed"]).toContain(line.state);
-    }
-
+    expect(snapshot.shiftPhase).toBeNull();
+    expect(snapshot.gridVersion).toBe(2);
+    expect(snapshot.anchorPrice).toBeCloseTo(158, 0);
+    expect(snapshot.lowerPrice).toBeCloseTo(158 * 0.95, 1);
+    expect(snapshot.upperPrice).toBeCloseTo(158 * 1.05, 1);
     engine.stop();
   });
 
-  it("created orders contain clientOrderId with grid prefix", async () => {
-    const adapter = new StubAdapter();
-    const engine = new GridEngine(baseConfig, adapter, { now: () => 0, skipPersistence: true });
+  it("resumes an interrupted shift from the persisted phase", async () => {
+    await useTmpStorage();
+    const adapter = new FakeAdapter();
+    const config = makeConfig({ gridShiftEnabled: true });
+    // 预写移格中断现场：closing 阶段 + 残留空头仓位
+    const settings: GridLogicSettings = {
+      direction: "neutral",
+      lowerPrice: config.lowerPrice,
+      upperPrice: config.upperPrice,
+      gridLevels: config.gridLevels,
+      orderSize: config.orderSize,
+      maxPositionSize: config.maxPositionSize,
+      priceTick: config.priceTick,
+      qtyStep: config.qtyStep,
+      stopLossPct: config.stopLossPct,
+      uncoveredGraceMs: config.uncoveredGraceMs,
+      shiftEnabled: true,
+      shiftTriggerPct: config.gridShiftTriggerPct,
+      shiftRangePct: config.gridShiftRangePct,
+      shiftConfirmMs: config.gridShiftConfirmMs,
+    };
+    const state = createInitialState(settings, 150);
+    state.shift = { phase: "closing", targetAnchor: 158, startedAt: clock.t };
+    await saveGridState(
+      toStored(
+        state,
+        {
+          symbol: config.symbol,
+          exchangeId: "aster",
+          direction: "neutral",
+          orderSize: config.orderSize,
+          maxPositionSize: config.maxPositionSize,
+          gridLevels: config.gridLevels,
+          gridMode: "geometric",
+        },
+        clock.t
+      )
+    );
 
-    adapter.emitAccount(createAccountSnapshot(baseConfig.symbol, 0));
-    adapter.emitOrders([]);
-    adapter.emitTicker({
-      symbol: baseConfig.symbol,
-      lastPrice: "150",
-      openPrice: "150",
-      highPrice: "150",
-      lowPrice: "150",
-      volume: "0",
-      quoteVolume: "0",
-    });
+    const engine = new GridEngine(config, adapter, { now: () => clock.t, skipPersistence: false });
+    bootFeeds(adapter, config, { positionAmt: -0.2, entryPrice: 150, price: 158 });
+    await settle();
+    await drive(engine, 2);
+    expect(engine.getSnapshot().shiftPhase).not.toBeNull();
+    // closing 续跑：市价买回空头
+    expect(adapter.marketOrders.length).toBe(1);
+    expect(adapter.marketOrders[0]!.side).toBe("BUY");
 
-    (engine as any).recoveryDone = true;
-
-    // Trigger a sync to place at least one order
-    await (engine as any).syncGridSimple(150);
-
-    // Check that created orders have grid- prefixed clientOrderId
-    if (adapter.createdOrders.length > 0) {
-      for (const params of adapter.createdOrders) {
-        expect(params.clientOrderId).toBeDefined();
-        expect(params.clientOrderId!.startsWith("grid-")).toBe(true);
-      }
-    }
-
+    adapter.emitAccount(accountSnapshot(config.symbol, 0, 0));
+    await drive(engine, 3);
+    const snapshot = engine.getSnapshot();
+    expect(snapshot.shiftPhase).toBeNull();
+    expect(snapshot.gridVersion).toBe(2);
+    expect(snapshot.anchorPrice).toBeCloseTo(158, 0);
     engine.stop();
   });
 });

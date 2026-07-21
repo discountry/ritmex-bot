@@ -36,6 +36,10 @@ export class AsterExchangeAdapter implements ExchangeAdapter {
     return true;
   }
 
+  supportsTriggerOrders(): boolean {
+    return true;
+  }
+
   watchAccount(cb: AccountListener): void {
     void this.init.ensureInitialized("watchAccount");
     this.gateway.onAccount(this.safeInvoke("watchAccount", (snapshot) => {

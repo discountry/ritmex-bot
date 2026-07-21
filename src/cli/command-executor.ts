@@ -520,6 +520,7 @@ function resolveEffectiveSymbol(explicit: string | undefined, exchange: Supporte
 function runtimeCapabilities(adapter: ExchangeAdapter): unknown {
   return {
     trailingStops: adapter.supportsTrailingStops(),
+    triggerOrders: adapter.supportsTriggerOrders?.() ?? false,
     fundingRate: typeof adapter.watchFundingRate === "function",
     precision: typeof adapter.getPrecision === "function",
     queryOpenOrders: typeof adapter.queryOpenOrders === "function",

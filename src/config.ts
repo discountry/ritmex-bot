@@ -293,6 +293,14 @@ export interface GridConfig {
   autoRestart: boolean;
   gridMode: "geometric";
   maxCloseSlippagePct: number;
+  gridShiftEnabled: boolean;
+  gridShiftTriggerPct: number;
+  gridShiftRangePct: number;
+  gridShiftConfirmMs: number;
+  useReduceOnlyForExit: boolean;
+  exchangeStopEnabled: boolean;
+  reconcileIntervalMs: number;
+  uncoveredGraceMs: number;
 }
 
 const resolveBasisSymbol = (envKeys: string[], fallback: string): string => {
@@ -373,6 +381,14 @@ export const gridConfig: GridConfig = {
       0.05
     )
   ),
+  gridShiftEnabled: parseBoolean(process.env.GRID_SHIFT_ENABLED, false),
+  gridShiftTriggerPct: Math.max(0, parseNumber(process.env.GRID_SHIFT_TRIGGER_PCT, 0.05)),
+  gridShiftRangePct: Math.max(0, parseNumber(process.env.GRID_SHIFT_RANGE_PCT, 0.05)),
+  gridShiftConfirmMs: Math.max(0, parseNumber(process.env.GRID_SHIFT_CONFIRM_MS, 3000)),
+  useReduceOnlyForExit: parseBoolean(process.env.GRID_USE_REDUCE_ONLY, false),
+  exchangeStopEnabled: parseBoolean(process.env.GRID_EXCHANGE_STOP_ENABLED, true),
+  reconcileIntervalMs: Math.max(1000, parseNumber(process.env.GRID_RECONCILE_INTERVAL_MS, 30_000)),
+  uncoveredGraceMs: Math.max(0, parseNumber(process.env.GRID_UNCOVERED_GRACE_MS, 5000)),
 };
 
 gridConfig.maxPositionSize = resolveGridMaxPosition(gridConfig.orderSize, gridConfig.gridLevels);
