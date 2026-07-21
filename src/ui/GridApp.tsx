@@ -90,15 +90,17 @@ export function GridApp({ onExit }: GridAppProps) {
     { key: "level", header: "#", align: "right", minWidth: 3 },
     { key: "price", header: "Price", align: "right", minWidth: 10 },
     { key: "side", header: "Side", minWidth: 4 },
-    { key: "active", header: "Active", minWidth: 6 },
+    { key: "state", header: "State", minWidth: 11 },
     { key: "hasOrder", header: "Order", minWidth: 5 },
+    { key: "hold", header: "Hold", align: "right", minWidth: 8 },
   ];
   const gridRows = snapshot.gridLines.map((line) => ({
     level: line.level,
     price: formatNumber(line.price, 4),
     side: line.side,
-    active: line.active ? "yes" : "no",
+    state: line.state,
     hasOrder: line.hasOrder ? "yes" : "no",
+    hold: line.holdQty > 0 ? formatNumber(line.holdQty, 4) : "-",
   }));
 
   const desiredColumns: TableColumn[] = [
@@ -139,6 +141,23 @@ export function GridApp({ onExit }: GridAppProps) {
             lower: formatNumber(snapshot.lowerPrice, 4),
             upper: formatNumber(snapshot.upperPrice, 4),
             count: snapshot.gridLines.length,
+          })}
+        </Text>
+        <Text>
+          {t("grid.anchorLine", {
+            anchor: formatNumber(snapshot.anchorPrice, 4),
+            version: snapshot.gridVersion,
+          })}
+          {snapshot.shiftPhase ? (
+            <Text color="yellow"> | {t("grid.shiftState", { phase: snapshot.shiftPhase })}</Text>
+          ) : null}
+        </Text>
+        <Text color={snapshot.stopProtection.uncoveredQty > 0 ? "yellow" : "gray"}>
+          {t("grid.stopProtection", {
+            uncovered: formatNumber(snapshot.stopProtection.uncoveredQty, 6),
+            stop: snapshot.stopProtection.exchangeStop
+              ? `${snapshot.stopProtection.exchangeStop.side} @ ${formatNumber(snapshot.stopProtection.exchangeStop.stopPrice, 4)}`
+              : t("grid.stopProtection.none"),
           })}
         </Text>
         <Text color="gray">

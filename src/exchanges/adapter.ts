@@ -66,6 +66,8 @@ export interface ConnectionEventListener {
 export interface ExchangeAdapter {
   readonly id: string;
   supportsTrailingStops(): boolean;
+  /** 是否支持交易所侧触发单（STOP_MARKET 兜底止损），缺省视为 false */
+  supportsTriggerOrders?(): boolean;
   watchAccount(cb: AccountListener): void;
   watchOrders(cb: OrderListener): void;
   watchDepth(symbol: string, cb: DepthListener): void;

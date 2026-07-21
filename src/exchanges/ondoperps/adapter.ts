@@ -59,6 +59,10 @@ export class OndoperpsExchangeAdapter implements ExchangeAdapter {
     return false;
   }
 
+  supportsTriggerOrders(): boolean {
+    return true;
+  }
+
   watchAccount(cb: AccountListener): void {
     void this.init.ensureInitialized("watchAccount");
     this.gateway.onAccount(this.safeInvoke("watchAccount", cb));

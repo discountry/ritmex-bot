@@ -41,6 +41,10 @@ export class DryRunExchangeAdapter implements ExchangeAdapter {
     return this.inner.supportsTrailingStops();
   }
 
+  supportsTriggerOrders(): boolean {
+    return this.inner.supportsTriggerOrders?.() ?? false;
+  }
+
   watchAccount(cb: AccountListener): void {
     this.inner.watchAccount(cb);
   }

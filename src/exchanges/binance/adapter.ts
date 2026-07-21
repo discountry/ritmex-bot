@@ -66,6 +66,10 @@ export class BinanceExchangeAdapter implements ExchangeAdapter {
     return this.marketType !== "spot";
   }
 
+  supportsTriggerOrders(): boolean {
+    return this.marketType !== "spot";
+  }
+
   watchAccount(cb: AccountListener): void {
     const safe = this.safeInvoke("watchAccount", cb);
     void this.init.ensureInitialized("watchAccount")

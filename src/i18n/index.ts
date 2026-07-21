@@ -288,6 +288,16 @@ const translations: Record<string, TranslationEntry> = {
     en: "Last price: {lastPrice} | Lower: {lower} | Upper: {upper} | Grid count: {count}",
   },
   "grid.dataStatus": { zh: "数据状态:", en: "Data status:" },
+  "grid.anchorLine": {
+    zh: "锚定价: {anchor} ｜ 网格版本: v{version}",
+    en: "Anchor: {anchor} | Grid version: v{version}",
+  },
+  "grid.shiftState": { zh: "移格进行中: {phase}", en: "Shifting: {phase}" },
+  "grid.stopProtection": {
+    zh: "止损防护: 未覆盖 {uncovered} ｜ 兜底止损单: {stop}",
+    en: "Stop protection: uncovered {uncovered} | exchange stop: {stop}",
+  },
+  "grid.stopProtection.none": { zh: "无", en: "none" },
   "grid.stopReason": { zh: "暂停原因: {reason}", en: "Pause reason: {reason}" },
   "grid.configTitle": { zh: "网格配置", en: "Grid Config" },
   "grid.configSize": {
