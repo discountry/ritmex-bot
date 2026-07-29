@@ -33,6 +33,7 @@ import { decryptCopyright } from "../utils/copyright";
 import { isRateLimitError } from "../utils/errors";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
+import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { t } from "../i18n";
@@ -124,14 +125,17 @@ export class TrendEngine {
     .digest("hex");
 
   private readonly listeners = new Map<TrendEngineEvent, Set<TrendEngineListener>>();
-  private precisionSync: Promise<void> | null = null;
+  private readonly precision: PrecisionSyncer;
 
   constructor(private readonly config: TradingConfig, private readonly exchange: ExchangeAdapter) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
     this.rateLimit = new RateLimitController(this.config.pollIntervalMs, (type, detail) =>
       this.tradeLog.push(type, detail)
     );
-    this.syncPrecision();
+    this.precision = createPrecisionSyncer(this.exchange, this.config, this.config.qtyStep, (type, detail) =>
+      this.tradeLog.push(type, detail)
+    );
+    this.precision.start();
     this.bootstrap();
   }
 
@@ -147,6 +151,7 @@ export class TrendEngine {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.precision.stop();
   }
 
   on(event: TrendEngineEvent, handler: TrendEngineListener): void {
@@ -975,42 +980,6 @@ export class TrendEngine {
     } catch (err) {
       this.tradeLog.push("error", t("log.trend.trailingFail", { error: String(err) }));
     }
-  }
-
-  private syncPrecision(): void {
-    if (this.precisionSync) return;
-    const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
-    if (!getPrecision) return;
-    this.precisionSync = getPrecision()
-      .then((precision) => {
-        if (!precision) return;
-        let updated = false;
-        if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
-          const delta = Math.abs(precision.priceTick - this.config.priceTick);
-          if (delta > 1e-12) {
-            this.config.priceTick = precision.priceTick;
-            updated = true;
-          }
-        }
-        if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
-          const delta = Math.abs(precision.qtyStep - this.config.qtyStep);
-          if (delta > 1e-12) {
-            this.config.qtyStep = precision.qtyStep;
-            updated = true;
-          }
-        }
-        if (updated) {
-          this.tradeLog.push(
-            "info",
-            t("log.trend.precisionSynced", { priceTick: precision.priceTick, qtyStep: precision.qtyStep })
-          );
-        }
-      })
-      .catch((error) => {
-        this.tradeLog.push("error", t("log.trend.precisionFailed", { error: extractMessage(error) }));
-        this.precisionSync = null;
-        setTimeout(() => this.syncPrecision(), 2000);
-      });
   }
 
   private emitUpdate(): void {

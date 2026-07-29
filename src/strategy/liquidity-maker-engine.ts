@@ -29,6 +29,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 
 interface DesiredOrder {
   side: "BUY" | "SELL";
@@ -63,6 +64,8 @@ type MakerEvent = "update";
 type MakerListener = (snapshot: LiquidityMakerEngineSnapshot) => void;
 
 const EPS = 1e-5;
+/** Quantity step assumed until the exchange reports its own. */
+const DEFAULT_QTY_STEP = 0.001;
 
 export class LiquidityMakerEngine {
   private accountSnapshot: AccountSnapshot | null = null;
@@ -80,11 +83,7 @@ export class LiquidityMakerEngine {
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<MakerEvent, LiquidityMakerEngineSnapshot>();
   private readonly sessionVolume = new SessionVolumeTracker();
-  private priceTick: number = 0.1;
-  private qtyStep: number = 0.001;
-  private minBaseAmount: number | null = null;
-  private minQuoteAmount: number | null = null;
-  private precisionSync: Promise<void> | null = null;
+  private readonly precision: PrecisionSyncer;
   private marketType: "perp" | "spot" = "perp";
   private baseAsset: string | null = null;
   private quoteAsset: string | null = null;
@@ -140,12 +139,13 @@ export class LiquidityMakerEngine {
     this.rateLimit = new RateLimitController(this.config.refreshIntervalMs, (type, detail) =>
       this.tradeLog.push(type, detail)
     );
-    this.priceTick = Math.max(1e-9, this.config.priceTick);
-    this.qtyStep = Math.max(1e-9, this.qtyStep);
+    this.precision = createPrecisionSyncer(this.exchange, this.config, DEFAULT_QTY_STEP, (type, detail) =>
+      this.tradeLog.push(type, detail)
+    );
     const parsedSymbols = parseSymbolParts(this.config.symbol);
     this.baseAsset = parsedSymbols.base ?? null;
     this.quoteAsset = parsedSymbols.quote ?? null;
-    this.syncPrecision();
+    this.precision.start();
     // Debounce window defaults to 3x refresh interval, min 1s
     this.repriceDwellMs = Math.max(1000, this.config.refreshIntervalMs * 3);
     this.bootstrap();
@@ -163,6 +163,7 @@ export class LiquidityMakerEngine {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.precision.stop();
   }
 
   on(event: MakerEvent, handler: MakerListener): void {
@@ -448,9 +449,9 @@ export class LiquidityMakerEngine {
       const askPrice = safeAsk != null ? formatPriceToString(safeAsk, priceDecimals) : null;
       const rawAbsPosition = Math.abs(position.positionAmt);
       const minSell =
-        Number.isFinite(this.minBaseAmount) && this.minBaseAmount! > 0
-          ? this.minBaseAmount!
-          : Math.max(this.config.tradeAmount, this.qtyStep);
+        Number.isFinite(this.precision.minBaseAmount) && this.precision.minBaseAmount! > 0
+          ? this.precision.minBaseAmount!
+          : Math.max(this.config.tradeAmount, this.precision.qtyStep);
       let absPosition = rawAbsPosition;
       const tinySpotPosition =
         isSpotMarket &&
@@ -548,7 +549,7 @@ export class LiquidityMakerEngine {
           }
         }
         if (!skipSellSide && canEnter) {
-          if (isSpotMarket && minSell > 0 && this.minBaseAmount != null) {
+          if (isSpotMarket && minSell > 0 && this.precision.minBaseAmount != null) {
             const baseAvail = balancesForSpot?.baseAvailable ?? 0;
             const baseWallet = balancesForSpot?.baseWallet ?? baseAvail;
             if (Math.max(baseAvail, baseWallet) + EPS < minSell) {
@@ -630,7 +631,7 @@ export class LiquidityMakerEngine {
     topAsk: number,
     priceDecimals: number
   ): string | null {
-    const tickOffset = this.config.closeTickOffset * this.priceTick;
+    const tickOffset = this.config.closeTickOffset * this.precision.priceTick;
     const entryPrice = position.entryPrice || this.positionEntryPrice;
 
     let targetPrice: number;
@@ -664,13 +665,13 @@ export class LiquidityMakerEngine {
       if (closeSide === "SELL") {
         // 多头平仓：卖价必须 >= 入场价
         if (targetPrice < entryPrice) {
-          targetPrice = entryPrice + this.priceTick;
+          targetPrice = entryPrice + this.precision.priceTick;
           this.tradeLog.push("info", `平仓价调整为入场价+1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
         }
       } else {
         // 空头平仓：买价必须 <= 入场价
         if (targetPrice > entryPrice) {
-          targetPrice = entryPrice - this.priceTick;
+          targetPrice = entryPrice - this.precision.priceTick;
           this.tradeLog.push("info", `平仓价调整为入场价-1tick以确保不亏本: ${targetPrice.toFixed(priceDecimals)}`);
         }
       }
@@ -715,7 +716,7 @@ export class LiquidityMakerEngine {
               : (closeBidPrice != null ? Number(closeBidPrice) : null),
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { qtyStep: this.qtyStep }
+        { qtyStep: this.precision.qtyStep }
       );
     } catch (error) {
       if (isUnknownOrderError(error)) {
@@ -823,7 +824,7 @@ export class LiquidityMakerEngine {
       const newPrice = Number(t.price);
       const oldPrice = Number(existing.price);
       if (!Number.isFinite(newPrice) || !Number.isFinite(oldPrice)) continue;
-      const ticksDiff = Math.abs(newPrice - oldPrice) / this.priceTick;
+      const ticksDiff = Math.abs(newPrice - oldPrice) / this.precision.priceTick;
       const recentPlaced = this.lastEntryOrderBySide[t.side]?.ts ?? 0;
       const withinDwell = Date.now() - recentPlaced < this.repriceDwellMs;
       if (ticksDiff < this.minRepriceTicks || withinDwell) {
@@ -872,9 +873,9 @@ export class LiquidityMakerEngine {
       if (target.amount < EPS) continue;
       if (
         this.marketType === "spot" &&
-        this.minBaseAmount != null &&
+        this.precision.minBaseAmount != null &&
         target.side === "SELL" &&
-        target.amount + EPS < this.minBaseAmount
+        target.amount + EPS < this.precision.minBaseAmount
       ) {
         // Skip placing sells that would be bumped by venue minimums
         if (this.lastSellPriceViable) {
@@ -902,8 +903,8 @@ export class LiquidityMakerEngine {
             maxPct: this.config.maxCloseSlippagePct,
           },
           {
-            priceTick: this.priceTick,
-            qtyStep: this.qtyStep,
+            priceTick: this.precision.priceTick,
+            qtyStep: this.precision.qtyStep,
           }
         );
         // Record last placed entry order timing and price
@@ -937,7 +938,7 @@ export class LiquidityMakerEngine {
         this.lastSpotStopSkipped = false;
         return;
       }
-      const minStopQty = Number.isFinite(this.minBaseAmount) ? this.minBaseAmount! : null;
+      const minStopQty = Number.isFinite(this.precision.minBaseAmount) ? this.precision.minBaseAmount! : null;
       if (minStopQty != null && minStopQty > 0 && absPosition + EPS < minStopQty) {
         if (!this.lastSpotStopSkipped) {
           this.tradeLog.push("info", "现货持仓低于最小平仓数量，跳过止损检查");
@@ -969,7 +970,7 @@ export class LiquidityMakerEngine {
             expectedPrice: bidPrice || null,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { qtyStep: this.qtyStep }
+          { qtyStep: this.precision.qtyStep }
         );
       } catch (error) {
         if (isRateLimitError(error)) throw error;
@@ -1019,7 +1020,7 @@ export class LiquidityMakerEngine {
             expectedPrice: Number(position.positionAmt > 0 ? bidPrice : askPrice) || null,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { qtyStep: this.qtyStep }
+          { qtyStep: this.precision.qtyStep }
         );
       } catch (error) {
         if (isUnknownOrderError(error)) {
@@ -1058,49 +1059,8 @@ export class LiquidityMakerEngine {
     }
   }
 
-  private syncPrecision(): void {
-    if (this.precisionSync) return;
-    const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
-    if (!getPrecision) return;
-    this.precisionSync = getPrecision()
-      .then((precision) => {
-        if (!precision) return;
-        let updated = false;
-        if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
-          if (Math.abs(precision.priceTick - this.priceTick) > 1e-12) {
-            this.priceTick = precision.priceTick;
-            this.config.priceTick = precision.priceTick;
-            updated = true;
-          }
-        }
-        if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
-          if (Math.abs(precision.qtyStep - this.qtyStep) > 1e-12) {
-            this.qtyStep = precision.qtyStep;
-            updated = true;
-          }
-        }
-        if (Number.isFinite(precision.minBaseAmount)) {
-          this.minBaseAmount = precision.minBaseAmount!;
-        }
-        if (Number.isFinite(precision.minQuoteAmount)) {
-          this.minQuoteAmount = precision.minQuoteAmount!;
-        }
-        if (updated) {
-          this.tradeLog.push(
-            "info",
-            `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
-          );
-        }
-      })
-      .catch((error) => {
-        this.tradeLog.push("error", `同步精度失败: ${String(error)}`);
-        this.precisionSync = null;
-        setTimeout(() => this.syncPrecision(), 2000);
-      });
-  }
-
   private getPriceDecimals(): number {
-    const tick = Math.max(1e-9, this.priceTick);
+    const tick = Math.max(1e-9, this.precision.priceTick);
     const raw = Math.log10(1 / tick);
     if (!Number.isFinite(raw)) return 0;
     return Math.max(0, Math.floor(raw + 1e-9));
@@ -1231,7 +1191,7 @@ export class LiquidityMakerEngine {
     if (!params.balances) return desired;
     if (params.side === "SELL") {
       const cap = Math.max(0, params.balances.baseAvailable, params.balances.baseWallet ?? 0);
-      if (this.minBaseAmount != null && cap + EPS < this.minBaseAmount) {
+      if (this.precision.minBaseAmount != null && cap + EPS < this.precision.minBaseAmount) {
         return 0; // below venue min trade size; skip sell until enough balance
       }
       return this.roundToStep(Math.max(0, Math.min(desired, cap)));
@@ -1244,7 +1204,7 @@ export class LiquidityMakerEngine {
   }
 
   private roundToStep(amount: number): number {
-    const step = Math.max(1e-9, this.qtyStep);
+    const step = Math.max(1e-9, this.precision.qtyStep);
     return Math.floor(amount / step) * step;
   }
 
@@ -1255,7 +1215,7 @@ export class LiquidityMakerEngine {
     topAsk: number | null
   ): number | null {
     if (!Number.isFinite(rawPrice) || rawPrice <= 0) return null;
-    const tick = Math.max(this.priceTick, 1e-9);
+    const tick = Math.max(this.precision.priceTick, 1e-9);
     if (side === "BUY") {
       if (topAsk == null || !Number.isFinite(topAsk)) return rawPrice;
       const maxPrice = Number(topAsk) - tick;
@@ -1311,7 +1271,7 @@ export class LiquidityMakerEngine {
               : (topAsk != null ? Number(topAsk) : null),
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { qtyStep: this.qtyStep }
+        { qtyStep: this.precision.qtyStep }
       );
       this.tradeLog.push("order", `小额仓位使用市价平仓 ${target.side} 数量 ${absQty.toFixed(6)}`);
       return true;

@@ -27,6 +27,7 @@ import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
+import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 import { t } from "../i18n";
 
 interface DesiredOrder {
@@ -64,6 +65,8 @@ type MakerListener = (snapshot: MakerEngineSnapshot) => void;
 
 const EPS = 1e-5;
 const INSUFFICIENT_BALANCE_COOLDOWN_MS = 15_000;
+/** Quantity step assumed until the exchange reports its own. */
+const DEFAULT_QTY_STEP = 0.001;
 
 export class MakerEngine {
   private accountSnapshot: AccountSnapshot | null = null;
@@ -79,9 +82,7 @@ export class MakerEngine {
   private readonly tradeLog: ReturnType<typeof createTradeLog>;
   private readonly events = new StrategyEventEmitter<MakerEvent, MakerEngineSnapshot>();
   private readonly sessionVolume = new SessionVolumeTracker();
-  private priceTick: number = 0.1;
-  private qtyStep: number = 0.001;
-  private precisionSync: Promise<void> | null = null;
+  private readonly precision: PrecisionSyncer;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private processing = false;
@@ -119,9 +120,10 @@ export class MakerEngine {
     this.rateLimit = new RateLimitController(this.config.refreshIntervalMs, (type, detail) =>
       this.tradeLog.push(type, detail)
     );
-    this.priceTick = Math.max(1e-9, this.config.priceTick);
-    this.qtyStep = Math.max(1e-9, this.qtyStep);
-    this.syncPrecision();
+    this.precision = createPrecisionSyncer(this.exchange, this.config, DEFAULT_QTY_STEP, (type, detail) =>
+      this.tradeLog.push(type, detail)
+    );
+    this.precision.start();
     this.bootstrap();
   }
 
@@ -137,6 +139,7 @@ export class MakerEngine {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.precision.stop();
   }
 
   on(event: MakerEvent, handler: MakerListener): void {
@@ -453,8 +456,8 @@ export class MakerEngine {
             maxPct: this.config.maxCloseSlippagePct,
           },
           {
-            priceTick: this.priceTick,
-            qtyStep: this.qtyStep,
+            priceTick: this.precision.priceTick,
+            qtyStep: this.precision.qtyStep,
           }
         );
       } catch (error) {
@@ -519,7 +522,7 @@ export class MakerEngine {
             expectedPrice: Number(closeSidePrice) || null,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { qtyStep: this.qtyStep }
+          { qtyStep: this.precision.qtyStep }
         );
       } catch (error) {
         if (isUnknownOrderError(error)) {
@@ -557,46 +560,8 @@ export class MakerEngine {
     }
   }
 
-  private syncPrecision(): void {
-    if (this.precisionSync) return;
-    const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
-    if (!getPrecision) return;
-    this.precisionSync = getPrecision()
-      .then((precision) => {
-        if (!precision) return;
-        let updated = false;
-        if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
-          if (Math.abs(precision.priceTick - this.priceTick) > 1e-12) {
-            this.priceTick = precision.priceTick;
-            this.config.priceTick = precision.priceTick;
-            updated = true;
-          }
-        }
-        if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
-          if (Math.abs(precision.qtyStep - this.qtyStep) > 1e-12) {
-            this.qtyStep = precision.qtyStep;
-            updated = true;
-          }
-        }
-        if (updated) {
-          this.tradeLog.push(
-            "info",
-            t("log.common.precisionSynced", {
-              priceTick: precision.priceTick,
-              qtyStep: precision.qtyStep,
-            })
-          );
-        }
-      })
-      .catch((error) => {
-        this.tradeLog.push("error", t("log.common.precisionFailed", { error: extractMessage(error) }));
-        this.precisionSync = null;
-        setTimeout(() => this.syncPrecision(), 2000);
-      });
-  }
-
   private getPriceDecimals(): number {
-    const tick = Math.max(1e-9, this.priceTick);
+    const tick = Math.max(1e-9, this.precision.priceTick);
     const raw = Math.log10(1 / tick);
     if (!Number.isFinite(raw)) return 0;
     return Math.max(0, Math.floor(raw + 1e-9));

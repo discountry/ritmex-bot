@@ -9,6 +9,7 @@ import { computePositionPnl } from "../utils/pnl";
 import { getMidOrLast, getTopPrices } from "../utils/price";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
+import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { t } from "../i18n";
@@ -93,7 +94,7 @@ export class SwingEngine {
   private lastError: string | null = null;
 
   private ordersSnapshotReady = false;
-  private precisionSync: Promise<void> | null = null;
+  private readonly precision: PrecisionSyncer;
   private swingState: SwingState = createInitialSwingState();
 
   // Stop-loss placement de-bounce
@@ -128,7 +129,10 @@ export class SwingEngine {
     });
     this.binanceRsi.start();
 
-    this.syncPrecision();
+    this.precision = createPrecisionSyncer(this.exchange, this.config, this.config.qtyStep, (type, detail) =>
+      this.tradeLog.push(type, detail)
+    );
+    this.precision.start();
     this.bootstrap();
   }
 
@@ -144,6 +148,7 @@ export class SwingEngine {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.precision.stop();
     // Binance tracker is external IO; stop it too.
     this.binanceRsi.stop();
   }
@@ -585,39 +590,4 @@ export class SwingEngine {
     );
   }
 
-  private syncPrecision(): void {
-    if (this.precisionSync) return;
-    const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
-    if (!getPrecision) return;
-    this.precisionSync = getPrecision()
-      .then((precision) => {
-        if (!precision) return;
-        let updated = false;
-        if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
-          const delta = Math.abs(precision.priceTick - this.config.priceTick);
-          if (delta > 1e-12) {
-            this.config.priceTick = precision.priceTick;
-            updated = true;
-          }
-        }
-        if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
-          const delta = Math.abs(precision.qtyStep - this.config.qtyStep);
-          if (delta > 1e-12) {
-            this.config.qtyStep = precision.qtyStep;
-            updated = true;
-          }
-        }
-        if (updated) {
-          this.tradeLog.push(
-            "info",
-            `Synced precision: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`
-          );
-        }
-      })
-      .catch((error) => {
-        this.tradeLog.push("error", `Precision sync failed: ${extractMessage(error)}`);
-        this.precisionSync = null;
-        setTimeout(() => this.syncPrecision(), 2000);
-      });
-  }
 }

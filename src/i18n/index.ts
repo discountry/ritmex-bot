@@ -528,14 +528,6 @@ const translations: Record<string, TranslationEntry> = {
     zh: "构建快照失败: {error}",
     en: "Failed to build snapshot: {error}",
   },
-  "log.guardian.precisionSynced": {
-    zh: "已同步交易精度: priceTick={priceTick} qtyStep={qtyStep}",
-    en: "Synced precision: priceTick={priceTick} qtyStep={qtyStep}",
-  },
-  "log.guardian.precisionFailed": {
-    zh: "同步精度失败: {error}",
-    en: "Failed to sync precision: {error}",
-  },
   "log.basis.subscribeFuturesDepthFail": {
     zh: "订阅期货深度失败: {error}",
     en: "Failed to subscribe futures depth: {error}",
@@ -731,11 +723,6 @@ const translations: Record<string, TranslationEntry> = {
   "log.trend.restoreStop": { zh: "恢复原止损 @ {price}", en: "Restored original stop @ {price}" },
   "log.trend.restoreStopFail": { zh: "恢复原止损失败: {error}", en: "Failed to restore original stop: {error}" },
   "log.trend.trailingFail": { zh: "挂动态止盈失败: {error}", en: "Failed to place trailing stop: {error}" },
-  "log.trend.precisionSynced": {
-    zh: "已同步交易精度: priceTick={priceTick} qtyStep={qtyStep}",
-    en: "Synced precision: priceTick={priceTick} qtyStep={qtyStep}",
-  },
-  "log.trend.precisionFailed": { zh: "同步精度失败: {error}", en: "Failed to sync precision: {error}" },
   "log.trend.updateHandlerError": { zh: "更新回调处理异常: {error}", en: "Update handler error: {error}" },
   "log.trend.snapshotDispatchError": { zh: "快照或更新分发异常: {error}", en: "Snapshot/update dispatch error: {error}" },
 };

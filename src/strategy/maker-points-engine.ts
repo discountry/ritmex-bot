@@ -24,6 +24,7 @@ import { makeOrderPlan } from "../core/lib/order-plan";
 import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
 import { StrategyEventEmitter } from "./common/event-emitter";
+import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { BinanceDepthTracker, type BinanceDepthSnapshot } from "./common/binance-depth";
@@ -119,9 +120,7 @@ export class MakerPointsEngine {
   private readonly binanceDepth: BinanceDepthTracker;
   private readonly notifier: NotificationSender;
 
-  private priceTick: number = 0.1;
-  private qtyStep: number = 0.001;
-  private precisionSync: Promise<void> | null = null;
+  private readonly precision: PrecisionSyncer;
 
   private timer: ReturnType<typeof setInterval> | null = null;
   private stopLossTimer: ReturnType<typeof setInterval> | null = null;
@@ -200,8 +199,9 @@ export class MakerPointsEngine {
       this.tradeLog.push(type, detail)
     );
     this.notifier = createTelegramNotifier();
-    this.priceTick = Math.max(1e-9, this.config.priceTick);
-    this.qtyStep = Math.max(1e-9, this.config.qtyStep);
+    this.precision = createPrecisionSyncer(this.exchange, this.config, this.config.qtyStep, (type, detail) =>
+      this.tradeLog.push(type, detail)
+    );
     this.binanceDepth = new BinanceDepthTracker(resolveBinanceSymbol(this.config.symbol), {
       baseUrl: process.env.BINANCE_SPOT_WS_URL ?? process.env.BINANCE_WS_URL,
       restBaseUrl: process.env.BINANCE_REST_URL,
@@ -236,7 +236,7 @@ export class MakerPointsEngine {
       }
       this.emitUpdate();
     });
-    this.syncPrecision();
+    this.precision.start();
     this.bootstrap();
   }
 
@@ -280,6 +280,7 @@ export class MakerPointsEngine {
     }
     this.stopDefenseRestPoll();
     this.binanceDepth.stop();
+    this.precision.stop();
   }
 
   on(event: MakerPointsEvent, handler: MakerPointsListener): void {
@@ -1075,8 +1076,8 @@ export class MakerPointsEngine {
           target.reduceOnly,
           undefined,
           {
-            priceTick: this.priceTick,
-            qtyStep: this.qtyStep,
+            priceTick: this.precision.priceTick,
+            qtyStep: this.precision.qtyStep,
             skipDedupe: true,
             slPrice,
           }
@@ -1088,7 +1089,7 @@ export class MakerPointsEngine {
         }
         if (isPrecisionError(error)) {
           this.tradeLog.push("warn", `检测到精度错误，重新同步: ${extractMessage(error)}`);
-          this.syncPrecision(true);
+          this.precision.refresh();
         }
         this.tradeLog.push(
           "error",
@@ -1257,7 +1258,7 @@ export class MakerPointsEngine {
             currentAbsPosition,
             (type, detail) => this.tradeLog.push(type, detail),
             undefined,
-            { qtyStep: this.qtyStep }
+            { qtyStep: this.precision.qtyStep }
           );
 
           // 等待一小段时间让账户数据更新
@@ -1269,7 +1270,7 @@ export class MakerPointsEngine {
             this.tradeLog.push("order", "止损平仓时订单已不存在，继续检查仓位");
           } else if (isPrecisionError(error)) {
             this.tradeLog.push("warn", `止损平仓精度错误，重新同步: ${extractMessage(error)}`);
-            this.syncPrecision(true);
+            this.precision.refresh();
           } else {
             this.tradeLog.push("error", `止损平仓失败 (重试 ${retryCount}/${maxRetries}): ${extractMessage(error)}`);
           }
@@ -1322,47 +1323,8 @@ export class MakerPointsEngine {
     }
   }
 
-  private syncPrecision(force = false): void {
-    if (this.precisionSync && !force) return;
-    const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
-    if (!getPrecision) return;
-    this.precisionSync = getPrecision()
-      .then((precision) => {
-        this.precisionSync = null;
-        if (!precision) return;
-        let updated = false;
-        if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
-          if (Math.abs(precision.priceTick - this.priceTick) > 1e-12) {
-            this.priceTick = precision.priceTick;
-            this.config.priceTick = precision.priceTick;
-            updated = true;
-          }
-        }
-        if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
-          if (Math.abs(precision.qtyStep - this.qtyStep) > 1e-12) {
-            this.qtyStep = precision.qtyStep;
-            updated = true;
-          }
-        }
-        if (updated) {
-          this.tradeLog.push(
-            "info",
-            t("log.common.precisionSynced", {
-              priceTick: precision.priceTick,
-              qtyStep: precision.qtyStep,
-            })
-          );
-        }
-      })
-      .catch((error) => {
-        this.tradeLog.push("error", t("log.common.precisionFailed", { error: extractMessage(error) }));
-        this.precisionSync = null;
-        setTimeout(() => this.syncPrecision(), 2000);
-      });
-  }
-
   private getPriceDecimals(): number {
-    const tick = Math.max(1e-9, this.priceTick);
+    const tick = Math.max(1e-9, this.precision.priceTick);
     const raw = Math.log10(1 / tick);
     if (!Number.isFinite(raw)) return 0;
     return Math.max(0, Math.floor(raw + 1e-9));
