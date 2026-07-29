@@ -1,5 +1,6 @@
 import { setInterval, clearInterval, setTimeout, clearTimeout } from "timers";
 import WebSocket from "ws";
+import { ReconnectScheduler, linearBackoff } from "../reconnect-scheduler";
 import type {
   AccountListener,
   DepthListener,
@@ -150,6 +151,8 @@ const BALANCE_EPSILON = 1e-9;
 const KLINE_DEFAULT_COUNT = 120;
 const DEFAULT_TICKER_POLL_MS = 3000;
 const DEFAULT_KLINE_POLL_MS = 15000;
+const WS_RECONNECT_BASE_MS = 2_000;
+const WS_RECONNECT_MAX_MS = 30_000;
 const WS_HEARTBEAT_INTERVAL_MS = 5_000;
 const CLIENT_PING_INTERVAL_MS = 2_000;
 const WS_STALE_TIMEOUT_MS = 20_000;
@@ -246,8 +249,14 @@ export class LighterGateway {
   private readonly orderIndexByClientId = new Map<string, string>();
 
   private ws: WebSocket | null = null;
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectAttempts = 0;
+  private readonly reconnect: ReconnectScheduler = new ReconnectScheduler({
+    connect: async () => {
+      await this.openWebSocket();
+      this.reconnect.onConnected();
+    },
+    backoff: linearBackoff(WS_RECONNECT_BASE_MS, WS_RECONNECT_MAX_MS),
+    onError: (error) => this.logger("reconnect", error),
+  });
   private readonly wsUrl: string;
   private connectPromise: Promise<void> | null = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
@@ -759,7 +768,7 @@ export class LighterGateway {
           return;
         }
         this.stopStaleMonitor();
-        this.scheduleReconnect();
+        this.reconnect.schedule();
       });
       ws.on("error", (error) => {
         this.logger("ws:error", error);
@@ -769,7 +778,7 @@ export class LighterGateway {
           return;
         }
         this.stopStaleMonitor();
-        this.scheduleReconnect();
+        this.reconnect.schedule();
       });
     });
   }
@@ -945,24 +954,6 @@ export class LighterGateway {
     return candidates[0] ?? null;
   }
 
-  private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
-    const attempt = this.reconnectAttempts + 1;
-    const delay = Math.min(2000 * attempt, 30_000);
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.openWebSocket()
-        .then(() => {
-          this.reconnectAttempts = 0;
-        })
-        .catch((error) => {
-          this.logger("reconnect", error);
-          this.reconnectAttempts = attempt;
-          this.scheduleReconnect();
-        });
-    }, delay);
-  }
-
   private forceReconnect(reason: string): void {
     const now = Date.now();
     if (this.staleReason && now - this.lastDepthUpdateAt < FEED_STALE_TIMEOUT_MS / 2) {
@@ -978,7 +969,7 @@ export class LighterGateway {
     }
     this.stopHeartbeat();
     this.stopClientPing();
-    this.scheduleReconnect();
+    this.reconnect.schedule();
   }
 
   private startHeartbeat(): void {
@@ -995,7 +986,7 @@ export class LighterGateway {
         } finally {
           this.stopHeartbeat();
           this.stopClientPing();
-          this.scheduleReconnect();
+          this.reconnect.schedule();
         }
         return;
       }

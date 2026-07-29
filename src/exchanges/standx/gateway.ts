@@ -1,4 +1,5 @@
 import NodeWebSocket from "ws";
+import { ReconnectScheduler, exponentialBackoff } from "../reconnect-scheduler";
 import crypto from "crypto";
 import { sign, utils as edUtils, hashes as edHashes } from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
@@ -434,7 +435,6 @@ export class StandxGateway {
   private marketWsReady = false;
   private marketWsAuthed = false;
   private marketWsAuthRequested = false;
-  private marketReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly subscriptions = new Set<string>();
 
   // ========== 心跳与连接管理 ==========
@@ -443,7 +443,15 @@ export class StandxGateway {
   // 心跳检查定时器
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   // 重连次数（用于指数退避）
-  private reconnectAttempts = 0;
+  private readonly marketReconnect = new ReconnectScheduler({
+    connect: () => {
+      this.logDebug("attempting reconnect");
+      this.connectMarketWs();
+    },
+    backoff: exponentialBackoff(WS_RECONNECT_DELAY_BASE, WS_RECONNECT_DELAY_MAX),
+    onSchedule: (delay, attempt) =>
+      this.logDebug(`scheduling reconnect in ${delay}ms (attempt ${attempt})`),
+  });
 
   // ========== 数据过时检测与 REST 备用 ==========
   // 上次收到行情数据（price/depth）的时间戳
@@ -893,7 +901,7 @@ export class StandxGateway {
   }
 
   private connectMarketWs(): void {
-    if (this.marketWs || this.marketReconnectTimer) return;
+    if (this.marketWs || this.marketReconnect.pending) return;
     this.marketWs = new WebSocketCtor(this.wsUrl);
     this.marketWsReady = false;
     this.marketWsAuthed = false;
@@ -902,7 +910,7 @@ export class StandxGateway {
       this.marketWsReady = true;
       this.marketWsAuthed = false;
       // 重置重连计数和时间戳
-      this.reconnectAttempts = 0;
+      this.marketReconnect.onConnected();
       this.lastMessageTime = Date.now();
       this.lastMarketDataTime = Date.now();
       this.lastAccountDataTime = Date.now();
@@ -929,7 +937,7 @@ export class StandxGateway {
       if (wasReady) {
         this.onDisconnect();
       }
-      this.scheduleReconnect();
+      this.marketReconnect.schedule();
     };
     const handleError = (error: unknown) => {
       this.logger("marketWs", error);
@@ -937,7 +945,7 @@ export class StandxGateway {
       // 因为某些 WebSocket 实现在握手失败时可能不触发 close 事件
       if (this.marketWs && !this.marketWsReady) {
         this.marketWs = null;
-        this.scheduleReconnect();
+        this.marketReconnect.schedule();
       }
     };
 
@@ -958,22 +966,6 @@ export class StandxGateway {
       (this.marketWs as any).onclose = handleClose;
       (this.marketWs as any).onerror = handleError;
     }
-  }
-
-  private scheduleReconnect(): void {
-    if (this.marketReconnectTimer) return;
-    // 指数退避：delay = min(base * 2^attempts, max)
-    const delay = Math.min(
-      WS_RECONNECT_DELAY_BASE * Math.pow(2, this.reconnectAttempts),
-      WS_RECONNECT_DELAY_MAX
-    );
-    this.reconnectAttempts += 1;
-    this.logDebug(`scheduling reconnect in ${delay}ms (attempt ${this.reconnectAttempts})`);
-    this.marketReconnectTimer = setTimeout(() => {
-      this.marketReconnectTimer = null;
-      this.logDebug("attempting reconnect");
-      this.connectMarketWs();
-    }, delay);
   }
 
   private handleMarketMessage(event: { data: any }): void {
@@ -1322,9 +1314,9 @@ export class StandxGateway {
     if (wasReady) {
       this.onDisconnect();
     }
-    // 立即重连（不使用指数退避，因为是主动行为）
-    this.reconnectAttempts = 0;
-    this.scheduleReconnect();
+    // Deliberate teardown, so reset the backoff and retry at the base delay.
+    this.marketReconnect.onConnected();
+    this.marketReconnect.schedule();
   }
 
   private logDebug(context: string, detail?: unknown): void {

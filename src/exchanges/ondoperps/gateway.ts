@@ -1,4 +1,5 @@
 import { createHmac } from "node:crypto";
+import { ReconnectScheduler, exponentialBackoff } from "../reconnect-scheduler";
 import type {
   AccountListener,
   ConnectionEventListener,
@@ -42,10 +43,10 @@ const DEFAULT_WS_URL = "wss://api.ondoperps.xyz/ws";
 const DEFAULT_SYMBOL = "BTC-USD.P";
 const REQUEST_TIMEOUT_MS = 15_000;
 const WS_HEARTBEAT_MS = 30_000;
+const WS_RECONNECT_BASE_MS = 1_000;
 const WS_RECONNECT_MAX_MS = 30_000;
 
 type Timer = ReturnType<typeof setInterval>;
-type Timeout = ReturnType<typeof setTimeout>;
 
 export interface OndoperpsGatewayOptions {
   apiKeyId: string;
@@ -211,8 +212,11 @@ export class OndoperpsGateway {
   private wsLoginInFlight = false;
   private wsLoginFallbackAttempted = false;
   private wsEverOpened = false;
-  private wsReconnectDelayMs = 1_000;
-  private wsReconnectTimer: Timeout | null = null;
+  private readonly wsReconnect = new ReconnectScheduler({
+    connect: () => this.connectWebSocket(),
+    backoff: exponentialBackoff(WS_RECONNECT_BASE_MS, WS_RECONNECT_MAX_MS),
+    onError: (error) => this.logger("reconnect", error),
+  });
   private heartbeatTimer: Timer | null = null;
   private readonly sentSubscriptions = new Set<string>();
 
@@ -590,10 +594,7 @@ export class OndoperpsGateway {
 
   private connectWebSocket(): void {
     if (this.ws && (this.ws.readyState === 0 || this.ws.readyState === 1)) return;
-    if (this.wsReconnectTimer) {
-      clearTimeout(this.wsReconnectTimer);
-      this.wsReconnectTimer = null;
-    }
+    this.wsReconnect.cancel();
     try {
       const ws = this.webSocketFactory(this.wsUrl);
       this.ws = ws;
@@ -605,7 +606,7 @@ export class OndoperpsGateway {
       ws.addEventListener("error", (event) => this.logger("websocket", event));
     } catch (error) {
       this.logger("connectWebSocket", error);
-      this.scheduleReconnect();
+      this.wsReconnect.schedule();
     }
   }
 
@@ -613,7 +614,7 @@ export class OndoperpsGateway {
     if (this.ws !== ws) return;
     const reconnected = this.wsEverOpened;
     this.wsEverOpened = true;
-    this.wsReconnectDelayMs = 1_000;
+    this.wsReconnect.onConnected();
     this.wsAuthenticated = false;
     this.wsLoginInFlight = false;
     this.wsLoginFallbackAttempted = false;
@@ -630,7 +631,7 @@ export class OndoperpsGateway {
     this.wsLoginInFlight = false;
     this.stopHeartbeat();
     this.emitConnection("disconnected");
-    this.scheduleReconnect();
+    this.wsReconnect.schedule();
   }
 
   private async handleWsMessage(raw: unknown): Promise<void> {
@@ -770,16 +771,6 @@ export class OndoperpsGateway {
     if (!this.heartbeatTimer) return;
     clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = null;
-  }
-
-  private scheduleReconnect(): void {
-    if (this.wsReconnectTimer) return;
-    const delay = this.wsReconnectDelayMs;
-    this.wsReconnectDelayMs = Math.min(this.wsReconnectDelayMs * 2, WS_RECONNECT_MAX_MS);
-    this.wsReconnectTimer = setTimeout(() => {
-      this.wsReconnectTimer = null;
-      this.connectWebSocket();
-    }, delay);
   }
 
   private startAccountPolling(): void {

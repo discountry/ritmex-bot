@@ -24,6 +24,7 @@ import type {
   TickerListener,
   KlineListener,
 } from "../adapter";
+import { ReconnectScheduler, fixedBackoff } from "../reconnect-scheduler";
 
 const WebSocketCtor: typeof globalThis.WebSocket =
   typeof globalThis.WebSocket !== "undefined"
@@ -99,7 +100,10 @@ export class BackpackGateway {
   private ws: WebSocket | null = null;
   private wsReady = false;
   private wsPingTimer: ReturnType<typeof setInterval> | null = null;
-  private wsReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly wsReconnect = new ReconnectScheduler({
+    connect: () => this.ensurePrivateSocket(),
+    backoff: fixedBackoff(WS_RECONNECT_DELAY),
+  });
   private readonly wsTopics = new Set<string>();
   private wsConnecting = false;
   private readonly wsWindow: string;
@@ -782,7 +786,7 @@ export class BackpackGateway {
     this.wsReady = false;
     this.ws = null;
     this.stopPing();
-    this.scheduleReconnect();
+    this.wsReconnect.schedule();
   };
 
   private handleWsError = (_event: any): void => {
@@ -943,14 +947,6 @@ export class BackpackGateway {
     } catch (error) {
       this.logger("wsPong", error);
     }
-  }
-
-  private scheduleReconnect(): void {
-    if (this.wsReconnectTimer) return;
-    this.wsReconnectTimer = setTimeout(() => {
-      this.wsReconnectTimer = null;
-      this.ensurePrivateSocket();
-    }, WS_RECONNECT_DELAY);
   }
 
   private detachWebSocket(): void {
