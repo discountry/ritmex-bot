@@ -25,5 +25,10 @@
     "noUnusedLocals": false,
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
-  }
+  },
+
+  // docs/ holds vendored third-party samples (ccxt examples); they are reference
+  // material, not compilation units, and their errors mask real ones in src/.
+  "include": ["index.ts", "src/**/*", "tests/**/*", "scripts/**/*"],
+  "exclude": ["node_modules", "docs"]
 }

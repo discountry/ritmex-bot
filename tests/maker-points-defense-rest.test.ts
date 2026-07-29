@@ -60,10 +60,11 @@ describe("MakerPointsEngine defense-mode REST polling", () => {
         price: "100",
         origQty: "1",
         executedQty: "0",
+        stopPrice: "0",
         time: Date.now(),
         updateTime: Date.now(),
-        reduceOnly: "false",
-        closePosition: "false",
+        reduceOnly: false,
+        closePosition: false,
       },
     ];
 

@@ -38,6 +38,13 @@ interface DesiredOrder {
   reduceOnly: boolean;
 }
 
+/** Spot wallet view the quoting logic reads; `baseWallet` may lag `baseAvailable` after a fill. */
+export interface SpotBalances {
+  baseAvailable: number;
+  quoteAvailable: number;
+  baseWallet: number;
+}
+
 export interface OffsetMakerEngineSnapshot extends MakerEngineSnapshot {
   buyDepthSum10: number;
   sellDepthSum10: number;
@@ -269,6 +276,7 @@ export class OffsetMakerEngine {
       (klines) => {
         if (!Array.isArray(klines) || !klines.length) return;
         const latest = klines[klines.length - 1];
+        if (!latest) return;
         this.lastKline = latest;
         const open = Number(latest.open);
         const close = Number(latest.close);
@@ -340,7 +348,9 @@ export class OffsetMakerEngine {
       const position = this.getPositionSnapshot();
       const isSpotMarket = this.marketType === "spot";
       const spotBalances = isSpotMarket ? this.getSpotBalances() : null;
-      const balancesForSpot = isSpotMarket ? spotBalances ?? { baseAvailable: 0, quoteAvailable: 0 } : spotBalances;
+      const balancesForSpot = isSpotMarket
+        ? spotBalances ?? { baseAvailable: 0, quoteAvailable: 0, baseWallet: 0 }
+        : spotBalances;
       this.updateLiveCandle();
       const handledImbalance = await this.handleImbalanceExit(position, buySum, sellSum);
       if (handledImbalance) {
@@ -392,9 +402,7 @@ export class OffsetMakerEngine {
 
       if (absPosition < EPS && isSpotMarket) {
         this.entryPricePendingLogged = false;
-        const baseAvail = balancesForSpot?.baseAvailable ?? 0;
-        const baseWallet = balancesForSpot?.baseWallet ?? baseAvail;
-        const maxBase = Math.max(baseAvail, baseWallet);
+        const maxBase = this.sellableBase(balancesForSpot);
         if (isSpotMarket && minSell > 0 && maxBase + EPS < minSell) {
           // 无法卖出，跳过卖单，允许买单累计
           this.lastSellPriceViable = false;
@@ -429,9 +437,7 @@ export class OffsetMakerEngine {
           }
         }
         if (!skipSellSide && canEnter) {
-          const baseAvail = balancesForSpot?.baseAvailable ?? 0;
-          const baseWallet = balancesForSpot?.baseWallet ?? baseAvail;
-          const maxBase = Math.max(baseAvail, baseWallet);
+          const maxBase = this.sellableBase(balancesForSpot);
           if (isSpotMarket && minSell > 0 && maxBase + EPS < minSell) {
             // 持仓低于最小卖单量，跳过卖单，等待累积
             if (this.lastSellPriceViable) {
@@ -468,20 +474,22 @@ export class OffsetMakerEngine {
               this.tradeLog.push("info", "现货买入仅在1m阳线，当前跳过买单");
               this.lastBuyPriceViable = false;
             }
-          } else {
+          } else if (bidPrice != null) {
             desired.push({ side: "BUY", price: bidPrice, amount: this.config.tradeAmount, reduceOnly: false });
           }
         }
         if (!skipSellSide && canEnter) {
-          if (isSpotMarket && minSell > 0 && this.minBaseAmount != null) {
-            const baseAvail = balancesForSpot?.baseAvailable ?? 0;
-            const baseWallet = balancesForSpot?.baseWallet ?? baseAvail;
-            if (Math.max(baseAvail, baseWallet) + EPS < minSell) {
-              this.lastSellPriceViable = false;
-              this.tradeLog.push("info", "现货持仓低于最小卖单量，跳过卖单");
-            }
+          const belowMinSell =
+            isSpotMarket &&
+            minSell > 0 &&
+            this.minBaseAmount != null &&
+            this.sellableBase(balancesForSpot) + EPS < minSell;
+          if (belowMinSell) {
+            this.lastSellPriceViable = false;
+            this.tradeLog.push("info", "现货持仓低于最小卖单量，跳过卖单");
+          } else if (askPrice != null) {
+            desired.push({ side: "SELL", price: askPrice, amount: this.config.tradeAmount, reduceOnly: false });
           }
-          desired.push({ side: "SELL", price: askPrice, amount: this.config.tradeAmount, reduceOnly: false });
         }
       } else {
         const closeSide: "BUY" | "SELL" = position.positionAmt > 0 ? "SELL" : "BUY";
@@ -1010,6 +1018,16 @@ export class OffsetMakerEngine {
 
   private isSpotKlineUp(): boolean {
     return this.spotKlineUp === true || this.isLiveCandleUp();
+  }
+
+  /**
+   * Base asset the venue will actually let us sell. Wallet balance can exceed the
+   * available figure right after a fill settles, so the larger of the two wins.
+   */
+  private sellableBase(balances: SpotBalances | null): number {
+    const available = balances?.baseAvailable ?? 0;
+    const wallet = balances?.baseWallet ?? available;
+    return Math.max(available, wallet);
   }
 
   private isLiveCandleUp(): boolean {

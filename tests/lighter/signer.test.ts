@@ -50,6 +50,6 @@ describe("LighterSigner", () => {
       expect(signed.txHash.length).toBeGreaterThan(0);
     }
     expect(typeof signed.signature).toBe("string");
-    expect(signed.signature.length).toBeGreaterThan(0);
+    expect(signed.signature?.length ?? 0).toBeGreaterThan(0);
   });
 });

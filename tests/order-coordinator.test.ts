@@ -89,7 +89,7 @@ describe("order-coordinator", () => {
       timers,
       pending,
       "BUY",
-      100,
+      "100",
       1,
       log,
       false

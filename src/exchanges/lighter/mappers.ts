@@ -105,7 +105,7 @@ export function lighterOrderToAster(symbol: string, order: LighterOrder): Order 
     symbol,
     side,
     type: mapOrderType(order.type),
-    status: normalizeOrderStatus(order.status ?? order.trigger_status ?? "UNKNOWN"),
+    status: normalizeOrderStatus(String(order.status ?? order.trigger_status ?? "UNKNOWN")),
     price: order.price ?? "0",
     origQty: order.initial_base_amount ?? "0",
     executedQty: computeExecutedQty(order),

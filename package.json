@@ -16,6 +16,7 @@
     "start": "bun run index.ts",
     "lint": "oxlint",
     "lint:fix": "oxlint --fix",
+    "typecheck": "tsc --noEmit",
     "test": "bun x vitest run",
     "test:exchange-contract": "bun x vitest run tests/exchange-contract-suite.test.ts tests/exchange-factory.test.ts tests/config.test.ts",
     "test:watch": "bun x vitest",
@@ -29,6 +30,8 @@
   },
   "devDependencies": {
     "@types/bun": "^1.3.9",
+    "@types/react": "^19",
+    "@types/ws": "^8.18.1",
     "oxlint": "^1.54.0",
     "vitest": "^4.0.18"
   },

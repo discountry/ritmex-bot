@@ -10,6 +10,12 @@ export type LighterOrderType =
 
 type StrOrNum = string | number;
 
+/**
+ * Lighter reports boolean fields inconsistently across endpoints — `true`, `1`, `"Yes"`.
+ * `normalizeBooleanFlag` in ./flags is what turns any of these into a real boolean.
+ */
+type BooleanFlag = boolean | string | number | bigint;
+
 export interface LighterOrder {
   order_index: StrOrNum;
   client_order_index: StrOrNum;
@@ -23,12 +29,12 @@ export interface LighterOrder {
   filled_quote_amount?: string;
   price: string;
   nonce?: number;
-  is_ask?: boolean;
+  is_ask?: BooleanFlag;
   side?: LighterSide;
   type?: LighterOrderType;
   time_in_force?: string;
   trigger_price?: string;
-  reduce_only?: boolean;
+  reduce_only?: BooleanFlag;
   status?: string | number;
   trigger_status?: string | number;
   trigger_time?: number;
@@ -68,7 +74,8 @@ export interface LighterAccountDetails {
 }
 
 export interface LighterAccountAsset {
-  symbol: string;
+  /** Optional: the account endpoint omits it for assets it only knows by id. */
+  symbol?: string;
   asset_id?: number;
   balance: string | number;
   locked_balance?: string | number;

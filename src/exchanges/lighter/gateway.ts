@@ -122,6 +122,31 @@ interface Pollers {
   klines: Map<string, ReturnType<typeof setInterval>>;
 }
 
+/**
+ * Spot balance of a single asset. `effective` is what every balance guard compares
+ * against: an unknown or unparseable asset collapses to 0 so guards fail closed
+ * instead of waving an order through.
+ */
+interface SpotAssetBalance {
+  available: number | null;
+  wallet: number | null;
+  effective: number;
+}
+
+function makeSpotAssetBalance(available: number | null, wallet: number | null): SpotAssetBalance {
+  return {
+    available,
+    wallet,
+    effective: Math.max(
+      available != null && Number.isFinite(available) ? available : 0,
+      wallet != null && Number.isFinite(wallet) ? wallet : 0
+    ),
+  };
+}
+
+/** Tolerance that absorbs float drift when comparing a balance against an order size. */
+const BALANCE_EPSILON = 1e-9;
+
 const KLINE_DEFAULT_COUNT = 120;
 const DEFAULT_TICKER_POLL_MS = 3000;
 const DEFAULT_KLINE_POLL_MS = 15000;
@@ -917,7 +942,7 @@ export class LighterGateway {
       return 0;
     });
 
-    return candidates[0];
+    return candidates[0] ?? null;
   }
 
   private scheduleReconnect(): void {
@@ -1756,8 +1781,9 @@ export class LighterGateway {
         (matchSymbol ?? asset.symbol ?? (asset.asset_id != null ? String(asset.asset_id) : "ASSET")).toUpperCase();
       list.push({
         asset: assetSymbol,
-        walletBalance: asset.balance ?? "0",
-        availableBalance: available != null && Number.isFinite(available) ? available.toString() : asset.balance ?? "0",
+        walletBalance: String(asset.balance ?? "0"),
+        availableBalance:
+          available != null && Number.isFinite(available) ? available.toString() : String(asset.balance ?? "0"),
         updateTime: now,
         assetId: Number.isFinite(assetId) ? assetId : undefined,
       });
@@ -1796,7 +1822,7 @@ export class LighterGateway {
       return (hasBase && hasQuote) || idMatch;
     });
     if (!matches.length) return null;
-    return matches[0];
+    return matches[0] ?? null;
   }
 
   async getPrecision(): Promise<{
@@ -1846,8 +1872,7 @@ export class LighterGateway {
     return qty;
   }
 
-  private getAvailableAssetAmount(assetId?: number | null, symbol?: string | null): { available: number | null; wallet: number | null } {
-    if (!this.assets.size) return null;
+  private getSpotAssetBalance(assetId?: number | null, symbol?: string | null): SpotAssetBalance {
     const normalizedSymbol = symbol ? symbol.toUpperCase() : null;
     for (const asset of this.assets.values()) {
       const idMatches = assetId != null && Number.isFinite(Number(asset.asset_id)) && Number(asset.asset_id) === assetId;
@@ -1857,29 +1882,23 @@ export class LighterGateway {
       const locked = parseNumber(asset.locked_balance ?? 0);
       if (balance == null) continue;
       const available = locked != null ? balance - locked : balance;
-      return {
-        available: Number.isFinite(available) ? available : null,
-        wallet: Number.isFinite(balance) ? balance : null,
-      };
+      return makeSpotAssetBalance(
+        Number.isFinite(available) ? available : null,
+        Number.isFinite(balance) ? balance : null
+      );
     }
-    return { available: null, wallet: null };
+    return makeSpotAssetBalance(null, null);
   }
 
   private assertSpotBalance(params: { isAsk: boolean; quantity: number | null | undefined; price: number | null }): void {
     const qty = Number(params.quantity);
     if (!Number.isFinite(qty) || qty <= 0) return;
     if (params.isAsk) {
-      const baseAmounts = this.getAvailableAssetAmount(this.baseAssetId, this.baseAssetSymbol);
-      const availableBase = baseAmounts?.available ?? null;
-      const walletBase = baseAmounts?.wallet ?? null;
-      const effective = Math.max(
-        availableBase != null && Number.isFinite(availableBase) ? availableBase : 0,
-        walletBase != null && Number.isFinite(walletBase) ? walletBase : 0
-      );
-      if (effective + 1e-9 < qty) {
+      const base = this.getSpotAssetBalance(this.baseAssetId, this.baseAssetSymbol);
+      if (base.effective + BALANCE_EPSILON < qty) {
         throw new Error(
-          `Insufficient base asset (${this.baseAssetSymbol ?? "BASE"} available ${availableBase ?? 0}${
-            walletBase != null ? ` wallet ${walletBase}` : ""
+          `Insufficient base asset (${this.baseAssetSymbol ?? "BASE"} available ${base.available ?? 0}${
+            base.wallet != null ? ` wallet ${base.wallet}` : ""
           }) for spot sell ${qty}`
         );
       }
@@ -1888,10 +1907,12 @@ export class LighterGateway {
     const price = Number(params.price);
     if (!Number.isFinite(price) || price <= 0) return;
     const requiredQuote = qty * price;
-    const availableQuote = this.getAvailableAssetAmount(this.quoteAssetId, this.quoteAssetSymbol);
-    if (availableQuote != null && availableQuote + 1e-9 < requiredQuote) {
+    const quote = this.getSpotAssetBalance(this.quoteAssetId, this.quoteAssetSymbol);
+    if (quote.effective + BALANCE_EPSILON < requiredQuote) {
       throw new Error(
-        `Insufficient quote asset (${this.quoteAssetSymbol ?? "QUOTE"} available ${availableQuote}) for spot buy requiring ${requiredQuote}`
+        `Insufficient quote asset (${this.quoteAssetSymbol ?? "QUOTE"} available ${
+          quote.available ?? 0
+        }) for spot buy requiring ${requiredQuote}`
       );
     }
   }
@@ -1932,10 +1953,10 @@ export class LighterGateway {
     const isAsk = side === "SELL" ? 1 : 0;
     const enforcedQty = this.enforceMinimums(params.quantity, params.price ?? null);
     if (this.isSpotMarket() && isAsk === 1) {
-      const availableBase = this.getAvailableAssetAmount(this.baseAssetId, this.baseAssetSymbol);
-      if (availableBase != null && availableBase + 1e-9 < enforcedQty) {
+      const base = this.getSpotAssetBalance(this.baseAssetId, this.baseAssetSymbol);
+      if (base.effective + BALANCE_EPSILON < enforcedQty) {
         throw new Error(
-          `Spot sell quantity ${enforcedQty} exceeds available base ${availableBase} (min trade size may be higher than balance)`
+          `Spot sell quantity ${enforcedQty} exceeds available base ${base.effective} (min trade size may be higher than balance)`
         );
       }
     }

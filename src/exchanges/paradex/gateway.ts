@@ -579,7 +579,7 @@ export class ParadexGateway {
       const isClosePosition = (extraParams as any).closePosition === true;
       if (isClosePosition) {
         const posAbs = this.getCurrentPositionAbs();
-        if (Number.isFinite(posAbs) && posAbs > 0) {
+        if (posAbs != null && Number.isFinite(posAbs) && posAbs > 0) {
           amount = posAbs;
         }
         const current = Number(amount);
