@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { t } from "../src/i18n";
 import type { ExchangeAdapter } from "../src/exchanges/adapter";
 import type { AccountSnapshot, Depth, Kline, Order, Ticker } from "../src/exchanges/types";
 import { MakerPointsEngine } from "../src/strategy/maker-points-engine";
@@ -103,7 +104,11 @@ describe("MakerPointsEngine Binance depth health defense", () => {
     expect((engine as any).defenseMode).toBe(true);
 
     const logs = ((engine as any).tradeLog.all() as Array<{ detail: string }>).map((entry) => entry.detail);
-    expect(logs.some((detail) => detail.includes("Binance簿记异常(orderbook_not_ready)"))).toBe(true);
+    expect(
+      logs.some((detail) =>
+        detail.includes(t("defense.reason.binanceBook", { reason: "orderbook_not_ready" }))
+      )
+    ).toBe(true);
 
     engine.stop();
   });

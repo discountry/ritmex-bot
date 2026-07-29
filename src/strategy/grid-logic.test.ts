@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { t } from "../i18n";
 import {
   ORPHAN_LEVEL,
   applyRebuild,
@@ -552,8 +553,12 @@ describe("resolveAwaiting", () => {
 describe("checkPriceStop", () => {
   it("triggers below lower and above upper thresholds", () => {
     const state = createInitialState(settings, 141.4);
-    expect(checkPriceStop(state, settings, 98.9)).toContain("跌破");
-    expect(checkPriceStop(state, settings, 202.1)).toContain("突破");
+    expect(checkPriceStop(state, settings, 98.9)).toBe(
+      t("log.grid.belowLowerBound", { pct: "1.10" })
+    );
+    expect(checkPriceStop(state, settings, 202.1)).toBe(
+      t("log.grid.aboveUpperBound", { pct: "1.05" })
+    );
     expect(checkPriceStop(state, settings, 150)).toBeNull();
     expect(checkPriceStop(state, settings, 99.5)).toBeNull(); // 1% 容忍内
   });

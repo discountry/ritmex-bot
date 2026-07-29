@@ -7,6 +7,7 @@
  * so the rule that decides "is our market data trustworthy" can be tested
  * without a live adapter.
  */
+import { t } from "../i18n";
 
 /** A feed older than this is considered stale. */
 export const DATA_STALE_THRESHOLD_MS = 5_000;
@@ -164,17 +165,31 @@ export function describeDefenseReasons(reasons: DefenseReasons): string {
   const items: string[] = [];
   const seconds = (ms: number) => Math.round(ms / 1000);
 
-  if (reasons.depthStale) items.push(`StandX深度(${seconds(reasons.depthAge)}s)`);
-  if (reasons.accountStale) items.push(`StandX账户(${seconds(reasons.accountAge)}s)`);
-  if (reasons.accountInvalid) {
-    items.push(`StandX仓位数据异常(${reasons.accountIssues.join(",") || "unknown"})`);
+  if (reasons.depthStale) items.push(t("defense.reason.depth", { seconds: seconds(reasons.depthAge) }));
+  if (reasons.accountStale) {
+    items.push(t("defense.reason.account", { seconds: seconds(reasons.accountAge) }));
   }
-  if (reasons.restUnhealthy) items.push(`StandX REST错误(${reasons.restConsecutiveErrors}次)`);
-  if (reasons.marginModeNotIsolated) items.push(`保证金模式(${reasons.marginMode ?? "unknown"})`);
-  if (reasons.binanceStale) items.push(`Binance深度(${seconds(reasons.binanceAge)}s)`);
+  if (reasons.accountInvalid) {
+    items.push(
+      t("defense.reason.accountInvalid", {
+        issues: reasons.accountIssues.join(",") || t("defense.reason.unknown"),
+      })
+    );
+  }
+  if (reasons.restUnhealthy) {
+    items.push(t("defense.reason.rest", { count: reasons.restConsecutiveErrors }));
+  }
+  if (reasons.marginModeNotIsolated) {
+    items.push(
+      t("defense.reason.marginMode", { mode: reasons.marginMode ?? t("defense.reason.unknown") })
+    );
+  }
+  if (reasons.binanceStale) {
+    items.push(t("defense.reason.binanceDepth", { seconds: seconds(reasons.binanceAge) }));
+  }
   if (reasons.binanceUnhealthy && reasons.binanceHealthReason) {
-    items.push(`Binance簿记异常(${reasons.binanceHealthReason})`);
+    items.push(t("defense.reason.binanceBook", { reason: reasons.binanceHealthReason }));
   }
 
-  return items.length > 0 ? items.join(", ") : "unknown";
+  return items.length > 0 ? items.join(", ") : t("defense.reason.unknown");
 }

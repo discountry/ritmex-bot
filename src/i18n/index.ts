@@ -860,6 +860,525 @@ const translations: Record<string, TranslationEntry> = {
     zh: "切换逐仓模式失败: {error}",
     en: "Failed to switch to isolated margin: {error}",
   },
+  // --- strategy/grid-logic ---
+  "log.grid.entryFilled": {
+    zh: "ENTRY 成交: {side} @ {price} (线 {level})",
+    en: "ENTRY filled: {side} @ {price} (level {level})",
+  },
+  "log.grid.orphanExitFilled": {
+    zh: "孤儿 EXIT 成交: {side} @ {price}",
+    en: "Orphan EXIT filled: {side} @ {price}",
+  },
+  "log.grid.exitFilled": {
+    zh: "EXIT 成交: {side} @ {price} (释放线 {level})",
+    en: "EXIT filled: {side} @ {price} (level {level} released)",
+  },
+  "log.grid.entryCancelled": {
+    zh: "ENTRY 撤销: {side} @ {price} (线 {level})",
+    en: "ENTRY cancelled: {side} @ {price} (level {level})",
+  },
+  "log.grid.exitCancelled": {
+    zh: "EXIT 撤销: {side} @ {price} (线 {level})",
+    en: "EXIT cancelled: {side} @ {price} (level {level})",
+  },
+  "log.grid.orderVanished": {
+    zh: "订单消失待判定: {intent} {side} @ {price}",
+    en: "Order vanished, outcome unknown: {intent} {side} @ {price}",
+  },
+  "log.grid.belowLowerBound": {
+    zh: "价格跌破网格下边界 {pct}%",
+    en: "Price fell {pct}% below the grid's lower bound",
+  },
+  "log.grid.aboveUpperBound": {
+    zh: "价格突破网格上边界 {pct}%",
+    en: "Price rose {pct}% above the grid's upper bound",
+  },
+  "log.grid.coverageAuditClose": {
+    zh: "覆盖审计: 未覆盖 {qty} 且{cause}，市价平仓",
+    en: "Coverage audit: {qty} uncovered and {cause}; closing at market",
+  },
+  "log.grid.causeOutOfRange": { zh: "价格已出区间", en: "price left the range" },
+  "log.grid.causeLossExceeded": { zh: "浮亏超限", en: "unrealised loss exceeded the limit" },
+  "log.grid.coverageAuditReason": { zh: "覆盖审计止损", en: "Coverage audit stop" },
+  "log.grid.coverageAuditRepost": {
+    zh: "覆盖审计: 未覆盖 {qty}，补挂平仓单 @ {price}",
+    en: "Coverage audit: {qty} uncovered; reposting exit @ {price}",
+  },
+  "log.grid.shiftOutOfRange": {
+    zh: "价格越界，启动移格: {reason}",
+    en: "Price out of range; starting grid shift: {reason}",
+  },
+  "log.grid.shiftAnchorDrift": {
+    zh: "价格偏离锚定价超阈值，启动移格 (anchor={anchor} → {price})",
+    en: "Price drifted past the anchor threshold; starting grid shift (anchor={anchor} → {price})",
+  },
+  "log.grid.adoptOrphanExit": {
+    zh: "收编平仓方向挂单为孤儿 EXIT: {side} @ {price}",
+    en: "Adopted an unattributed exit-side order as orphan EXIT: {side} @ {price}",
+  },
+  "log.grid.cancelUnattributable": {
+    zh: "撤销无法归属的挂单: {side} @ {price}",
+    en: "Cancelling unattributable order: {side} @ {price}",
+  },
+  "log.grid.inflightMatched": {
+    zh: "inflight 归属确认: {intent} {side} @ {price}",
+    en: "In-flight order matched: {intent} {side} @ {price}",
+  },
+  "log.grid.cancelStaleVersion": {
+    zh: "撤销过期网格版本挂单: {clientOrderId}",
+    en: "Cancelling order from a stale grid version: {clientOrderId}",
+  },
+  "log.grid.orphanResidual": {
+    zh: "对账残余孤儿仓位: {qty}",
+    en: "Reconciliation left an orphan position: {qty}",
+  },
+  // --- strategy/grid-engine ---
+  "log.gridEngine.configInvalid": { zh: "配置无效，已暂停网格", en: "Invalid config; grid paused" },
+  "log.gridEngine.wsDisconnected": {
+    zh: "WebSocket 断连 ({symbol})，冻结网格下单",
+    en: "WebSocket disconnected ({symbol}); freezing grid orders",
+  },
+  "log.gridEngine.wsReconnected": {
+    zh: "WebSocket 重连成功 ({symbol})，下一轮执行对账",
+    en: "WebSocket reconnected ({symbol}); reconciling next tick",
+  },
+  "log.gridEngine.loadStateFailed": {
+    zh: "加载网格状态失败: {error}",
+    en: "Failed to load grid state: {error}",
+  },
+  "log.gridEngine.stateRestored": {
+    zh: "已从磁盘恢复网格状态: gridVersion={gridVersion} anchor={anchor} 区间=[{lower}, {upper}]{shift}",
+    en: "Restored grid state from disk: gridVersion={gridVersion} anchor={anchor} range=[{lower}, {upper}]{shift}",
+  },
+  "log.gridEngine.stateRestoredShift": {
+    zh: " 移格续跑({phase})",
+    en: " resuming shift ({phase})",
+  },
+  "log.gridEngine.fingerprintMismatch": {
+    zh: "磁盘网格状态与当前配置指纹不一致，全新建格并执行孤儿扫描",
+    en: "Stored grid state does not match the current config; rebuilding and scanning for orphans",
+  },
+  "log.gridEngine.gridCreated": {
+    zh: "以锚定价 {anchor} 建立网格 ({mode})",
+    en: "Grid created at anchor {anchor} ({mode})",
+  },
+  "log.gridEngine.initFailed": { zh: "网格初始化失败: {error}", en: "Grid init failed: {error}" },
+  "log.gridEngine.reconcileEvent": { zh: "[对账:{source}] {event}", en: "[reconcile:{source}] {event}" },
+  "log.gridEngine.reconcileCancelled": {
+    zh: "[对账:{source}] 撤销 {count} 个无法归属的挂单",
+    en: "[reconcile:{source}] cancelled {count} unattributable orders",
+  },
+  "log.gridEngine.reconcileCancelFailed": {
+    zh: "[对账:{source}] 撤单失败: {error}",
+    en: "[reconcile:{source}] cancel failed: {error}",
+  },
+  "log.gridEngine.reconcileOrdersFailed": {
+    zh: "[对账:{source}] REST 查询挂单失败: {error}",
+    en: "[reconcile:{source}] REST open-order query failed: {error}",
+  },
+  "log.gridEngine.reconcileAccountFailed": {
+    zh: "[对账:{source}] REST 查询账户失败: {error}",
+    en: "[reconcile:{source}] REST account query failed: {error}",
+  },
+  "log.gridEngine.tickFailed": { zh: "网格轮询异常: {error}", en: "Grid tick failed: {error}" },
+  "log.gridEngine.shiftStarting": {
+    zh: "启动智能移格，目标锚定价 {anchor}",
+    en: "Starting grid shift to anchor {anchor}",
+  },
+  "log.gridEngine.orderFeedStalled": {
+    zh: "订单流疑似停滞（下单后长时间未反映），暂停新下单",
+    en: "Order feed looks stalled (placements are not showing up); pausing new orders",
+  },
+  "log.gridEngine.placeFailed": {
+    zh: "挂单失败 ({side} @ {price}): {error}",
+    en: "Failed to place order ({side} @ {price}): {error}",
+  },
+  "log.gridEngine.closeSlippageBlocked": {
+    zh: "市价平仓滑点守卫触发 ({reason}): close={close} mark={mark} 偏离 {pct}% > {limit}%，暂缓",
+    en: "Market close blocked by slippage guard ({reason}): close={close} mark={mark} deviates {pct}% > {limit}%; holding off",
+  },
+  "log.gridEngine.closed": { zh: "市价平仓 {side} {qty} ({reason})", en: "Market close {side} {qty} ({reason})" },
+  "log.gridEngine.closeFailed": {
+    zh: "市价平仓失败 ({reason}): {error}",
+    en: "Market close failed ({reason}): {error}",
+  },
+  "log.gridEngine.shiftCancelRequested": {
+    zh: "移格: 已请求撤销全部挂单",
+    en: "Shift: requested cancellation of all orders",
+  },
+  "log.gridEngine.shiftCancelFailed": { zh: "移格撤单失败: {error}", en: "Shift cancel failed: {error}" },
+  "log.gridEngine.shiftCloseReason": { zh: "移格平仓", en: "Grid shift close" },
+  "log.gridEngine.shiftCloseDeferred": {
+    zh: "移格: 平仓被滑点守卫暂缓，下轮重试",
+    en: "Shift: close deferred by the slippage guard; retrying next tick",
+  },
+  "log.gridEngine.shiftDone": {
+    zh: "移格完成: 新锚定价 {anchor}，区间 [{lower}, {upper}]，gridVersion={gridVersion}",
+    en: "Shift complete: anchor {anchor}, range [{lower}, {upper}], gridVersion={gridVersion}",
+  },
+  "log.gridEngine.stopCancelledFlat": {
+    zh: "已撤销交易所兜底止损单（仓位归零）",
+    en: "Cancelled the exchange stop order (position is flat)",
+  },
+  "log.gridEngine.stopCancelFailed": {
+    zh: "撤销兜底止损单失败: {error}",
+    en: "Failed to cancel the exchange stop: {error}",
+  },
+  "log.gridEngine.stopCancelStaleFailed": {
+    zh: "撤销旧兜底止损单失败: {error}",
+    en: "Failed to cancel the previous exchange stop: {error}",
+  },
+  "log.gridEngine.stopPlaceFailed": {
+    zh: "挂兜底止损单失败: {error}",
+    en: "Failed to place the exchange stop: {error}",
+  },
+  "log.gridEngine.haltStarting": {
+    zh: "{reason}，开始执行撤单与平仓",
+    en: "{reason}; cancelling orders and closing out",
+  },
+  "log.gridEngine.allCancelled": { zh: "已撤销全部网格挂单", en: "Cancelled all grid orders" },
+  "log.gridEngine.cancelAllFailed": {
+    zh: "撤销网格挂单失败: {error}",
+    en: "Failed to cancel grid orders: {error}",
+  },
+  "log.gridEngine.stopCloseDeferred": {
+    zh: "止损平仓被滑点守卫暂缓，下轮重试",
+    en: "Stop close deferred by the slippage guard; retrying next tick",
+  },
+  "log.gridEngine.resumed": {
+    zh: "价格重新回到网格区间，恢复网格运行 (gridVersion={gridVersion})",
+    en: "Price re-entered the grid range; resuming (gridVersion={gridVersion})",
+  },
+  "log.gridEngine.saveStateFailed": {
+    zh: "保存网格状态失败: {error}",
+    en: "Failed to save grid state: {error}",
+  },
+  // --- offset-maker / liquidity-maker (shared wording) ---
+  "log.subscribe.klineFail": { zh: "订阅K线失败: {error}", en: "Failed to subscribe klines: {error}" },
+  "log.process.klineError": { zh: "K线推送处理异常: {error}", en: "Kline update handler error: {error}" },
+  "log.spotMaker.belowMinSellHold": {
+    zh: "现货持仓低于最小卖单量，暂不挂卖单",
+    en: "Spot balance is below the minimum sell size; holding off on sell orders",
+  },
+  "log.spotMaker.belowMinSellSkip": {
+    zh: "现货持仓低于最小卖单量，跳过卖单",
+    en: "Spot balance is below the minimum sell size; skipping the sell order",
+  },
+  "log.spotMaker.buyOnlyOnGreenCandle": {
+    zh: "现货买入仅在1m阳线，当前跳过买单",
+    en: "Spot buys only on a green 1m candle; skipping the buy order",
+  },
+  "log.spotMaker.quoteBalanceShort": {
+    zh: "现货可用报价资产不足，跳过买单",
+    en: "Not enough quote asset available; skipping the buy order",
+  },
+  "log.spotMaker.baseBalanceShort": {
+    zh: "现货可用基础资产不足，跳过卖单",
+    en: "Not enough base asset available; skipping the sell order",
+  },
+  "log.spotMaker.spreadTooTightBuy": {
+    zh: "跳过买单：价差不足以构造maker价格",
+    en: "Skipping the buy order: the spread is too tight for a maker price",
+  },
+  "log.spotMaker.spreadTooTightSell": {
+    zh: "跳过卖单：价差不足以构造maker价格",
+    en: "Skipping the sell order: the spread is too tight for a maker price",
+  },
+  "log.spotMaker.sellBelowMinNotional": {
+    zh: "现货卖单低于最小成交量，跳过挂单等待累积",
+    en: "Sell size is below the venue minimum; waiting to accumulate",
+  },
+  "log.spotMaker.belowMinCloseSkipStop": {
+    zh: "现货持仓低于最小平仓数量，跳过止损检查",
+    en: "Spot position is below the minimum close size; skipping the stop check",
+  },
+  "log.spotMaker.rateLimitCloseMissing": {
+    zh: "限频强制平仓时订单已不存在",
+    en: "Order already gone during the rate-limit forced close",
+  },
+  "log.spotMaker.rateLimitCloseFailed": {
+    zh: "限频强制平仓失败: {error}",
+    en: "Rate-limit forced close failed: {error}",
+  },
+  "log.spotMaker.startupCleanup": { zh: "启动时清理历史挂单", en: "Cancelling stale orders on startup" },
+  "log.spotMaker.startupCleanupGone": {
+    zh: "历史挂单已消失，跳过启动清理",
+    en: "Stale orders already gone; skipping startup cleanup",
+  },
+  "log.spotMaker.startupCancelFailed": {
+    zh: "启动撤单失败: {error}",
+    en: "Startup cancel failed: {error}",
+  },
+  "log.spotMaker.cancelMismatched": {
+    zh: "撤销不匹配订单 {side} @ {price} reduceOnly={reduceOnly}",
+    en: "Cancelling mismatched order {side} @ {price} reduceOnly={reduceOnly}",
+  },
+  "log.spotMaker.cancelAlreadySettled": {
+    zh: "撤销时发现订单已被成交/取消，忽略",
+    en: "Order was already filled or cancelled; ignoring",
+  },
+  "log.spotMaker.cancelFailed": { zh: "撤销订单失败: {error}", en: "Failed to cancel order: {error}" },
+  "log.spotMaker.orderMissingOnCancel": {
+    zh: "订单已不存在，撤销跳过",
+    en: "Order no longer exists; skipping cancel",
+  },
+  "log.spotMaker.dustCloseFailed": {
+    zh: "小额市价平仓失败: {error}",
+    en: "Dust market close failed: {error}",
+  },
+  "log.spotMaker.dustClose": {
+    zh: "小额仓位使用市价平仓 {side} 数量 {qty}",
+    en: "Closing dust position at market: {side} qty {qty}",
+  },
+  "log.spotMaker.placeFailed": {
+    zh: "挂单失败({side} {price}): {error}",
+    en: "Failed to place order ({side} {price}): {error}",
+  },
+  "log.spotMaker.spotStop": {
+    zh: "现货止损，当前仓位={qty} PnL={pnl} USDT",
+    en: "Spot stop-loss: position={qty} PnL={pnl} USDT",
+  },
+  "log.spotMaker.spotStopFailed": { zh: "现货止损失败: {error}", en: "Spot stop-loss failed: {error}" },
+  "log.spotMaker.stopCloseMissing": {
+    zh: "止损平仓时订单已不存在",
+    en: "Order already gone while closing on stop",
+  },
+  "log.spotMaker.stopCloseFailed": { zh: "止损平仓失败: {error}", en: "Stop close failed: {error}" },
+  "log.spotMaker.entryPricePending": {
+    zh: "做市持仓均价未同步，等待账户快照刷新后再执行止损判断",
+    en: "Entry price not synced yet; waiting for an account refresh before evaluating the stop",
+  },
+  "log.spotMaker.stopTriggered": {
+    zh: "触发止损，方向={direction} 当前亏损={pnl} USDT",
+    en: "Stop-loss triggered: direction={direction} loss={pnl} USDT",
+  },
+  "log.spotMaker.updateHandlerError": {
+    zh: "更新回调处理异常: {error}",
+    en: "Update handler error: {error}",
+  },
+  "log.spotMaker.snapshotDispatchError": {
+    zh: "快照或更新分发异常: {error}",
+    en: "Snapshot/update dispatch error: {error}",
+  },
+  "log.offsetMaker.tickFailed": { zh: "偏移做市循环异常: {error}", en: "Offset maker tick failed: {error}" },
+  "log.offsetMaker.imbalanceClose": {
+    zh: "深度极端不平衡({buySum} vs {sellSum}), 市价平仓 {side}",
+    en: "Extreme depth imbalance ({buySum} vs {sellSum}); closing {side} at market",
+  },
+  "log.offsetMaker.imbalanceCloseMissing": {
+    zh: "深度不平衡平仓时订单已不存在",
+    en: "Order already gone during the imbalance close",
+  },
+  "log.offsetMaker.imbalanceCloseFailed": {
+    zh: "深度不平衡平仓失败: {error}",
+    en: "Imbalance close failed: {error}",
+  },
+  "log.liquidityMaker.tickFailed": {
+    zh: "流动性做市循环异常: {error}",
+    en: "Liquidity maker tick failed: {error}",
+  },
+  "log.liquidityMaker.fillDetected": {
+    zh: "检测到成交: {side} {qty} @ {price}",
+    en: "Fill detected: {side} {qty} @ {price}",
+  },
+  "log.liquidityMaker.exitRaisedToBreakeven": {
+    zh: "平仓价调整为入场价+1tick以确保不亏本: {price}",
+    en: "Exit raised to entry+1 tick to stay at or above breakeven: {price}",
+  },
+  "log.liquidityMaker.exitLoweredToBreakeven": {
+    zh: "平仓价调整为入场价-1tick以确保不亏本: {price}",
+    en: "Exit lowered to entry-1 tick to stay at or above breakeven: {price}",
+  },
+  // --- strategy/maker-points-engine ---
+  "log.mp.binanceError": { zh: "Binance {context} 异常: {error}", en: "Binance {context} error: {error}" },
+  "log.mp.binanceDisconnected": { zh: "Binance 深度连接断开", en: "Binance depth feed disconnected" },
+  "log.mp.binanceStale": { zh: "Binance 深度数据过时", en: "Binance depth data is stale" },
+  "log.mp.binanceRecovered": { zh: "Binance 深度连接恢复", en: "Binance depth feed recovered" },
+  "log.mp.wsDisconnected": {
+    zh: "WebSocket 断连 ({symbol})，启动断连保护",
+    en: "WebSocket disconnected ({symbol}); engaging disconnect protection",
+  },
+  "log.mp.wsReconnected": {
+    zh: "WebSocket 重连成功 ({symbol})，开始重连保护流程",
+    en: "WebSocket reconnected ({symbol}); running reconnect protection",
+  },
+  "log.mp.reconnectFoundOrders": {
+    zh: "重连后查询到 {count} 个挂单",
+    en: "Found {count} open orders after reconnecting",
+  },
+  "log.mp.reconnectCancelled": { zh: "重连保护：已取消所有挂单", en: "Reconnect protection: cancelled all orders" },
+  "log.mp.reconnectCancelPartial": {
+    zh: "重连保护：取消挂单未完全成功，将在下次循环重试",
+    en: "Reconnect protection: cancellation incomplete; retrying next tick",
+  },
+  "log.mp.reconnectFailed": { zh: "重连保护流程失败: {error}", en: "Reconnect protection failed: {error}" },
+  "log.mp.closeOnlyEntered": { zh: "进入平仓模式，仅挂 reduce-only", en: "Entered close-only mode; reduce-only quotes" },
+  "log.mp.closeOnlyExited": { zh: "退出平仓模式", en: "Left close-only mode" },
+  "log.mp.depthImbalancePause": {
+    zh: "Binance 深度失衡，暂停 {summary} 挂单",
+    en: "Binance depth imbalance; pausing {summary} quotes",
+  },
+  "log.mp.depthImbalanceResume": { zh: "Binance 深度恢复，继续挂单", en: "Binance depth recovered; resuming quotes" },
+  "log.mp.rateLimited": { zh: "限频触发，暂停挂单: {error}", en: "Rate limited; pausing quotes: {error}" },
+  "log.mp.tickFailed": { zh: "MakerPoints 主循环异常: {error}", en: "MakerPoints tick failed: {error}" },
+  "log.mp.precisionErrorResync": {
+    zh: "检测到精度错误，重新同步: {error}",
+    en: "Precision error detected; resyncing: {error}",
+  },
+  "log.mp.placeFailed": { zh: "挂单失败 {side} @ {price}: {error}", en: "Failed to place {side} @ {price}: {error}" },
+  "log.mp.unexpectedOrders": {
+    zh: "发现 {count} 个未预期挂单，执行强制取消",
+    en: "Found {count} unexpected orders; force-cancelling",
+  },
+  "log.mp.forceCancelled": {
+    zh: "已强制取消所有挂单，重置本地状态",
+    en: "Force-cancelled all orders and reset local state",
+  },
+  "log.mp.verifyOrdersFailed": { zh: "验证挂单状态失败: {error}", en: "Failed to verify order state: {error}" },
+  "log.mp.stopTriggered": {
+    zh: "触发止损: 实时未实现亏损 {pnl} USDT",
+    en: "Stop-loss triggered: live unrealised loss {pnl} USDT",
+  },
+  "log.mp.stopSucceeded": { zh: "止损成功: 仓位已清零", en: "Stop-loss done: position is flat" },
+  "log.mp.stopOrderMissing": {
+    zh: "止损平仓时订单已不存在，继续检查仓位",
+    en: "Order already gone during the stop close; rechecking the position",
+  },
+  "log.mp.stopPrecisionResync": {
+    zh: "止损平仓精度错误，重新同步: {error}",
+    en: "Precision error during the stop close; resyncing: {error}",
+  },
+  "log.mp.stopRetry": {
+    zh: "止损平仓失败 (重试 {attempt}/{max}): {error}",
+    en: "Stop close failed (retry {attempt}/{max}): {error}",
+  },
+  "log.mp.stopRetriesExhausted": {
+    zh: "止损重试已达上限 ({max} 次)，请手动检查仓位",
+    en: "Stop retries exhausted ({max}); check the position manually",
+  },
+  "log.mp.updateHandlerError": { zh: "更新监听异常: {error}", en: "Update listener error: {error}" },
+  "log.mp.snapshotError": { zh: "快照生成异常: {error}", en: "Snapshot build error: {error}" },
+  "log.mp.noTargets": { zh: "暂无目标挂单", en: "No target orders" },
+  "log.mp.targets": { zh: "目标挂单: {summary}", en: "Target orders: {summary}" },
+  "log.mp.skipThinDepth": {
+    zh: "跳过 {side} {bps}bps 挂单: 深度 {depth} BTC < {min} BTC",
+    en: "Skipping {side} {bps}bps quote: depth {depth} BTC < {min} BTC",
+  },
+  "log.mp.depthRecovered": {
+    zh: "{side} {bps}bps 深度恢复，继续挂单",
+    en: "{side} {bps}bps depth recovered; resuming quotes",
+  },
+  "log.mp.insufficientBalance": {
+    zh: "余额不足，暂停挂单 {seconds}s: {detail}",
+    en: "Insufficient balance; pausing quotes for {seconds}s: {detail}",
+  },
+  "log.mp.balanceRecovered": { zh: "余额恢复，继续挂单", en: "Balance recovered; resuming quotes" },
+  "log.mp.defenseEntered": {
+    zh: "数据过时检测: {summary}，进入防御模式",
+    en: "Stale-data check: {summary}; entering defense mode",
+  },
+  "log.mp.defenseExited": {
+    zh: "数据推送恢复正常，退出防御模式",
+    en: "Data feeds recovered; leaving defense mode",
+  },
+  "log.mp.defenseForceCancelled": {
+    zh: "防御模式: 已强制取消所有挂单",
+    en: "Defense mode: force-cancelled all orders",
+  },
+  "log.mp.defenseCancelPartial": {
+    zh: "防御模式: 取消挂单未完全成功，将继续重试",
+    en: "Defense mode: cancellation incomplete; will retry",
+  },
+  "log.mp.defenseCancelled": { zh: "防御模式: 已取消所有挂单", en: "Defense mode: cancelled all orders" },
+  "log.mp.defenseOrdersGone": { zh: "防御模式: 挂单已不存在", en: "Defense mode: orders already gone" },
+  "log.mp.defenseCancelFailed": {
+    zh: "防御模式取消挂单失败: {error}",
+    en: "Defense mode cancel failed: {error}",
+  },
+  "log.mp.defensePollStarted": {
+    zh: "防御模式: 启动 REST 数据轮询",
+    en: "Defense mode: started REST polling",
+  },
+  "log.mp.defensePollStopped": {
+    zh: "防御模式: 停止 REST 数据轮询",
+    en: "Defense mode: stopped REST polling",
+  },
+  "log.mp.defensePositionStillBad": {
+    zh: "防御模式: 仓位数据仍异常: {issues}",
+    en: "Defense mode: position data still invalid: {issues}",
+  },
+  "log.mp.defenseEmptySnapshot": {
+    zh: "防御模式: REST 获取账户快照为空",
+    en: "Defense mode: REST returned an empty account snapshot",
+  },
+  "log.mp.defenseFoundOrders": {
+    zh: "防御模式: 发现 {count} 个挂单，执行取消",
+    en: "Defense mode: found {count} open orders; cancelling",
+  },
+  "log.mp.defenseQueryFailed": {
+    zh: "防御模式查询挂单失败: {error}",
+    en: "Defense mode open-order query failed: {error}",
+  },
+  "log.mp.defensePollFailed": {
+    zh: "防御模式 REST 轮询失败: {error}",
+    en: "Defense mode REST poll failed: {error}",
+  },
+  "notify.mp.disconnectTitle": { zh: "连接断开", en: "Disconnected" },
+  "notify.mp.disconnectBody": {
+    zh: "WebSocket 断连，正在尝试取消所有挂单",
+    en: "WebSocket disconnected; cancelling all open orders",
+  },
+  "notify.mp.reconnectTitle": { zh: "重连完成", en: "Reconnected" },
+  "notify.mp.reconnectBody": {
+    zh: "WebSocket 重连成功，已清理挂单状态",
+    en: "WebSocket reconnected; order state cleaned up",
+  },
+  "notify.mp.stopTitle": { zh: "止损触发", en: "Stop-loss triggered" },
+  "notify.mp.stopBody": {
+    zh: "实时未实现亏损 {pnl} USDT，强制平仓",
+    en: "Live unrealised loss {pnl} USDT; forcing a close",
+  },
+  "notify.mp.defenseTitle": { zh: "防御模式", en: "Defense mode" },
+  "notify.mp.defenseBody": {
+    zh: "数据推送中断: {summary}，已取消所有挂单",
+    en: "Data feed interrupted: {summary}; cancelled all open orders",
+  },
+  "notify.mp.defenseClearedTitle": { zh: "防御模式解除", en: "Defense mode cleared" },
+  "notify.mp.defenseClearedBody": {
+    zh: "数据推送恢复正常，恢复正常交易",
+    en: "Data feeds are healthy again; resuming normal trading",
+  },
+  "notify.mp.openTitle": { zh: "开仓", en: "Position opened" },
+  "notify.mp.closeTitle": { zh: "平仓", en: "Position closed" },
+  "notify.mp.closeTitleTokenExpired": { zh: "Token过期平仓", en: "Token-expiry close" },
+  "notify.mp.increaseTitle": { zh: "加仓", en: "Position increased" },
+  "notify.mp.reduceTitle": { zh: "减仓", en: "Position reduced" },
+  "notify.mp.reverseTitle": { zh: "反向开仓", en: "Position reversed" },
+  "notify.mp.openBody": { zh: "{direction} {qty}", en: "{direction} {qty}" },
+  "notify.mp.closeBody": { zh: "已平仓 {qty} ({direction})", en: "Closed {qty} ({direction})" },
+  "notify.mp.increaseBody": {
+    zh: "{direction} +{delta} → {qty}",
+    en: "{direction} +{delta} → {qty}",
+  },
+  "notify.mp.reduceBody": { zh: "{direction} -{delta} → {qty}", en: "{direction} -{delta} → {qty}" },
+  "notify.mp.reverseBody": { zh: "{transition} {qty}", en: "{transition} {qty}" },
+  "common.direction.longToShort": { zh: "多→空", en: "long → short" },
+  "common.direction.shortToLong": { zh: "空→多", en: "short → long" },
+  // --- strategy/maker-points-defense (stale-reason summary) ---
+  "defense.reason.depth": { zh: "StandX深度({seconds}s)", en: "StandX depth ({seconds}s)" },
+  "defense.reason.account": { zh: "StandX账户({seconds}s)", en: "StandX account ({seconds}s)" },
+  "defense.reason.accountInvalid": {
+    zh: "StandX仓位数据异常({issues})",
+    en: "StandX position data invalid ({issues})",
+  },
+  "defense.reason.rest": { zh: "StandX REST错误({count}次)", en: "StandX REST errors ({count})" },
+  "defense.reason.marginMode": { zh: "保证金模式({mode})", en: "Margin mode ({mode})" },
+  "defense.reason.binanceDepth": { zh: "Binance深度({seconds}s)", en: "Binance depth ({seconds}s)" },
+  "defense.reason.binanceBook": {
+    zh: "Binance簿记异常({reason})",
+    en: "Binance order book unhealthy ({reason})",
+  },
+  "defense.reason.unknown": { zh: "unknown", en: "unknown" },
 };
 
 const formatTemplate = (template: string, params: Record<string, unknown>): string => {

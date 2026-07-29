@@ -15,6 +15,7 @@ import {
   type OrderPendingMap,
   type OrderTimerMap,
 } from "../core/order-coordinator";
+import { t } from "../i18n";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
@@ -186,7 +187,7 @@ export class GridEngine {
     this.configValid = this.validateConfig();
     this.running = this.configValid;
     if (!this.configValid) {
-      this.stopReason = "配置无效，已暂停网格";
+      this.stopReason = t("log.gridEngine.configInvalid");
       this.log("error", this.stopReason);
     }
     this.precision = createPrecisionSyncer(this.exchange, this.config, this.config.qtyStep, this.log);
@@ -306,15 +307,15 @@ export class GridEngine {
         this.accountVersion += 1;
         if (!this.feedArrived.account) {
           this.feedArrived.account = true;
-          this.log("info", "账户快照已同步");
+          this.log("info", t("log.account.snapshotSynced"));
         }
         this.feedStatus.account = true;
         this.emitUpdate();
       },
       this.log,
       {
-        subscribeFail: (error) => `订阅账户失败: ${extractMessage(error)}`,
-        processFail: (error) => `账户推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.accountFail", { error: extractMessage(error) }),
+        processFail: (error) => t("log.process.accountError", { error: extractMessage(error) }),
       }
     );
 
@@ -329,7 +330,7 @@ export class GridEngine {
         this.ordersFeedLastAt = this.now();
         if (!this.feedArrived.orders) {
           this.feedArrived.orders = true;
-          this.log("info", "订单快照已同步");
+          this.log("info", t("log.order.snapshotReturned"));
         }
         this.feedStatus.orders = true;
         void this.attemptInit();
@@ -337,8 +338,8 @@ export class GridEngine {
       },
       this.log,
       {
-        subscribeFail: (error) => `订阅订单失败: ${extractMessage(error)}`,
-        processFail: (error) => `订单推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.orderFail", { error: extractMessage(error) }),
+        processFail: (error) => t("log.process.orderError", { error: extractMessage(error) }),
       }
     );
 
@@ -348,14 +349,14 @@ export class GridEngine {
         this.depthSnapshot = depth;
         if (!this.feedArrived.depth) {
           this.feedArrived.depth = true;
-          this.log("info", "盘口深度已同步");
+          this.log("info", t("log.depth.ready"));
         }
         this.feedStatus.depth = true;
       },
       this.log,
       {
-        subscribeFail: (error) => `订阅深度失败: ${extractMessage(error)}`,
-        processFail: (error) => `深度推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.depthFail", { error: extractMessage(error) }),
+        processFail: (error) => t("log.process.depthError", { error: extractMessage(error) }),
       }
     );
 
@@ -366,7 +367,7 @@ export class GridEngine {
         this.tickerLastAt = this.now();
         if (!this.feedArrived.ticker) {
           this.feedArrived.ticker = true;
-          this.log("info", "行情推送已同步");
+          this.log("info", t("log.ticker.ready"));
         }
         this.feedStatus.ticker = true;
         void this.attemptInit();
@@ -374,8 +375,8 @@ export class GridEngine {
       },
       this.log,
       {
-        subscribeFail: (error) => `订阅行情失败: ${extractMessage(error)}`,
-        processFail: (error) => `行情推送处理异常: ${extractMessage(error)}`,
+        subscribeFail: (error) => t("log.subscribe.tickerFail", { error: extractMessage(error) }),
+        processFail: (error) => t("log.process.tickerError", { error: extractMessage(error) }),
       }
     );
   }
@@ -385,11 +386,11 @@ export class GridEngine {
     this.exchange.onConnectionEvent((event, symbol) => {
       if (event === "disconnected") {
         this.frozen = true;
-        this.log("warn", `WebSocket 断连 (${symbol})，冻结网格下单`);
+        this.log("warn", t("log.gridEngine.wsDisconnected", { symbol }));
       } else if (event === "reconnected") {
         this.frozen = false;
         this.restReconcilePending = true;
-        this.log("info", `WebSocket 重连成功 (${symbol})，下一轮执行对账`);
+        this.log("info", t("log.gridEngine.wsReconnected", { symbol }));
       }
       this.emitUpdate();
     });
@@ -482,7 +483,7 @@ export class GridEngine {
         try {
           stored = await loadGridState(this.config.symbol);
         } catch (err) {
-          this.log("error", `加载网格状态失败: ${extractMessage(err)}`);
+          this.log("error", t("log.gridEngine.loadStateFailed", { error: extractMessage(err) }));
         }
       }
       const meta = this.stateMeta();
@@ -490,20 +491,27 @@ export class GridEngine {
         this.state = fromStored(stored, this.logicSettings(), price);
         this.log(
           "info",
-          `已从磁盘恢复网格状态: gridVersion=${this.state.gridVersion} anchor=${this.state.anchorPrice} ` +
-            `区间=[${this.state.lowerPrice}, ${this.state.upperPrice}]${this.state.shift ? ` 移格续跑(${this.state.shift.phase})` : ""}`
+          t("log.gridEngine.stateRestored", {
+            gridVersion: this.state.gridVersion,
+            anchor: this.state.anchorPrice,
+            lower: this.state.lowerPrice,
+            upper: this.state.upperPrice,
+            shift: this.state.shift
+              ? t("log.gridEngine.stateRestoredShift", { phase: this.state.shift.phase })
+              : "",
+          })
         );
       } else {
         if (stored) {
-          this.log("warn", "磁盘网格状态与当前配置指纹不一致，全新建格并执行孤儿扫描");
+          this.log("warn", t("log.gridEngine.fingerprintMismatch"));
         }
         this.state = createInitialState(this.logicSettings(), price);
-        this.log("info", `以锚定价 ${this.state.anchorPrice} 建立网格 (${this.tradeMode})`);
+        this.log("info", t("log.gridEngine.gridCreated", { anchor: this.state.anchorPrice, mode: this.tradeMode }));
       }
       await this.applyReconcile(this.openOrders, "startup");
       this.initDone = true;
     } catch (err) {
-      this.log("error", `网格初始化失败: ${extractMessage(err)}`);
+      this.log("error", t("log.gridEngine.initFailed", { error: extractMessage(err) }));
       this.initStarted = false;
     }
     this.emitUpdate();
@@ -523,7 +531,7 @@ export class GridEngine {
       now: this.now(),
     });
     for (const event of result.events) {
-      this.log("info", `[对账:${source}] ${event}`);
+      this.log("info", t("log.gridEngine.reconcileEvent", { source, event }));
     }
     if (result.cancelOrderIds.length > 0) {
       try {
@@ -531,10 +539,10 @@ export class GridEngine {
           symbol: this.config.symbol,
           orderIdList: result.cancelOrderIds,
         });
-        this.log("order", `[对账:${source}] 撤销 ${result.cancelOrderIds.length} 个无法归属的挂单`);
+        this.log("order", t("log.gridEngine.reconcileCancelled", { source, count: result.cancelOrderIds.length }));
       } catch (err) {
         if (!isUnknownOrderError(err)) {
-          this.log("error", `[对账:${source}] 撤单失败: ${extractMessage(err)}`);
+          this.log("error", t("log.gridEngine.reconcileCancelFailed", { source, error: extractMessage(err) }));
         }
       }
     }
@@ -550,7 +558,7 @@ export class GridEngine {
         const fetched = await this.exchange.queryOpenOrders();
         orders = fetched.filter((order) => order.symbol === this.config.symbol);
       } catch (err) {
-        this.log("error", `[对账:${source}] REST 查询挂单失败: ${extractMessage(err)}`);
+        this.log("error", t("log.gridEngine.reconcileOrdersFailed", { source, error: extractMessage(err) }));
       }
     }
     if (this.exchange.queryAccountSnapshot) {
@@ -561,7 +569,7 @@ export class GridEngine {
           this.accountVersion += 1;
         }
       } catch (err) {
-        this.log("error", `[对账:${source}] REST 查询账户失败: ${extractMessage(err)}`);
+        this.log("error", t("log.gridEngine.reconcileAccountFailed", { source, error: extractMessage(err) }));
       }
     }
     if (orders) {
@@ -645,7 +653,7 @@ export class GridEngine {
         this.schedulePersist();
       }
     } catch (error) {
-      this.log("error", `网格轮询异常: ${extractMessage(error)}`);
+      this.log("error", t("log.gridEngine.tickFailed", { error: extractMessage(error) }));
     } finally {
       this.processing = false;
       this.emitUpdate();
@@ -661,7 +669,7 @@ export class GridEngine {
       }
       if (action.kind === "BEGIN_SHIFT") {
         // 移格标记已由 planTick 写入 state，落盘后由下个 tick 开始执行
-        this.log("warn", `启动智能移格，目标锚定价 ${action.targetAnchor}`);
+        this.log("warn", t("log.gridEngine.shiftStarting", { anchor: action.targetAnchor }));
         await this.persistNow();
         return;
       }
@@ -692,7 +700,7 @@ export class GridEngine {
     ) {
       if (now - this.lastStalenessLogAt > 30_000) {
         this.lastStalenessLogAt = now;
-        this.log("warn", "订单流疑似停滞（下单后长时间未反映），暂停新下单");
+        this.log("warn", t("log.gridEngine.orderFeedStalled"));
       }
       return false;
     }
@@ -741,7 +749,7 @@ export class GridEngine {
         clientOrderId,
       });
     } catch (error) {
-      this.log("error", `挂单失败 (${action.side} @ ${action.price}): ${extractMessage(error)}`);
+      this.log("error", t("log.gridEngine.placeFailed", { side: action.side, price: action.price, error: extractMessage(error) }));
     }
     state.inflight = null;
 
@@ -799,7 +807,13 @@ export class GridEngine {
       if (pctDiff > limitPct) {
         this.log(
           "warn",
-          `市价平仓滑点守卫触发 (${reason}): close=${closeSidePrice} mark=${mark} 偏离 ${(pctDiff * 100).toFixed(2)}% > ${(limitPct * 100).toFixed(2)}%，暂缓`
+          t("log.gridEngine.closeSlippageBlocked", {
+            reason,
+            close: closeSidePrice,
+            mark,
+            pct: (pctDiff * 100).toFixed(2),
+            limit: (limitPct * 100).toFixed(2),
+          })
         );
         return false;
       }
@@ -816,10 +830,10 @@ export class GridEngine {
         },
         qtyStep: this.config.qtyStep
       });
-      this.log("close", `市价平仓 ${side} ${qty} (${reason})`);
+      this.log("close", t("log.gridEngine.closed", { side, qty, reason }));
       return true;
     } catch (error) {
-      this.log("error", `市价平仓失败 (${reason}): ${extractMessage(error)}`);
+      this.log("error", t("log.gridEngine.closeFailed", { reason, error: extractMessage(error) }));
       return false;
     } finally {
       unlockOperating(this.locks, this.timers, this.pendings, "MARKET");
@@ -843,9 +857,9 @@ export class GridEngine {
       try {
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
         state.exchangeStop = null;
-        this.log("order", "移格: 已请求撤销全部挂单");
+        this.log("order", t("log.gridEngine.shiftCancelRequested"));
       } catch (err) {
-        this.log("error", `移格撤单失败: ${extractMessage(err)}`);
+        this.log("error", t("log.gridEngine.shiftCancelFailed", { error: extractMessage(err) }));
       }
     } else if (step.kind === "CLOSE_POSITION") {
       // 平仓单已提交但仓位回报未到时不重复提交
@@ -853,19 +867,24 @@ export class GridEngine {
         this.shiftCloseAccountVersion === this.accountVersion &&
         this.now() - this.shiftCloseAt < 10_000;
       if (!awaitingFill) {
-        const done = await this.guardedMarketClose(step.side, step.qty, "移格平仓");
+        const done = await this.guardedMarketClose(step.side, step.qty, t("log.gridEngine.shiftCloseReason"));
         if (done) {
           this.shiftCloseAccountVersion = this.accountVersion;
           this.shiftCloseAt = this.now();
         } else {
-          this.log("info", "移格: 平仓被滑点守卫暂缓，下轮重试");
+          this.log("info", t("log.gridEngine.shiftCloseDeferred"));
         }
       }
     } else if (step.kind === "REBUILD") {
       applyRebuild(state, this.logicSettings(), step.anchor);
       this.log(
         "info",
-        `移格完成: 新锚定价 ${step.anchor}，区间 [${state.lowerPrice.toFixed(4)}, ${state.upperPrice.toFixed(4)}]，gridVersion=${state.gridVersion}`
+        t("log.gridEngine.shiftDone", {
+          anchor: step.anchor,
+          lower: state.lowerPrice.toFixed(4),
+          upper: state.upperPrice.toFixed(4),
+          gridVersion: state.gridVersion,
+        })
       );
     }
     this.lastUpdated = this.now();
@@ -905,10 +924,10 @@ export class GridEngine {
         if (live) {
           try {
             await this.exchange.cancelOrder({ symbol: this.config.symbol, orderId: existing.orderId });
-            this.log("order", "已撤销交易所兜底止损单（仓位归零）");
+            this.log("order", t("log.gridEngine.stopCancelledFlat"));
           } catch (err) {
             if (!isUnknownOrderError(err)) {
-              this.log("error", `撤销兜底止损单失败: ${extractMessage(err)}`);
+              this.log("error", t("log.gridEngine.stopCancelFailed", { error: extractMessage(err) }));
             }
           }
         }
@@ -932,7 +951,7 @@ export class GridEngine {
         await this.exchange.cancelOrder({ symbol: this.config.symbol, orderId: existing.orderId });
       } catch (err) {
         if (!isUnknownOrderError(err)) {
-          this.log("error", `撤销旧兜底止损单失败: ${extractMessage(err)}`);
+          this.log("error", t("log.gridEngine.stopCancelStaleFailed", { error: extractMessage(err) }));
           return;
         }
       }
@@ -961,7 +980,7 @@ export class GridEngine {
         this.schedulePersist();
       }
     } catch (err) {
-      this.log("error", `挂兜底止损单失败: ${extractMessage(err)}`);
+      this.log("error", t("log.gridEngine.stopPlaceFailed", { error: extractMessage(err) }));
     }
   }
 
@@ -972,12 +991,12 @@ export class GridEngine {
   private async haltGrid(reason: string): Promise<void> {
     const state = this.state;
     this.stopReason = reason;
-    this.log("warn", `${reason}，开始执行撤单与平仓`);
+    this.log("warn", t("log.gridEngine.haltStarting", { reason }));
     try {
       await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-      this.log("order", "已撤销全部网格挂单");
+      this.log("order", t("log.gridEngine.allCancelled"));
     } catch (error) {
-      this.log("error", `撤销网格挂单失败: ${extractMessage(error)}`);
+      this.log("error", t("log.gridEngine.cancelAllFailed", { error: extractMessage(error) }));
     }
     if (state) state.exchangeStop = null;
     const qty = this.position.positionAmt;
@@ -985,7 +1004,7 @@ export class GridEngine {
       const closed = await this.guardedMarketClose(qty > 0 ? "SELL" : "BUY", Math.abs(qty), reason);
       if (!closed) {
         // 滑点守卫暂缓：保持 running，下个 tick 重新触发层①重试
-        this.log("warn", "止损平仓被滑点守卫暂缓，下轮重试");
+        this.log("warn", t("log.gridEngine.stopCloseDeferred"));
         return;
       }
     }
@@ -1038,7 +1057,7 @@ export class GridEngine {
     this.running = true;
     this.stopReason = null;
     this.initDone = true;
-    this.log("info", `价格重新回到网格区间，恢复网格运行 (gridVersion=${nextVersion})`);
+    this.log("info", t("log.gridEngine.resumed", { gridVersion: nextVersion }));
     await this.persistNow();
     this.start();
   }
@@ -1064,7 +1083,7 @@ export class GridEngine {
     try {
       await saveGridState(toStored(state, this.stateMeta(), this.now()));
     } catch (err) {
-      this.log("error", `保存网格状态失败: ${extractMessage(err)}`);
+      this.log("error", t("log.gridEngine.saveStateFailed", { error: extractMessage(err) }));
     }
   }
 

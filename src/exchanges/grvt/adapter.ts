@@ -177,7 +177,7 @@ function loadSignatureProviderFromEnv(
       return loaded.default as GrvtSignatureProvider;
     }
     console.warn(
-      `[GrvtExchangeAdapter] 模块 ${resolved} 未导出签名函数 (function default export)`
+      `[GrvtExchangeAdapter] module ${resolved} does not export a signing function (function default export)`
     );
   } catch (error) {
     const log = logger ?? ((ctx, err) => console.error(`[GrvtExchangeAdapter] ${ctx}`, err));

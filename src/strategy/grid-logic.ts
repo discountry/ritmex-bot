@@ -1,3 +1,4 @@
+import { t } from "../i18n";
 // 网格纯逻辑：无 I/O、无 Date.now、无 adapter 引用。所有时间通过参数传入。
 // 引擎每 tick 调 planTick(state, settings, input) 得到 actions，由引擎负责执行。
 
@@ -417,11 +418,11 @@ function applyFilled(
       level.phase = "holding";
       level.holdQty = qty;
       delete level.entryOrderId;
-      events.push(`ENTRY 成交: ${intent.side} @ ${intent.price} (线 ${intent.level})`);
+      events.push(t("log.grid.entryFilled", { side: intent.side, price: intent.price, level: intent.level }));
     }
   } else {
     if (intent.level === ORPHAN_LEVEL) {
-      events.push(`孤儿 EXIT 成交: ${intent.side} @ ${intent.price}`);
+      events.push(t("log.grid.orphanExitFilled", { side: intent.side, price: intent.price }));
       return;
     }
     const level = state.levels[intent.level];
@@ -429,7 +430,7 @@ function applyFilled(
       level.phase = "idle";
       level.holdQty = 0;
       delete level.exitOrderId;
-      events.push(`EXIT 成交: ${intent.side} @ ${intent.price} (释放线 ${intent.level})`);
+      events.push(t("log.grid.exitFilled", { side: intent.side, price: intent.price, level: intent.level }));
     }
   }
 }
@@ -441,7 +442,7 @@ function applyCanceled(state: GridLogicState, intent: OrderIntentRecord, events:
       level.phase = "idle";
       delete level.entryOrderId;
     }
-    events.push(`ENTRY 撤销: ${intent.side} @ ${intent.price} (线 ${intent.level})`);
+    events.push(t("log.grid.entryCancelled", { side: intent.side, price: intent.price, level: intent.level }));
   } else {
     if (intent.level === ORPHAN_LEVEL) return;
     const level = state.levels[intent.level];
@@ -449,7 +450,7 @@ function applyCanceled(state: GridLogicState, intent: OrderIntentRecord, events:
       level.phase = "holding";
       delete level.exitOrderId;
     }
-    events.push(`EXIT 撤销: ${intent.side} @ ${intent.price} (线 ${intent.level})`);
+    events.push(t("log.grid.exitCancelled", { side: intent.side, price: intent.price, level: intent.level }));
   }
 }
 
@@ -502,7 +503,9 @@ export function processOrderSnapshot(
       applyCanceled(state, intent, events);
     } else {
       setAwaiting(state, intent, input);
-      events.push(`订单消失待判定: ${intent.intent} ${intent.side} @ ${intent.price}`);
+      events.push(
+      t("log.grid.orderVanished", { intent: intent.intent, side: intent.side, price: intent.price })
+    );
     }
     state.intents.delete(id);
     state.seenOrderIds.delete(id);
@@ -669,10 +672,10 @@ export function checkPriceStop(
   const lowerTrigger = state.lowerPrice * (1 - settings.stopLossPct);
   const upperTrigger = state.upperPrice * (1 + settings.stopLossPct);
   if (price <= lowerTrigger) {
-    return `价格跌破网格下边界 ${((1 - price / state.lowerPrice) * 100).toFixed(2)}%`;
+    return t("log.grid.belowLowerBound", { pct: ((1 - price / state.lowerPrice) * 100).toFixed(2) });
   }
   if (price >= upperTrigger) {
-    return `价格突破网格上边界 ${((price / state.upperPrice - 1) * 100).toFixed(2)}%`;
+    return t("log.grid.aboveUpperBound", { pct: ((price / state.upperPrice - 1) * 100).toFixed(2) });
   }
   return null;
 }
@@ -731,17 +734,20 @@ export function auditExitCoverage(
   state.uncoveredSince = input.now;
   if (outOfRange || deepLoss) {
     events.push(
-      `覆盖审计: 未覆盖 ${uncovered.toFixed(6)} 且${outOfRange ? "价格已出区间" : "浮亏超限"}，市价平仓`
+      t("log.grid.coverageAuditClose", {
+        qty: uncovered.toFixed(6),
+        cause: outOfRange ? t("log.grid.causeOutOfRange") : t("log.grid.causeLossExceeded"),
+      })
     );
     return {
       uncoveredQty: uncovered,
-      action: { kind: "MARKET_CLOSE", side: exitSide, qty: uncovered, reason: "覆盖审计止损" },
+      action: { kind: "MARKET_CLOSE", side: exitSide, qty: uncovered, reason: t("log.grid.coverageAuditReason") },
       events,
     };
   }
   // 最近可盈利线补挂孤儿 EXIT
   const targetPrice = findNearestProfitableExitPrice(state, pos > 0 ? "long" : "short", entry, input.price);
-  events.push(`覆盖审计: 未覆盖 ${uncovered.toFixed(6)}，补挂平仓单 @ ${targetPrice}`);
+  events.push(t("log.grid.coverageAuditRepost", { qty: uncovered.toFixed(6), price: targetPrice }));
   return {
     uncoveredQty: uncovered,
     action: {
@@ -918,7 +924,7 @@ export function planTick(
     if (settings.shiftEnabled && !state.shift) {
       beginShift(state, input.price, input.now);
       actions.push({ kind: "BEGIN_SHIFT", targetAnchor: input.price });
-      events.push(`价格越界，启动移格: ${stopReason}`);
+      events.push(t("log.grid.shiftOutOfRange", { reason: stopReason }));
       return { actions, events, stateChanged: true, uncoveredQty: 0 };
     }
     actions.push({ kind: "HALT", reason: stopReason });
@@ -929,7 +935,7 @@ export function planTick(
   if (shouldShift(state, settings, input.price, input.now)) {
     beginShift(state, input.price, input.now);
     actions.push({ kind: "BEGIN_SHIFT", targetAnchor: input.price });
-    events.push(`价格偏离锚定价超阈值，启动移格 (anchor=${state.anchorPrice} → ${input.price})`);
+    events.push(t("log.grid.shiftAnchorDrift", { anchor: state.anchorPrice, price: input.price }));
     return { actions, events, stateChanged: true, uncoveredQty: 0 };
   }
 
@@ -1034,11 +1040,11 @@ export function reconcile(
         gridVersion: state.gridVersion,
         createdAt: input.now,
       });
-      events.push(`收编平仓方向挂单为孤儿 EXIT: ${order.side} @ ${order.price}`);
+      events.push(t("log.grid.adoptOrphanExit", { side: order.side, price: order.price }));
       return;
     }
     cancelOrderIds.push(order.orderId);
-    events.push(`撤销无法归属的挂单: ${order.side} @ ${order.price}`);
+    events.push(t("log.grid.cancelUnattributable", { side: order.side, price: order.price }));
   };
 
   for (const order of input.activeOrders) {
@@ -1079,7 +1085,7 @@ export function reconcile(
         rec.intent === "ENTRY" ? adoptEntry(order, rec.level, intent) : adoptExit(order, rec.level, intent);
       state.inflight = null;
       if (ok) {
-        events.push(`inflight 归属确认: ${rec.intent} ${rec.side} @ ${rec.price}`);
+        events.push(t("log.grid.inflightMatched", { intent: rec.intent, side: rec.side, price: rec.price }));
         continue;
       }
       fallbackAdopt(order, remaining);
@@ -1090,7 +1096,7 @@ export function reconcile(
     if (parsed) {
       if (parsed.gridVersion != null && parsed.gridVersion !== state.gridVersion) {
         cancelOrderIds.push(order.orderId);
-        events.push(`撤销过期网格版本挂单: ${order.clientOrderId}`);
+        events.push(t("log.grid.cancelStaleVersion", { clientOrderId: order.clientOrderId }));
         continue;
       }
       const intent: OrderIntentRecord = {
@@ -1231,7 +1237,7 @@ export function reconcile(
     diff = 0;
   }
   if (Math.abs(diff) > eps) {
-    events.push(`对账残余孤儿仓位: ${diff.toFixed(6)}`);
+    events.push(t("log.grid.orphanResidual", { qty: diff.toFixed(6) }));
     // 立即进入层②处置（跳过宽限期）
     state.uncoveredSince = input.now - 86_400_000;
   }

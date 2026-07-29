@@ -8,6 +8,7 @@ import {
   evaluateDefense,
   type DefenseInputs,
 } from "./maker-points-defense";
+import { t } from "../i18n";
 
 const NOW = 1_700_000_000_000;
 
@@ -149,18 +150,18 @@ describe("describeDefenseReasons", () => {
         restConsecutiveErrors: 4,
       })
     );
-    expect(summary).toContain("StandX深度(7s)");
-    expect(summary).toContain("StandX REST错误(4次)");
+    expect(summary).toContain(t("defense.reason.depth", { seconds: 7 }));
+    expect(summary).toContain(t("defense.reason.rest", { count: 4 }));
   });
 
   it("falls back to unknown when nothing is flagged", () => {
-    expect(describeDefenseReasons(defenseReasonsFor({}))).toBe("unknown");
+    expect(describeDefenseReasons(defenseReasonsFor({}))).toBe(t("defense.reason.unknown"));
   });
 
   it("omits the Binance book reason when there is none", () => {
     const summary = describeDefenseReasons(
       defenseReasonsFor({ binanceUnhealthy: true, binanceHealthReason: null })
     );
-    expect(summary).toBe("unknown");
+    expect(summary).toBe(t("defense.reason.unknown"));
   });
 });

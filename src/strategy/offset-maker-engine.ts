@@ -27,6 +27,7 @@ import type { MakerEngineSnapshot } from "./maker-engine";
 import { makeOrderPlan } from "../core/lib/order-plan";
 import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
+import { t } from "../i18n";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
@@ -223,8 +224,8 @@ export class OffsetMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅账户失败: ${String(error)}`,
-        processFail: (error) => `账户推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.accountFail", { error: String(error) }),
+        processFail: (error) => t("log.process.accountError", { error: String(error) }),
       }
     );
 
@@ -252,8 +253,8 @@ export class OffsetMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅订单失败: ${String(error)}`,
-        processFail: (error) => `订单推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.orderFail", { error: String(error) }),
+        processFail: (error) => t("log.process.orderError", { error: String(error) }),
       }
     );
 
@@ -266,8 +267,8 @@ export class OffsetMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅深度失败: ${String(error)}`,
-        processFail: (error) => `深度推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.depthFail", { error: String(error) }),
+        processFail: (error) => t("log.process.depthError", { error: String(error) }),
       }
     );
 
@@ -280,8 +281,8 @@ export class OffsetMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅Ticker失败: ${String(error)}`,
-        processFail: (error) => `价格推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.tickerFail", { error: String(error) }),
+        processFail: (error) => t("log.process.tickerError", { error: String(error) }),
       }
     );
 
@@ -300,8 +301,8 @@ export class OffsetMakerEngine {
       },
       log,
       {
-        subscribeFail: (error) => `订阅K线失败: ${String(error)}`,
-        processFail: (error) => `K线推送处理异常: ${String(error)}`,
+        subscribeFail: (error) => t("log.subscribe.klineFail", { error: String(error) }),
+        processFail: (error) => t("log.process.klineError", { error: String(error) }),
       }
     );
   }
@@ -421,13 +422,13 @@ export class OffsetMakerEngine {
           // 无法卖出，跳过卖单，允许买单累计
           this.lastSellPriceViable = false;
           if (!skipSellSide) {
-            this.tradeLog.push("info", "现货持仓低于最小卖单量，暂不挂卖单");
+            this.tradeLog.push("info", t("log.spotMaker.belowMinSellHold"));
           }
         }
         if (!skipBuySide && canEnter) {
           if (!allowSpotBuy) {
             if (this.lastBuyPriceViable) {
-              this.tradeLog.push("info", "现货买入仅在1m阳线，当前跳过买单");
+              this.tradeLog.push("info", t("log.spotMaker.buyOnlyOnGreenCandle"));
               this.lastBuyPriceViable = false;
             }
           } else {
@@ -444,8 +445,8 @@ export class OffsetMakerEngine {
               this.lastBuyPriceViable = false;
               const reason =
                 buyAmount < EPS && isSpotMarket
-                  ? "现货可用报价资产不足，跳过买单"
-                  : "跳过买单：价差不足以构造maker价格";
+                  ? t("log.spotMaker.quoteBalanceShort")
+                  : t("log.spotMaker.spreadTooTightBuy");
               this.tradeLog.push("info", reason);
             }
           }
@@ -456,7 +457,7 @@ export class OffsetMakerEngine {
             // 持仓低于最小卖单量，跳过卖单，等待累积
             if (this.lastSellPriceViable) {
               this.lastSellPriceViable = false;
-              this.tradeLog.push("info", "现货持仓低于最小卖单量，跳过卖单");
+              this.tradeLog.push("info", t("log.spotMaker.belowMinSellSkip"));
             }
           } else {
             const desiredSellAmount =
@@ -474,8 +475,8 @@ export class OffsetMakerEngine {
               this.lastSellPriceViable = false;
               const reason =
                 sellAmount < EPS && isSpotMarket
-                  ? "现货可用基础资产不足，跳过卖单"
-                  : "跳过卖单：价差不足以构造maker价格";
+                  ? t("log.spotMaker.baseBalanceShort")
+                  : t("log.spotMaker.spreadTooTightSell");
               this.tradeLog.push("info", reason);
             }
           }
@@ -485,7 +486,7 @@ export class OffsetMakerEngine {
         if (!skipBuySide && canEnter) {
           if (isSpotMarket && !allowSpotBuy) {
             if (this.lastBuyPriceViable) {
-              this.tradeLog.push("info", "现货买入仅在1m阳线，当前跳过买单");
+              this.tradeLog.push("info", t("log.spotMaker.buyOnlyOnGreenCandle"));
               this.lastBuyPriceViable = false;
             }
           } else if (bidPrice != null) {
@@ -500,7 +501,7 @@ export class OffsetMakerEngine {
             this.sellableBase(balancesForSpot) + EPS < minSell;
           if (belowMinSell) {
             this.lastSellPriceViable = false;
-            this.tradeLog.push("info", "现货持仓低于最小卖单量，跳过卖单");
+            this.tradeLog.push("info", t("log.spotMaker.belowMinSellSkip"));
           } else if (askPrice != null) {
             desired.push({ side: "SELL", price: askPrice, amount: this.config.tradeAmount, reduceOnly: false });
           }
@@ -543,7 +544,7 @@ export class OffsetMakerEngine {
         await this.enforceRateLimitStop();
         this.tradeLog.push("warn", `OffsetMakerEngine 429: ${String(error)}`);
       } else {
-        this.tradeLog.push("error", `偏移做市循环异常: ${String(error)}`);
+        this.tradeLog.push("error", t("log.offsetMaker.tickFailed", { error: String(error) }));
       }
       this.emitUpdate();
     } finally {
@@ -580,9 +581,9 @@ export class OffsetMakerEngine {
       });
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "限频强制平仓时订单已不存在");
+        this.tradeLog.push("order", t("log.spotMaker.rateLimitCloseMissing"));
       } else {
-        this.tradeLog.push("error", `限频强制平仓失败: ${String(error)}`);
+        this.tradeLog.push("error", t("log.spotMaker.rateLimitCloseFailed", { error: String(error) }));
       }
     }
   }
@@ -600,18 +601,18 @@ export class OffsetMakerEngine {
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
       this.openOrders = [];
       this.emitUpdate();
-      this.tradeLog.push("order", "启动时清理历史挂单");
+      this.tradeLog.push("order", t("log.spotMaker.startupCleanup"));
       this.initialOrderResetDone = true;
       return true;
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "历史挂单已消失，跳过启动清理");
+        this.tradeLog.push("order", t("log.spotMaker.startupCleanupGone"));
         this.initialOrderResetDone = true;
         this.openOrders = [];
         this.emitUpdate();
         return true;
       }
-      this.tradeLog.push("error", `启动撤单失败: ${String(error)}`);
+      this.tradeLog.push("error", t("log.spotMaker.startupCancelFailed", { error: String(error) }));
       return false;
     }
   }
@@ -647,7 +648,11 @@ export class OffsetMakerEngine {
     const closeSidePrice = side === "SELL" ? bid : ask;
     this.tradeLog.push(
       "stop",
-      `深度极端不平衡(${buySum.toFixed(4)} vs ${sellSum.toFixed(4)}), 市价平仓 ${side}`
+      t("log.offsetMaker.imbalanceClose", {
+        buySum: buySum.toFixed(4),
+        sellSum: sellSum.toFixed(4),
+        side,
+      })
     );
     try {
       await this.flushOrders();
@@ -664,9 +669,9 @@ export class OffsetMakerEngine {
       });
     } catch (error) {
       if (isUnknownOrderError(error)) {
-        this.tradeLog.push("order", "深度不平衡平仓时订单已不存在");
+        this.tradeLog.push("order", t("log.offsetMaker.imbalanceCloseMissing"));
       } else {
-        this.tradeLog.push("error", `深度不平衡平仓失败: ${String(error)}`);
+        this.tradeLog.push("error", t("log.offsetMaker.imbalanceCloseFailed", { error: String(error) }));
       }
     }
     return true;
@@ -712,17 +717,21 @@ export class OffsetMakerEngine {
         () => {
           this.tradeLog.push(
             "order",
-            `撤销不匹配订单 ${order.side} @ ${order.price} reduceOnly=${order.reduceOnly}`
+            t("log.spotMaker.cancelMismatched", {
+              side: order.side,
+              price: order.price,
+              reduceOnly: order.reduceOnly,
+            })
           );
           // 保持与原逻辑一致：成功撤销不立即修改本地 openOrders，等待订单流重建
         },
         () => {
-          this.tradeLog.push("order", "撤销时发现订单已被成交/取消，忽略");
+          this.tradeLog.push("order", t("log.spotMaker.cancelAlreadySettled"));
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", t("log.spotMaker.cancelFailed", { error: String(error) }));
           this.pendingCancelOrders.delete(String(order.orderId));
           // 避免同一轮内重复操作同一张已出错的本地挂单，直接从本地缓存移除，等待下一次订单推送重建
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
@@ -742,7 +751,7 @@ export class OffsetMakerEngine {
         // Skip placing sells that would be bumped by venue minimums
         if (this.lastSellPriceViable) {
           this.lastSellPriceViable = false;
-          this.tradeLog.push("info", "现货卖单低于最小成交量，跳过挂单等待累积");
+          this.tradeLog.push("info", t("log.spotMaker.sellBelowMinNotional"));
         }
         continue;
       }
@@ -775,10 +784,10 @@ export class OffsetMakerEngine {
           if (isRateLimitError(dustError)) {
             throw dustError;
           }
-          this.tradeLog.push("error", `小额市价平仓失败: ${String(dustError)}`);
+          this.tradeLog.push("error", t("log.spotMaker.dustCloseFailed", { error: String(dustError) }));
         }
         if (dustClosed) continue;
-        this.tradeLog.push("error", `挂单失败(${target.side} ${target.price}): ${String(error)}`);
+        this.tradeLog.push("error", t("log.spotMaker.placeFailed", { side: target.side, price: target.price, error: String(error) }));
       }
     }
   }
@@ -794,7 +803,7 @@ export class OffsetMakerEngine {
       const minStopQty = Number.isFinite(this.precision.minBaseAmount) ? this.precision.minBaseAmount! : null;
       if (minStopQty != null && minStopQty > 0 && absPosition + EPS < minStopQty) {
         if (!this.lastSpotStopSkipped) {
-          this.tradeLog.push("info", "现货持仓低于最小平仓数量，跳过止损检查");
+          this.tradeLog.push("info", t("log.spotMaker.belowMinCloseSkipStop"));
           this.lastSpotStopSkipped = true;
         }
         return;
@@ -803,7 +812,7 @@ export class OffsetMakerEngine {
       const pnl = computePositionPnl(position, bidPrice, askPrice);
       const triggerStop = shouldStopLoss(position, bidPrice, askPrice, this.config.lossLimit);
       if (!triggerStop) return;
-      this.tradeLog.push("stop", `现货止损，当前仓位=${absPosition.toFixed(6)} PnL=${pnl.toFixed(4)} USDT`);
+      this.tradeLog.push("stop", t("log.spotMaker.spotStop", { qty: absPosition.toFixed(6), pnl: pnl.toFixed(4) }));
       try {
         // 尽力撤销所有未完成挂单，避免锁定基础资产导致余额不足
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol }).catch(() => {});
@@ -822,9 +831,9 @@ export class OffsetMakerEngine {
       } catch (error) {
         if (isRateLimitError(error)) throw error;
         if (isUnknownOrderError(error)) {
-          this.tradeLog.push("order", "止损平仓时订单已不存在");
+          this.tradeLog.push("order", t("log.spotMaker.stopCloseMissing"));
         } else {
-          this.tradeLog.push("error", `现货止损失败: ${String(error)}`);
+          this.tradeLog.push("error", t("log.spotMaker.spotStopFailed", { error: String(error) }));
         }
       }
       return;
@@ -835,7 +844,7 @@ export class OffsetMakerEngine {
     const hasEntryPrice = Number.isFinite(position.entryPrice) && Math.abs(position.entryPrice) > 1e-8;
     if (!hasEntryPrice) {
       if (!this.entryPricePendingLogged) {
-        this.tradeLog.push("info", "做市持仓均价未同步，等待账户快照刷新后再执行止损判断");
+        this.tradeLog.push("info", t("log.spotMaker.entryPricePending"));
         this.entryPricePendingLogged = true;
       }
       return;
@@ -848,7 +857,10 @@ export class OffsetMakerEngine {
     if (triggerStop) {
       this.tradeLog.push(
         "stop",
-        `触发止损，方向=${position.positionAmt > 0 ? "多" : "空"} 当前亏损=${pnl.toFixed(4)} USDT`
+        t("log.spotMaker.stopTriggered", {
+          direction: position.positionAmt > 0 ? t("common.direction.long") : t("common.direction.short"),
+          pnl: pnl.toFixed(4),
+        })
       );
       try {
         await this.flushOrders();
@@ -865,9 +877,9 @@ export class OffsetMakerEngine {
         });
       } catch (error) {
         if (isUnknownOrderError(error)) {
-          this.tradeLog.push("order", "止损平仓时订单已不存在");
+          this.tradeLog.push("order", t("log.spotMaker.stopCloseMissing"));
         } else {
-          this.tradeLog.push("error", `止损平仓失败: ${String(error)}`);
+          this.tradeLog.push("error", t("log.spotMaker.stopCloseFailed", { error: String(error) }));
         }
       }
     }
@@ -886,12 +898,12 @@ export class OffsetMakerEngine {
           // 与原逻辑保持一致：成功撤销不记录日志且不修改本地 openOrders
         },
         () => {
-          this.tradeLog.push("order", "订单已不存在，撤销跳过");
+          this.tradeLog.push("order", t("log.spotMaker.orderMissingOnCancel"));
           this.pendingCancelOrders.delete(String(order.orderId));
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
         },
         (error) => {
-          this.tradeLog.push("error", `撤销订单失败: ${String(error)}`);
+          this.tradeLog.push("error", t("log.spotMaker.cancelFailed", { error: String(error) }));
           this.pendingCancelOrders.delete(String(order.orderId));
           // 与同步撤单路径保持一致，移除本地异常订单，等待订单流重建
           this.openOrders = this.openOrders.filter((existing) => existing.orderId !== order.orderId);
@@ -911,10 +923,10 @@ export class OffsetMakerEngine {
     try {
       const snapshot = this.buildSnapshot();
       this.events.emit("update", snapshot, (error) => {
-        this.tradeLog.push("error", `更新回调处理异常: ${String(error)}`);
+        this.tradeLog.push("error", t("log.spotMaker.updateHandlerError", { error: String(error) }));
       });
     } catch (err) {
-      this.tradeLog.push("error", `快照或更新分发异常: ${String(err)}`);
+      this.tradeLog.push("error", t("log.spotMaker.snapshotDispatchError", { error: String(err) }));
     }
   }
 
@@ -1117,13 +1129,13 @@ export class OffsetMakerEngine {
         },
         qtyStep: this.precision.qtyStep
       });
-      this.tradeLog.push("order", `小额仓位使用市价平仓 ${target.side} 数量 ${absQty.toFixed(6)}`);
+      this.tradeLog.push("order", t("log.spotMaker.dustClose", { side: target.side, qty: absQty.toFixed(6) }));
       return true;
     } catch (closeError) {
       if (isRateLimitError(closeError)) {
         throw closeError;
       }
-      this.tradeLog.push("error", `小额市价平仓失败: ${String(closeError)}`);
+      this.tradeLog.push("error", t("log.spotMaker.dustCloseFailed", { error: String(closeError) }));
       return false;
     }
   }

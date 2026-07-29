@@ -521,7 +521,7 @@ export class BasisArbEngine {
     const spotTs = snapshot.spotLastUpdate ?? 0;
     if (futTs <= readyAt || spotTs <= readyAt) return;
     const now = this.now();
-    // Use net spread after taker fees to match UI's "扣除 taker 手续费" bp
+    // Use net spread after taker fees to match the bp figure the UI labels as taker-fee-adjusted
     const spreadBps = snapshot.netSpreadBps;
     const fundingRate = snapshot.fundingRate;
     const nextFundingTime = snapshot.nextFundingTime;
