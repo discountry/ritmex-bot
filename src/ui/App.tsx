@@ -9,93 +9,40 @@ import { OffsetMakerApp } from "./OffsetMakerApp";
 import { LiquidityMakerApp } from "./LiquidityMakerApp";
 import { GridApp } from "./GridApp";
 import { BasisApp } from "./BasisApp";
-import { isBasisStrategyEnabled } from "../config";
 import { loadCopyrightFragments, verifyCopyrightIntegrity } from "../utils/copyright";
 import { resolveExchangeId } from "../exchanges/create-adapter";
+import { availableStrategies } from "../strategy/registry";
+import type { StrategyId } from "../strategy/strategy-ids";
 import { t } from "../i18n";
 
-interface StrategyOption {
-  id: "trend" | "swing" | "guardian" | "maker" | "maker-points" | "offset-maker" | "liquidity-maker" | "basis" | "grid";
-  label: string;
-  description: string;
-  component: React.ComponentType<{ onExit: () => void }>;
-}
+type StrategyView = React.ComponentType<{ onExit: () => void }>;
 
-const BASE_STRATEGIES: StrategyOption[] = [
-  {
-    id: "trend",
-    label: t("app.strategy.trend.label"),
-    description: t("app.strategy.trend.desc"),
-    component: TrendApp,
-  },
-  {
-    id: "swing",
-    label: t("app.strategy.swing.label"),
-    description: t("app.strategy.swing.desc"),
-    component: SwingApp,
-  },
-  {
-    id: "guardian",
-    label: t("app.strategy.guardian.label"),
-    description: t("app.strategy.guardian.desc"),
-    component: GuardianApp,
-  },
-  {
-    id: "maker",
-    label: t("app.strategy.maker.label"),
-    description: t("app.strategy.maker.desc"),
-    component: MakerApp,
-  },
-  {
-    id: "grid",
-    label: t("app.strategy.grid.label"),
-    description: t("app.strategy.grid.desc"),
-    component: GridApp,
-  },
-  {
-    id: "offset-maker",
-    label: t("app.strategy.offset.label"),
-    description: t("app.strategy.offset.desc"),
-    component: OffsetMakerApp,
-  },
-  {
-    id: "liquidity-maker",
-    label: t("app.strategy.liquidityMaker.label"),
-    description: t("app.strategy.liquidityMaker.desc"),
-    component: LiquidityMakerApp,
-  },
-];
+/**
+ * The only strategy knowledge the UI owns: which screen renders which engine.
+ * Typed as a total Record, so adding a strategy to the registry fails to compile
+ * here until it has a view.
+ */
+const STRATEGY_VIEWS: Record<StrategyId, StrategyView> = {
+  trend: TrendApp,
+  swing: SwingApp,
+  guardian: GuardianApp,
+  maker: MakerApp,
+  "maker-points": MakerPointsApp,
+  grid: GridApp,
+  "offset-maker": OffsetMakerApp,
+  "liquidity-maker": LiquidityMakerApp,
+  basis: BasisApp,
+};
 
 const inputSupported = Boolean(process.stdin && (process.stdin as any).isTTY);
 
 export function App() {
   const [cursor, setCursor] = useState(0);
-  const [selected, setSelected] = useState<StrategyOption | null>(null);
+  const [selected, setSelected] = useState<StrategyId | null>(null);
   const copyright = useMemo(() => loadCopyrightFragments(), []);
   const integrityOk = useMemo(() => verifyCopyrightIntegrity(), []);
   const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const strategies = useMemo(() => {
-    const next: StrategyOption[] = [...BASE_STRATEGIES];
-    if (exchangeId === "standx") {
-      const gridIndex = next.findIndex((s) => s.id === "grid");
-      const insertAt = gridIndex === -1 ? next.length : gridIndex;
-      next.splice(insertAt, 0, {
-        id: "maker-points" as const,
-        label: t("app.strategy.makerPoints.label"),
-        description: t("app.strategy.makerPoints.desc"),
-        component: MakerPointsApp,
-      });
-    }
-    if (isBasisStrategyEnabled()) {
-      next.push({
-        id: "basis" as const,
-        label: t("app.strategy.basis.label"),
-        description: t("app.strategy.basis.desc"),
-        component: BasisApp,
-      });
-    }
-    return next;
-  }, [exchangeId]);
+  const strategies = useMemo(() => availableStrategies(exchangeId), [exchangeId]);
 
   useInput(
     (input, key) => {
@@ -107,7 +54,7 @@ export function App() {
       } else if (key.return) {
         const strategy = strategies[cursor];
         if (strategy) {
-          setSelected(strategy);
+          setSelected(strategy.id);
         }
       }
     },
@@ -115,7 +62,7 @@ export function App() {
   );
 
   if (selected) {
-    const Selected = selected.component;
+    const Selected = STRATEGY_VIEWS[selected];
     return <Selected onExit={() => setSelected(null)} />;
   }
 
@@ -136,9 +83,9 @@ export function App() {
           return (
             <Box key={strategy.id} flexDirection="column" marginBottom={1}>
               <Text color={active ? "greenBright" : undefined}>
-                {active ? "➤" : "  "} {strategy.label}
+                {active ? "➤" : "  "} {t(strategy.labelKey)}
               </Text>
-              <Text color="gray">    {strategy.description}</Text>
+              <Text color="gray">    {t(strategy.descriptionKey)}</Text>
             </Box>
           );
         })}

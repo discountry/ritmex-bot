@@ -1,224 +1,58 @@
-import { basisConfig, gridConfig, isBasisStrategyEnabled, liquidityMakerConfig, makerConfig, makerPointsConfig, swingConfig, tradingConfig } from "../config";
-import { getExchangeDisplayName, isBasisSupportedExchangeId, resolveExchangeId } from "../exchanges/create-adapter";
+import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
 import type { ExchangeAdapter } from "../exchanges/adapter";
 import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
 import { DryRunExchangeAdapter } from "../exchanges/dry-run-adapter";
-import { MakerEngine, type MakerEngineSnapshot } from "../strategy/maker-engine";
-import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
-import { LiquidityMakerEngine, type LiquidityMakerEngineSnapshot } from "../strategy/liquidity-maker-engine";
-import { MakerPointsEngine, type MakerPointsSnapshot } from "../strategy/maker-points-engine";
-import { TrendEngine, type TrendEngineSnapshot } from "../strategy/trend-engine";
-import { SwingEngine, type SwingEngineSnapshot } from "../strategy/swing-engine";
-import { GuardianEngine, type GuardianEngineSnapshot } from "../strategy/guardian-engine";
-import { BasisArbEngine, type BasisArbSnapshot } from "../strategy/basis-arb-engine";
-import { GridEngine, type GridEngineSnapshot } from "../strategy/grid-engine";
+import {
+  getStrategyDefinition,
+  strategyUnavailableReason,
+  STRATEGY_DEFINITIONS,
+  type StrategyEngine,
+  type StrategySnapshot,
+} from "../strategy/registry";
 import { extractMessage } from "../utils/errors";
-import type { StrategyId } from "./args";
+import type { StrategyId } from "../strategy/strategy-ids";
 
 interface RunnerOptions {
   silent?: boolean;
   dryRun?: boolean;
 }
 
-type StrategyRunner = (options: RunnerOptions) => Promise<void>;
-
-export const STRATEGY_LABELS: Record<StrategyId, string> = {
-  trend: "Trend Following",
-  swing: "Swing",
-  guardian: "Guardian",
-  maker: "Maker",
-  "maker-points": "Maker Points",
-  "offset-maker": "Offset Maker",
-  "liquidity-maker": "Liquidity Maker",
-  basis: "Basis Arbitrage",
-  grid: "Grid",
-};
+export const STRATEGY_LABELS = Object.fromEntries(
+  STRATEGY_DEFINITIONS.map((definition) => [definition.id, definition.consoleLabel])
+) as Record<StrategyId, string>;
 
 export async function startStrategy(strategyId: StrategyId, options: RunnerOptions = {}): Promise<void> {
-  const runner = STRATEGY_FACTORIES[strategyId];
-  if (!runner) {
+  const definition = getStrategyDefinition(strategyId);
+  if (!definition) {
     throw new Error(`Unsupported strategy: ${strategyId}`);
   }
-  await runner(options);
-}
-
-const STRATEGY_FACTORIES: Record<StrategyId, StrategyRunner> = {
-  trend: async (opts) => {
-    const config = tradingConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new TrendEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "trend",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  swing: async (opts) => {
-    const config = swingConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new SwingEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "swing",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  guardian: async (opts) => {
-    const config = tradingConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new GuardianEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "guardian",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  maker: async (opts) => {
-    const config = makerConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new MakerEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "maker",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  "maker-points": async (opts) => {
-    const exchangeId = resolveExchangeId();
-    if (exchangeId !== "standx") {
-      throw new Error("Maker Points strategy only supports the StandX exchange.");
-    }
-    const config = makerPointsConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new MakerPointsEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "maker-points",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  "offset-maker": async (opts) => {
-    const config = makerConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new OffsetMakerEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "offset-maker",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  "liquidity-maker": async (opts) => {
-    const config = liquidityMakerConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new LiquidityMakerEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "liquidity-maker",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  basis: async (opts) => {
-    if (!isBasisStrategyEnabled()) {
-      throw new Error("Basis arbitrage strategy is disabled. Set ENABLE_BASIS_STRATEGY=true to enable it.");
-    }
-    const exchangeId = resolveExchangeId();
-    if (!isBasisSupportedExchangeId(exchangeId)) {
-      throw new Error("Basis arbitrage strategy currently only supports the Aster, Nado, StandX, and Binance exchanges");
-    }
-    const adapter = createAdapterOrThrow(basisConfig.futuresSymbol, opts.dryRun);
-    const engine = new BasisArbEngine(basisConfig, adapter);
-    await runEngine({
-      engine,
-      strategy: "basis",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-  grid: async (opts) => {
-    const config = gridConfig;
-    const adapter = createAdapterOrThrow(config.symbol, opts.dryRun);
-    const engine = new GridEngine(config, adapter);
-    await runEngine({
-      engine,
-      strategy: "grid",
-      silent: opts.silent,
-      dryRun: opts.dryRun,
-      getSnapshot: () => engine.getSnapshot(),
-      onUpdate: (emitter) => engine.on("update", emitter),
-      offUpdate: (emitter) => engine.off("update", emitter),
-    });
-  },
-};
-
-interface EngineHarness<TSnapshot> {
-  engine: { start(): void; stop(): void };
-  strategy: StrategyId;
-  silent?: boolean;
-  dryRun?: boolean;
-  getSnapshot: () => TSnapshot;
-  onUpdate: (handler: (snapshot: TSnapshot) => void) => void;
-  offUpdate: (handler: (snapshot: TSnapshot) => void) => void;
-}
-
-async function runEngine<
-  TSnapshot extends
-    | TrendEngineSnapshot
-    | SwingEngineSnapshot
-    | GuardianEngineSnapshot
-    | MakerEngineSnapshot
-    | MakerPointsSnapshot
-    | OffsetMakerEngineSnapshot
-    | LiquidityMakerEngineSnapshot
-    | BasisArbSnapshot
-    | GridEngineSnapshot
->(
-  harness: EngineHarness<TSnapshot>
-): Promise<void> {
-  const { engine, strategy, silent, getSnapshot, onUpdate, offUpdate } = harness;
   const exchangeId = resolveExchangeId();
-  const exchangeName = getExchangeDisplayName(exchangeId);
-  const label = STRATEGY_LABELS[strategy];
-
-  const initial = getSnapshot();
-  let lastLogKey: string | undefined;
-  if (Array.isArray(initial.tradeLog) && initial.tradeLog.length > 0) {
-    const lastEntry = initial.tradeLog[initial.tradeLog.length - 1]!;
-    lastLogKey = createLogKey(lastEntry);
+  const blocked = strategyUnavailableReason(strategyId, exchangeId);
+  if (blocked) {
+    throw new Error(blocked);
   }
+
+  const adapter = createAdapterOrThrow(definition.symbol(), options.dryRun);
+  const engine = definition.createEngine(adapter);
+  await runEngine(engine, definition.consoleLabel, options);
+}
+
+/**
+ * Streams an engine's trade log to the console until SIGINT/SIGTERM, then stops it.
+ * Depends only on the StrategyEngine contract, so a new strategy needs no change here.
+ */
+async function runEngine(
+  engine: StrategyEngine,
+  label: string,
+  options: RunnerOptions
+): Promise<void> {
+  const exchangeName = getExchangeDisplayName(resolveExchangeId());
+
+  const initial = engine.getSnapshot();
+  let lastLogKey = lastKeyOf(initial.tradeLog);
   let readyLogged = initial.ready === true;
 
-  const emitter = (snapshot: TSnapshot) => {
+  const emitter = (snapshot: StrategySnapshot) => {
     if (!Array.isArray(snapshot.tradeLog)) return;
     if (!readyLogged && snapshot.ready) {
       readyLogged = true;
@@ -229,31 +63,24 @@ async function runEngine<
     for (const entry of pending) {
       console.info(`[${label}] [${entry.time}] [${entry.type}] ${entry.detail}`);
     }
-    const lastEntry = pending[pending.length - 1]!;
-    if (lastEntry) {
-      lastLogKey = createLogKey(lastEntry);
-    }
+    lastLogKey = lastKeyOf(pending) ?? lastLogKey;
   };
 
-  onUpdate(emitter);
+  engine.on("update", emitter);
   engine.start();
 
-  const modeLabel = `${silent ? "silent" : "interactive"}${harness.dryRun ? "+dry-run" : ""}`;
+  const modeLabel = `${options.silent ? "silent" : "interactive"}${options.dryRun ? "+dry-run" : ""}`;
   console.info(`[${label}] Starting on ${exchangeName}. Mode: ${modeLabel}. Press Ctrl+C to exit.`);
-
-  const shutdown = (signal: NodeJS.Signals) => {
-    try {
-      console.info(`[${label}] Received ${signal}. Shutting down…`);
-      engine.stop();
-      offUpdate(emitter);
-    } catch (error) {
-      console.error(`[${label}] Error during shutdown: ${extractMessage(error)}`);
-    }
-  };
 
   await new Promise<void>((resolve) => {
     const wrapper = (signal: NodeJS.Signals) => {
-      shutdown(signal);
+      try {
+        console.info(`[${label}] Received ${signal}. Shutting down…`);
+        engine.stop();
+        engine.off("update", emitter);
+      } catch (error) {
+        console.error(`[${label}] Error during shutdown: ${extractMessage(error)}`);
+      }
       process.off("SIGINT", wrapper);
       process.off("SIGTERM", wrapper);
       resolve();
@@ -266,10 +93,7 @@ async function runEngine<
 
 function createAdapterOrThrow(symbol: string, dryRun?: boolean): ExchangeAdapter {
   const adapter = buildAdapterFromEnv({ exchangeId: resolveExchangeId(), symbol });
-  if (dryRun) {
-    return new DryRunExchangeAdapter(adapter);
-  }
-  return adapter;
+  return dryRun ? new DryRunExchangeAdapter(adapter) : adapter;
 }
 
 type TradeLogEntry = { time: string; type: string; detail: string };
@@ -278,11 +102,15 @@ function diffTradeLog(tradeLog: TradeLogEntry[], lastKey: string | undefined): T
   if (!tradeLog.length) return [];
   if (!lastKey) return tradeLog;
   const lastIndex = tradeLog.findIndex((entry) => createLogKey(entry) === lastKey);
-  if (lastIndex === -1) {
-    return tradeLog;
-  }
+  if (lastIndex === -1) return tradeLog;
   if (lastIndex === tradeLog.length - 1) return [];
   return tradeLog.slice(lastIndex + 1);
+}
+
+function lastKeyOf(entries: TradeLogEntry[] | undefined): string | undefined {
+  if (!Array.isArray(entries) || entries.length === 0) return undefined;
+  const last = entries[entries.length - 1];
+  return last ? createLogKey(last) : undefined;
 }
 
 function createLogKey(entry: TradeLogEntry): string {
