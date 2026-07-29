@@ -37,12 +37,8 @@ import { SessionVolumeTracker } from "./common/session-volume";
 import { BinanceDepthTracker, type BinanceDepthSnapshot } from "./common/binance-depth";
 import { buildBpsTargets } from "./maker-points-logic";
 import { t } from "../i18n";
-import {
-  checkStandxTokenExpiry,
-  formatTokenExpiryMessage,
-  isTokenExpiryConfigured,
-  type TokenExpiryState,
-} from "../utils/standx-token-expiry";
+import { IsolatedMarginGuard } from "./common/isolated-margin-guard";
+import { TokenExpiryGuard } from "./common/token-expiry-guard";
 import {
   createTelegramNotifier,
   type NotificationSender,
@@ -102,8 +98,6 @@ const STOP_LOSS_COOLDOWN_MS = 5_000;
 const STOP_LOSS_CHECK_INTERVAL_MS = 250; // 止损检查最大间隔
 const STOP_LOSS_RETRY_INTERVAL_MS = 500; // 止损失败后重试间隔
 const DEFENSE_MODE_CHECK_INTERVAL_MS = 1000; // 防御模式检查间隔
-const STANDX_MARGIN_MODE_CHECK_INTERVAL_MS = 500;
-const STANDX_MARGIN_MODE_MAX_ATTEMPTS = 10;
 const ACCOUNT_STALE_REST_PROBE_MIN_INTERVAL_MS = 5_000;
 
 export class MakerPointsEngine {
@@ -162,11 +156,7 @@ export class MakerPointsEngine {
   private insufficientBalanceNotified = false;
   private lastInsufficientMessage: string | null = null;
 
-  private tokenExpiryState: TokenExpiryState = "active";
-  private tokenExpiryLogged = false;
-  private tokenExpiryCancelDone = false;
-  private tokenExpiredCloseOnlyMode = false;
-  private tokenExpiryNotified = false;
+  private readonly tokenExpiry: TokenExpiryGuard;
 
   private lastPositionAmt = 0;
   private lastPositionSide: "LONG" | "SHORT" | "FLAT" = "FLAT";
@@ -195,7 +185,7 @@ export class MakerPointsEngine {
   private standxRestConsecutiveErrors = 0;
   private standxRestUnhealthy = false;
   private standxRestLastError: string | null = null;
-  private marginModeEnsuring: Promise<boolean> | null = null;
+  private readonly marginGuard: IsolatedMarginGuard;
 
   constructor(private readonly config: MakerPointsConfig, private readonly exchange: ExchangeAdapter) {
     this.tradeLog = createTradeLog(this.config.maxLogEntries);
@@ -206,6 +196,34 @@ export class MakerPointsEngine {
     this.precision = createPrecisionSyncer(this.exchange, this.config, this.config.qtyStep, (type, detail) =>
       this.tradeLog.push(type, detail)
     );
+    this.marginGuard = new IsolatedMarginGuard({
+      symbol: this.config.symbol,
+      enabled: this.exchange.id === "standx",
+      log: (type, detail) => this.tradeLog.push(type, detail),
+      currentSnapshot: () => this.accountSnapshot,
+      changeMarginMode: this.exchange.changeMarginMode?.bind(this.exchange),
+      queryAccountSnapshot: this.exchange.queryAccountSnapshot?.bind(this.exchange),
+      applySnapshot: (snapshot) => this.applyAccountSnapshot(snapshot),
+      sleep: (ms) => this.sleep(ms),
+    });
+    this.tokenExpiry = new TokenExpiryGuard({
+      log: (type, detail) => this.tradeLog.push(type, detail),
+      notify: ({ hasPosition, hasOpenOrders, state }) =>
+        this.notify({
+          type: "token_expired",
+          level: "warn",
+          symbol: this.config.symbol,
+          title: "Token 已过期",
+          message: hasPosition
+            ? "Token 已过期，进入平仓模式，不再开新仓"
+            : "Token 已过期，策略进入静默模式",
+          details: { hasPosition, hasOpenOrders, state },
+        }),
+      cancelAllOrders: () => this.exchange.cancelAllOrders({ symbol: this.config.symbol }),
+      onOrdersCancelled: () => {
+        this.openOrders = [];
+      },
+    });
     this.binanceDepth = new BinanceDepthTracker(resolveBinanceSymbol(this.config.symbol), {
       baseUrl: process.env.BINANCE_SPOT_WS_URL ?? process.env.BINANCE_WS_URL,
       restBaseUrl: process.env.BINANCE_REST_URL,
@@ -468,7 +486,7 @@ export class MakerPointsEngine {
               restUnhealthy: true,
               restConsecutiveErrors: this.standxRestConsecutiveErrors,
               restLastError: this.standxRestLastError,
-              marginMode: this.getStandxMarginMode(this.accountSnapshot),
+              marginMode: this.marginGuard.currentMode(),
             })
           );
         }
@@ -604,8 +622,8 @@ export class MakerPointsEngine {
         return;
       }
 
-      if (!(await this.ensureStandxIsolatedMarginMode())) {
-        const current = this.getStandxMarginMode(this.accountSnapshot);
+      if (!(await this.marginGuard.ensureIsolated())) {
+        const current = this.marginGuard.currentMode();
         this.enterDefenseMode(
           defenseReasonsFor({
             marginModeNotIsolated: true,
@@ -626,7 +644,7 @@ export class MakerPointsEngine {
             accountIssues: accountHealth.issues,
             restConsecutiveErrors: this.standxRestConsecutiveErrors,
             restLastError: this.standxRestLastError,
-            marginMode: this.getStandxMarginMode(this.accountSnapshot),
+            marginMode: this.marginGuard.currentMode(),
           })
         );
         this.emitUpdate();
@@ -642,7 +660,11 @@ export class MakerPointsEngine {
       const position = getPosition(this.accountSnapshot, this.config.symbol);
       const absPosition = Math.abs(position.positionAmt);
 
-      if (await this.handleTokenExpiry(position, absPosition)) {
+      const expiry = await this.tokenExpiry.evaluate({
+        positionAmt: position.positionAmt,
+        openOrderCount: this.openOrders.length,
+      });
+      if (expiry.halt) {
         this.emitUpdate();
         return;
       }
@@ -656,7 +678,7 @@ export class MakerPointsEngine {
 
       const closeThreshold = Number(this.config.closeThreshold);
       const closeOnly =
-        this.tokenExpiredCloseOnlyMode ||
+        expiry.closeOnly ||
         (Number.isFinite(closeThreshold) &&
         closeThreshold > 0 &&
         absPosition >= closeThreshold - EPS);
@@ -1522,7 +1544,7 @@ export class MakerPointsEngine {
       });
     } else if (currentSide === "FLAT" && prevSide !== "FLAT") {
       const pnl = position.unrealizedProfit;
-      const closeType = this.tokenExpiredCloseOnlyMode ? "Token过期平仓" : "平仓";
+      const closeType = this.tokenExpiry.closeOnlyMode ? "Token过期平仓" : "平仓";
       this.notify({
         type: "position_closed",
         level: "success",
@@ -1583,90 +1605,6 @@ export class MakerPointsEngine {
     this.lastPositionSide = currentSide;
   }
 
-  private async handleTokenExpiry(position: PositionSnapshot, _absPosition: number): Promise<boolean> {
-    if (!isTokenExpiryConfigured()) {
-      return false;
-    }
-
-    const expiryStatus = checkStandxTokenExpiry({
-      positionAmt: position.positionAmt,
-      openOrderCount: this.openOrders.length,
-    });
-
-    if (!expiryStatus.expired) {
-      if (this.tokenExpiryState !== "active") {
-        this.tokenExpiryState = "active";
-        this.tokenExpiryLogged = false;
-        this.tokenExpiryCancelDone = false;
-        this.tokenExpiredCloseOnlyMode = false;
-        this.tokenExpiryNotified = false;
-      }
-      return false;
-    }
-
-    const prevState = this.tokenExpiryState;
-    this.tokenExpiryState = expiryStatus.state;
-
-    if (!this.tokenExpiryLogged) {
-      const message = formatTokenExpiryMessage(expiryStatus);
-      if (message) {
-        this.tradeLog.push("warn", message);
-      }
-      this.tokenExpiryLogged = true;
-    }
-
-    if (!this.tokenExpiryNotified) {
-      this.notify({
-        type: "token_expired",
-        level: "warn",
-        symbol: this.config.symbol,
-        title: "Token 已过期",
-        message: expiryStatus.hasPosition
-          ? "Token 已过期，进入平仓模式，不再开新仓"
-          : "Token 已过期，策略进入静默模式",
-        details: {
-          hasPosition: expiryStatus.hasPosition,
-          hasOpenOrders: expiryStatus.hasOpenOrders,
-          state: expiryStatus.state,
-        },
-      });
-      this.tokenExpiryNotified = true;
-    }
-
-    if (!this.tokenExpiryCancelDone && this.openOrders.length > 0) {
-      try {
-        await this.exchange.cancelAllOrders({ symbol: this.config.symbol });
-        this.tradeLog.push("order", "Token 过期，已撤销所有挂单");
-        this.openOrders = [];
-        this.tokenExpiryCancelDone = true;
-      } catch (error) {
-        if (isUnknownOrderError(error)) {
-          this.tradeLog.push("order", "Token 过期撤单时订单已不存在");
-          this.tokenExpiryCancelDone = true;
-        } else {
-          this.tradeLog.push("error", `Token 过期撤单失败: ${extractMessage(error)}`);
-        }
-      }
-    }
-
-    if (expiryStatus.state === "expired_with_position") {
-      if (!this.tokenExpiredCloseOnlyMode) {
-        this.tokenExpiredCloseOnlyMode = true;
-        this.tradeLog.push("info", "Token 过期，强制进入平仓模式，仅允许 reduce-only 订单");
-      }
-      return false;
-    }
-
-    if (expiryStatus.state === "silent") {
-      if (prevState !== "silent") {
-        this.tradeLog.push("info", "进入静默数据接收模式，不再进行任何交易操作");
-      }
-      return true;
-    }
-
-    return true;
-  }
-
   // ========== 数据过时防御模式方法 ==========
 
   /**
@@ -1688,7 +1626,7 @@ export class MakerPointsEngine {
       restUnhealthy: this.standxRestUnhealthy,
       restConsecutiveErrors: this.standxRestConsecutiveErrors,
       restLastError: this.standxRestLastError,
-      marginMode: this.getStandxMarginMode(this.accountSnapshot),
+      marginMode: this.marginGuard.currentMode(),
       enforceIsolatedMargin: this.exchange.id === "standx",
     });
 
@@ -1821,7 +1759,7 @@ export class MakerPointsEngine {
 
         // 防御模式下也尝试修复保证金模式（StandX）
         if (this.exchange.id === "standx") {
-          await this.ensureStandxIsolatedMarginMode();
+          await this.marginGuard.ensureIsolated();
         }
 
         // 防御模式下持续通过 REST 刷新挂单，并尽力撤销所有挂单（避免本地状态/WS 丢失导致遗留挂单）
@@ -1865,55 +1803,6 @@ export class MakerPointsEngine {
     };
 
     void poll();
-  }
-
-  private getStandxMarginMode(snapshot: AccountSnapshot | null): string | null {
-    if (this.exchange.id !== "standx") return null;
-    const positions = snapshot?.positions ?? [];
-    const match = positions.find((pos) => pos.symbol === this.config.symbol);
-    const raw = (match as any)?.marginType ?? (match as any)?.margin_mode;
-    const mode = typeof raw === "string" ? raw.trim().toLowerCase() : "";
-    return mode ? mode : null;
-  }
-
-  private async ensureStandxIsolatedMarginMode(): Promise<boolean> {
-    if (this.exchange.id !== "standx") return true;
-    const currentMode = this.getStandxMarginMode(this.accountSnapshot);
-    if (currentMode === "isolated") return true;
-    const change = this.exchange.changeMarginMode?.bind(this.exchange);
-    const queryAccount = this.exchange.queryAccountSnapshot?.bind(this.exchange);
-    if (!change || !queryAccount) return false;
-
-    if (this.marginModeEnsuring) {
-      return false;
-    }
-
-    this.marginModeEnsuring = (async () => {
-      try {
-        await change({ symbol: this.config.symbol, marginMode: "isolated" });
-        for (let attempt = 0; attempt < STANDX_MARGIN_MODE_MAX_ATTEMPTS; attempt++) {
-          const next = await queryAccount();
-          if (next) {
-            this.applyAccountSnapshot(next);
-          }
-          const mode = this.getStandxMarginMode(this.accountSnapshot);
-          if (mode === "isolated") {
-            this.tradeLog.push("info", "已切换为逐仓模式 (isolated)，恢复策略运行");
-            return true;
-          }
-          await this.sleep(STANDX_MARGIN_MODE_CHECK_INTERVAL_MS);
-        }
-        this.tradeLog.push("warn", `逐仓模式切换未确认，当前模式: ${this.getStandxMarginMode(this.accountSnapshot) ?? "unknown"}`);
-        return false;
-      } catch (error) {
-        this.tradeLog.push("error", `切换逐仓模式失败: ${extractMessage(error)}`);
-        return false;
-      } finally {
-        this.marginModeEnsuring = null;
-      }
-    })();
-
-    return await this.marginModeEnsuring;
   }
 
   /**
