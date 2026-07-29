@@ -1,11 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
-import { tradingConfig } from "../config";
-import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
-import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
-import { TrendEngine, type TrendEngineSnapshot } from "../strategy/trend-engine";
+import React from "react";
+import { Box, Text } from "ink";
+import type { TrendEngineSnapshot } from "../strategy/trend-engine";
 import { formatNumber, formatTrendLabel } from "../utils/format";
 import { DataTable, type TableColumn } from "./components/DataTable";
+import { useStrategyEngine } from "./useStrategyEngine";
 import { t } from "../i18n";
 
 const READY_MESSAGE = t("trend.readyMessage");
@@ -14,45 +12,10 @@ interface TrendAppProps {
   onExit: () => void;
 }
 
-const inputSupported = Boolean(process.stdin && (process.stdin as any).isTTY);
-
 export function TrendApp({ onExit }: TrendAppProps) {
-  const [snapshot, setSnapshot] = useState<TrendEngineSnapshot | null>(null);
-  const [error, setError] = useState<Error | null>(null);
-  const engineRef = useRef<TrendEngine | null>(null);
-  const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
-
-  useInput(
-    (input, key) => {
-      if (key.escape) {
-        engineRef.current?.stop();
-        onExit();
-      }
-    },
-    { isActive: inputSupported }
-  );
-
-  useEffect(() => {
-    try {
-      const adapter = buildAdapterFromEnv({ exchangeId, symbol: tradingConfig.symbol });
-      const engine = new TrendEngine(tradingConfig, adapter);
-      engineRef.current = engine;
-      setSnapshot(engine.getSnapshot());
-      const handler = (next: TrendEngineSnapshot) => {
-        setSnapshot({ ...next, tradeLog: [...next.tradeLog] });
-      };
-      engine.on("update", handler);
-      engine.start();
-      return () => {
-        engine.off("update", handler);
-        engine.stop();
-      };
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err : new Error(String(err)));
-    }
-  }, [exchangeId]);
+  const { snapshot, error, exchangeName } = useStrategyEngine<TrendEngineSnapshot>("trend", {
+    onExit
+  });
 
   if (error) {
     return (

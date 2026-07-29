@@ -1,59 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
+import React from "react";
+import { Box, Text } from "ink";
 import { basisConfig } from "../config";
-import { getExchangeDisplayName, isBasisSupportedExchangeId, resolveExchangeId } from "../exchanges/create-adapter";
-import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
-import { BasisArbEngine, type BasisArbSnapshot } from "../strategy/basis-arb-engine";
+import type { BasisArbSnapshot } from "../strategy/basis-arb-engine";
 import { formatNumber } from "../utils/format";
+import { useStrategyEngine } from "./useStrategyEngine";
 import { t } from "../i18n";
 
 interface BasisAppProps {
   onExit: () => void;
 }
 
-const inputSupported = Boolean(process.stdin && (process.stdin as any).isTTY);
-
 export function BasisApp({ onExit }: BasisAppProps) {
-  const [snapshot, setSnapshot] = useState<BasisArbSnapshot | null>(null);
-  const [error, setError] = useState<Error | null>(null);
-  const engineRef = useRef<BasisArbEngine | null>(null);
-  const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
-
-  useInput(
-    (input, key) => {
-      if (key.escape) {
-        engineRef.current?.stop();
-        onExit();
-      }
-    },
-    { isActive: inputSupported }
-  );
-
-  useEffect(() => {
-    if (!isBasisSupportedExchangeId(exchangeId)) {
-      setError(new Error(t("basis.onlyAster")));
-      return;
-    }
-    try {
-      const adapter = buildAdapterFromEnv({ exchangeId, symbol: basisConfig.futuresSymbol });
-      const engine = new BasisArbEngine(basisConfig, adapter);
-      engineRef.current = engine;
-      setSnapshot(engine.getSnapshot());
-      const handler = (next: BasisArbSnapshot) => {
-        setSnapshot({ ...next, tradeLog: [...next.tradeLog] });
-      };
-      engine.on("update", handler);
-      engine.start();
-      return () => {
-        engine.off("update", handler);
-        engine.stop();
-      };
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err : new Error(String(err)));
-    }
-  }, [exchangeId]);
+  const { snapshot, error, exchangeName } = useStrategyEngine<BasisArbSnapshot>("basis", {
+    onExit
+  });
 
   if (error) {
     return (

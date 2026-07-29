@@ -1,56 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
-import { liquidityMakerConfig } from "../config";
-import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
-import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
-import { LiquidityMakerEngine, type LiquidityMakerEngineSnapshot } from "../strategy/liquidity-maker-engine";
+import React from "react";
+import { Box, Text } from "ink";
+import type { LiquidityMakerEngineSnapshot } from "../strategy/liquidity-maker-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
+import { useStrategyEngine } from "./useStrategyEngine";
 import { t } from "../i18n";
 
 interface LiquidityMakerAppProps {
   onExit: () => void;
 }
 
-const inputSupported = Boolean(process.stdin && (process.stdin as any).isTTY);
-
 export function LiquidityMakerApp({ onExit }: LiquidityMakerAppProps) {
-  const [snapshot, setSnapshot] = useState<LiquidityMakerEngineSnapshot | null>(null);
-  const [error, setError] = useState<Error | null>(null);
-  const engineRef = useRef<LiquidityMakerEngine | null>(null);
-  const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
-
-  useInput(
-    (input, key) => {
-      if (key.escape) {
-        engineRef.current?.stop();
-        onExit();
-      }
-    },
-    { isActive: inputSupported }
-  );
-
-  useEffect(() => {
-    try {
-      const adapter = buildAdapterFromEnv({ exchangeId, symbol: liquidityMakerConfig.symbol });
-      const engine = new LiquidityMakerEngine(liquidityMakerConfig, adapter);
-      engineRef.current = engine;
-      setSnapshot(engine.getSnapshot());
-      const handler = (next: LiquidityMakerEngineSnapshot) => {
-        setSnapshot({ ...next, tradeLog: [...next.tradeLog] });
-      };
-      engine.on("update", handler);
-      engine.start();
-      return () => {
-        engine.off("update", handler);
-        engine.stop();
-      };
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err : new Error(String(err)));
-    }
-  }, [exchangeId]);
+  const { snapshot, error, exchangeName } = useStrategyEngine<LiquidityMakerEngineSnapshot>("liquidity-maker", {
+    onExit
+  });
 
   if (error) {
     return (

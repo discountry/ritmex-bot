@@ -1,11 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
-import { swingConfig } from "../config";
-import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
-import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
-import { SwingEngine, type SwingEngineSnapshot } from "../strategy/swing-engine";
+import React from "react";
+import { Box, Text } from "ink";
+import type { SwingEngineSnapshot } from "../strategy/swing-engine";
 import { formatNumber } from "../utils/format";
 import { DataTable, type TableColumn } from "./components/DataTable";
+import { useStrategyEngine } from "./useStrategyEngine";
 import { t } from "../i18n";
 
 const READY_MESSAGE = t("swing.readyMessage");
@@ -14,45 +12,11 @@ interface SwingAppProps {
   onExit: () => void;
 }
 
-const inputSupported = Boolean(process.stdin && (process.stdin as any).isTTY);
-
 export function SwingApp({ onExit }: SwingAppProps) {
-  const [snapshot, setSnapshot] = useState<SwingEngineSnapshot | null>(null);
-  const [error, setError] = useState<Error | null>(null);
-  const engineRef = useRef<SwingEngine | null>(null);
-  const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
-
-  useInput(
-    (_input, key) => {
-      if (key.escape) {
-        engineRef.current?.stop();
-        onExit();
-      }
-    },
-    { isActive: inputSupported }
-  );
-
-  useEffect(() => {
-    try {
-      const adapter = buildAdapterFromEnv({ exchangeId, symbol: swingConfig.symbol });
-      const engine = new SwingEngine(swingConfig, adapter);
-      engineRef.current = engine;
-      setSnapshot(engine.getSnapshot());
-      const handler = (next: SwingEngineSnapshot) => {
-        setSnapshot({ ...next, tradeLog: [...next.tradeLog], openOrders: [...next.openOrders] });
-      };
-      engine.on("update", handler);
-      engine.start();
-      return () => {
-        engine.off("update", handler);
-        engine.stop();
-      };
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err : new Error(String(err)));
-    }
-  }, [exchangeId]);
+  const { snapshot, error, exchangeName } = useStrategyEngine<SwingEngineSnapshot>("swing", {
+    onExit,
+    cloneSnapshot: (next) => ({ ...next, tradeLog: [...next.tradeLog], openOrders: [...next.openOrders] }),
+  });
 
   if (error) {
     return (

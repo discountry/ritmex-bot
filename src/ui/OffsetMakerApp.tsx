@@ -1,56 +1,19 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Box, Text, useInput } from "ink";
-import { makerConfig } from "../config";
-import { getExchangeDisplayName, resolveExchangeId } from "../exchanges/create-adapter";
-import { buildAdapterFromEnv } from "../exchanges/resolve-from-env";
-import { OffsetMakerEngine, type OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
+import React from "react";
+import { Box, Text } from "ink";
+import type { OffsetMakerEngineSnapshot } from "../strategy/offset-maker-engine";
 import { DataTable, type TableColumn } from "./components/DataTable";
 import { formatNumber } from "../utils/format";
+import { useStrategyEngine } from "./useStrategyEngine";
 import { t } from "../i18n";
 
 interface OffsetMakerAppProps {
   onExit: () => void;
 }
 
-const inputSupported = Boolean(process.stdin && (process.stdin as any).isTTY);
-
 export function OffsetMakerApp({ onExit }: OffsetMakerAppProps) {
-  const [snapshot, setSnapshot] = useState<OffsetMakerEngineSnapshot | null>(null);
-  const [error, setError] = useState<Error | null>(null);
-  const engineRef = useRef<OffsetMakerEngine | null>(null);
-  const exchangeId = useMemo(() => resolveExchangeId(), []);
-  const exchangeName = useMemo(() => getExchangeDisplayName(exchangeId), [exchangeId]);
-
-  useInput(
-    (input, key) => {
-      if (key.escape) {
-        engineRef.current?.stop();
-        onExit();
-      }
-    },
-    { isActive: inputSupported }
-  );
-
-  useEffect(() => {
-    try {
-      const adapter = buildAdapterFromEnv({ exchangeId, symbol: makerConfig.symbol });
-      const engine = new OffsetMakerEngine(makerConfig, adapter);
-      engineRef.current = engine;
-      setSnapshot(engine.getSnapshot());
-      const handler = (next: OffsetMakerEngineSnapshot) => {
-        setSnapshot({ ...next, tradeLog: [...next.tradeLog] });
-      };
-      engine.on("update", handler);
-      engine.start();
-      return () => {
-        engine.off("update", handler);
-        engine.stop();
-      };
-    } catch (err) {
-      console.error(err);
-      setError(err instanceof Error ? err : new Error(String(err)));
-    }
-  }, [exchangeId]);
+  const { snapshot, error, exchangeName } = useStrategyEngine<OffsetMakerEngineSnapshot>("offset-maker", {
+    onExit
+  });
 
   if (error) {
     return (
