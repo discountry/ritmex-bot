@@ -32,6 +32,7 @@ import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { decryptCopyright } from "../utils/copyright";
 import { isRateLimitError } from "../utils/errors";
 import { RateLimitController } from "../core/lib/rate-limit";
+import type { TrendLabel } from "../utils/format";
 import { StrategyEventEmitter } from "./common/event-emitter";
 import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
@@ -44,7 +45,7 @@ export interface TrendEngineSnapshot {
   lastPrice: number | null;
   sma30: number | null;
   bollingerBandwidth: number | null;
-  trend: "做多" | "做空" | "无信号";
+  trend: TrendLabel;
   position: PositionSnapshot;
   pnl: number;
   unrealized: number;
@@ -978,13 +979,14 @@ export class TrendEngine {
     const position = getPosition(this.accountSnapshot, this.config.symbol);
     const price = this.tickerSnapshot ? Number(this.tickerSnapshot.lastPrice) : null;
     const sma30 = this.lastSma30;
-    const trend = price == null || sma30 == null
-      ? "无信号"
-      : price > sma30
-      ? "做多"
-      : price < sma30
-      ? "做空"
-      : "无信号";
+    const trend: TrendLabel =
+      price == null || sma30 == null
+        ? "none"
+        : price > sma30
+          ? "long"
+          : price < sma30
+            ? "short"
+            : "none";
     const pnl = price != null ? computePositionPnl(position, price, price) : 0;
     return {
       ready: this.isReady(),

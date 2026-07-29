@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach, afterAll } from "vitest";
 import type { ExchangeAdapter } from "../src/exchanges/adapter";
 import type { Order } from "../src/exchanges/types";
+import { t } from "../src/i18n";
 import type {
   OrderContext,
   OrderLockMap,
@@ -84,7 +85,7 @@ describe("order-coordinator", () => {
     ];
     await deduplicateOrders(ctx, openOrders, "LIMIT", "BUY");
     expect(adapter.cancelOrders).toHaveBeenCalledWith({ symbol: "BTCUSDT", orderIdList: [2] });
-    expect(log).toHaveBeenCalledWith("order", expect.stringContaining("去重撤销重复"));
+    expect(log).toHaveBeenCalledWith("order", t("log.order.dedupeCancelled", { type: "LIMIT", ids: "2" }));
   });
 
   it("places limit orders and records pending id", async () => {
@@ -112,7 +113,7 @@ describe("order-coordinator", () => {
       lastPrice: 100,
     });
     expect(adapter.createOrder).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith("stop", expect.stringContaining("STOP_MARKET"));
+    expect(log).toHaveBeenCalledWith("stop", t("log.order.stopPlaced", { side: "SELL", stopPrice: 99 }));
   });
 
   it("places trailing stop order", async () => {
@@ -125,7 +126,10 @@ describe("order-coordinator", () => {
       callbackRate: 0.2,
     });
     expect(adapter.createOrder).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith("order", expect.stringContaining("挂动态止盈单"));
+    expect(log).toHaveBeenCalledWith(
+      "order",
+      t("log.order.trailingPlaced", { side: "SELL", activation: 101, callbackRate: 0.2 })
+    );
   });
 
   it("market close cancels open orders before placing close order", async () => {
@@ -136,7 +140,7 @@ describe("order-coordinator", () => {
       quantity: 1,
     });
     expect(adapter.createOrder).toHaveBeenCalled();
-    expect(log).toHaveBeenCalledWith("close", expect.stringContaining("市价平仓"));
+    expect(log).toHaveBeenCalledWith("close", t("log.order.closePlaced", { side: "SELL" }));
   });
 
   it("unlockOperating clears timers and pending", () => {

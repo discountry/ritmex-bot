@@ -6,6 +6,7 @@ import {
   type TokenExpiryState,
   type TokenExpiryStatus,
 } from "../../utils/standx-token-expiry";
+import { t } from "../../i18n";
 import type { LogHandler } from "./subscriptions";
 
 /** What the engine should do for the rest of this tick. */
@@ -76,13 +77,13 @@ export class TokenExpiryGuard {
     if (status.state === "expired_with_position") {
       if (!this.closeOnly) {
         this.closeOnly = true;
-        this.deps.log("info", "Token 过期，强制进入平仓模式，仅允许 reduce-only 订单");
+        this.deps.log("info", t("log.token.closeOnlyForced"));
       }
       return { halt: false, closeOnly: true };
     }
 
     if (status.state === "silent" && previousState !== "silent") {
-      this.deps.log("info", "进入静默数据接收模式，不再进行任何交易操作");
+      this.deps.log("info", t("log.token.silentEntered"));
     }
     return { halt: true, closeOnly: this.closeOnly };
   }
@@ -120,18 +121,18 @@ export class TokenExpiryGuard {
     if (this.cancelDone || openOrderCount === 0) return;
     try {
       await this.deps.cancelAllOrders();
-      this.deps.log("order", "Token 过期，已撤销所有挂单");
+      this.deps.log("order", t("log.token.ordersCancelled"));
       this.deps.onOrdersCancelled();
       this.cancelDone = true;
     } catch (error) {
       if (isUnknownOrderError(error)) {
         // Nothing left to cancel is the outcome we wanted.
-        this.deps.log("order", "Token 过期撤单时订单已不存在");
+        this.deps.log("order", t("log.token.cancelOrderMissing"));
         this.cancelDone = true;
         return;
       }
       // Leave cancelDone false so the next tick retries.
-      this.deps.log("error", `Token 过期撤单失败: ${extractMessage(error)}`);
+      this.deps.log("error", t("log.token.cancelFailed", { error: extractMessage(error) }));
     }
   }
 }

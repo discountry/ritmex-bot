@@ -213,10 +213,8 @@ export class MakerPointsEngine {
           type: "token_expired",
           level: "warn",
           symbol: this.config.symbol,
-          title: "Token 已过期",
-          message: hasPosition
-            ? "Token 已过期，进入平仓模式，不再开新仓"
-            : "Token 已过期，策略进入静默模式",
+          title: t("notify.token.title"),
+          message: hasPosition ? t("notify.token.closeOnly") : t("notify.token.silent"),
           details: { hasPosition, hasOpenOrders, state },
         }),
       cancelAllOrders: () => this.exchange.cancelAllOrders({ symbol: this.config.symbol }),

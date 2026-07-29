@@ -1,5 +1,6 @@
 import type { AccountSnapshot } from "../../exchanges/types";
 import { extractMessage } from "../../utils/errors";
+import { t } from "../../i18n";
 import type { LogHandler } from "./subscriptions";
 
 /** Snapshot refreshes to wait through before giving up on the switch (~5s total). */
@@ -74,15 +75,15 @@ export class IsolatedMarginGuard {
           this.deps.applySnapshot(next);
         }
         if (this.currentMode() === "isolated") {
-          this.deps.log("info", "已切换为逐仓模式 (isolated)，恢复策略运行");
+          this.deps.log("info", t("log.margin.switched"));
           return true;
         }
         await sleep(CONFIRM_INTERVAL_MS);
       }
-      this.deps.log("warn", `逐仓模式切换未确认，当前模式: ${this.currentMode() ?? "unknown"}`);
+      this.deps.log("warn", t("log.margin.switchUnconfirmed", { mode: this.currentMode() ?? "unknown" }));
       return false;
     } catch (error) {
-      this.deps.log("error", `切换逐仓模式失败: ${extractMessage(error)}`);
+      this.deps.log("error", t("log.margin.switchFailed", { error: extractMessage(error) }));
       return false;
     } finally {
       this.ensuring = null;

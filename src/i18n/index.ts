@@ -725,6 +725,141 @@ const translations: Record<string, TranslationEntry> = {
   "log.trend.trailingFail": { zh: "挂动态止盈失败: {error}", en: "Failed to place trailing stop: {error}" },
   "log.trend.updateHandlerError": { zh: "更新回调处理异常: {error}", en: "Update handler error: {error}" },
   "log.trend.snapshotDispatchError": { zh: "快照或更新分发异常: {error}", en: "Snapshot/update dispatch error: {error}" },
+  // --- core/order-coordinator ---
+  "order.kind.limit": { zh: "限价单", en: "Limit order" },
+  "order.kind.market": { zh: "市价单", en: "Market order" },
+  "order.kind.stop": { zh: "止损单", en: "Stop order" },
+  "order.kind.trailing": { zh: "动态止盈单", en: "Trailing stop order" },
+  "order.kind.close": { zh: "市价平仓", en: "Market close" },
+  "log.order.markGuardBlocked": {
+    zh: "{kind} 保护触发：side={side} price={price} mark={mark} 超过 {pct}%",
+    en: "{kind} blocked by mark-price guard: side={side} price={price} mark={mark} exceeds {pct}%",
+  },
+  "log.order.lockTimeout": {
+    zh: "{type} 操作超时自动解锁",
+    en: "{type} operation timed out; lock released",
+  },
+  "log.order.dedupeCancelled": {
+    zh: "去重撤销重复 {type} 单: {ids}",
+    en: "Cancelled duplicate {type} orders: {ids}",
+  },
+  "log.order.dedupeGone": {
+    zh: "去重时发现订单已不存在，跳过删除",
+    en: "Order already gone while deduplicating; skipping cancel",
+  },
+  "log.order.dedupeFailed": {
+    zh: "去重撤单失败: {error}",
+    en: "Failed to cancel duplicates: {error}",
+  },
+  "log.order.invalidQuantity": {
+    zh: "{kind}数量无效，跳过下单",
+    en: "{kind} quantity is invalid; skipping",
+  },
+  "log.order.limitPlaced": {
+    zh: "挂限价单: {side} @ {price} 数量 {quantity} reduceOnly={reduceOnly}{sl}",
+    en: "Placed limit order: {side} @ {price} qty {quantity} reduceOnly={reduceOnly}{sl}",
+  },
+  "log.order.limitGone": {
+    zh: "订单已成交或被撤销，跳过新单",
+    en: "Order already filled or cancelled; skipping new order",
+  },
+  "log.order.marketPlaced": {
+    zh: "市价单: {side} 数量 {quantity} reduceOnly={reduceOnly}",
+    en: "Market order: {side} qty {quantity} reduceOnly={reduceOnly}",
+  },
+  "log.order.marketGone": {
+    zh: "市价单失败但订单已不存在，忽略",
+    en: "Market order failed but the order is already gone; ignoring",
+  },
+  "log.order.stopAboveLast": {
+    zh: "止损价 {stopPrice} 高于或等于当前价 {lastPrice}，取消挂单",
+    en: "Stop price {stopPrice} is at or above the last price {lastPrice}; not placing",
+  },
+  "log.order.stopBelowLast": {
+    zh: "止损价 {stopPrice} 低于或等于当前价 {lastPrice}，取消挂单",
+    en: "Stop price {stopPrice} is at or below the last price {lastPrice}; not placing",
+  },
+  "log.order.stopPlaced": {
+    zh: "挂止损单: {side} STOP_MARKET @ {stopPrice}",
+    en: "Placed stop order: {side} STOP_MARKET @ {stopPrice}",
+  },
+  "log.order.stopGone": { zh: "止损单已失效，跳过", en: "Stop order no longer valid; skipping" },
+  "log.order.trailingUnsupported": {
+    zh: "当前交易所不支持动态止盈单",
+    en: "This exchange does not support trailing stop orders",
+  },
+  "log.order.trailingPlaced": {
+    zh: "挂动态止盈单: {side} activation={activation} callbackRate={callbackRate}",
+    en: "Placed trailing stop: {side} activation={activation} callbackRate={callbackRate}",
+  },
+  "log.order.trailingGone": {
+    zh: "动态止盈单已失效，跳过",
+    en: "Trailing stop no longer valid; skipping",
+  },
+  "log.order.closePlaced": { zh: "市价平仓: {side}", en: "Market close: {side}" },
+  "log.order.closeGone": {
+    zh: "市场平仓时订单已不存在",
+    en: "Order already gone while closing at market",
+  },
+  // --- utils/standx-token-expiry ---
+  "token.expiringSoon": {
+    zh: "StandX Token 将在 {minutes} 分钟后过期",
+    en: "StandX token expires in {minutes} minutes",
+  },
+  "token.expiredCancelling": {
+    zh: "StandX Token 已过期，正在取消所有挂单",
+    en: "StandX token expired; cancelling all open orders",
+  },
+  "token.expiredWithPosition": {
+    zh: "StandX Token 已过期，仅保留平仓/止损逻辑",
+    en: "StandX token expired; only close/stop logic remains active",
+  },
+  "token.expiredSilent": {
+    zh: "StandX Token 已过期，进入静默数据接收模式",
+    en: "StandX token expired; entering silent data-only mode",
+  },
+  "log.token.closeOnlyForced": {
+    zh: "Token 过期，强制进入平仓模式，仅允许 reduce-only 订单",
+    en: "Token expired; forcing close-only mode, reduce-only orders only",
+  },
+  "log.token.silentEntered": {
+    zh: "进入静默数据接收模式，不再进行任何交易操作",
+    en: "Entered silent data-only mode; no further trading actions",
+  },
+  "log.token.ordersCancelled": {
+    zh: "Token 过期，已撤销所有挂单",
+    en: "Token expired; cancelled all open orders",
+  },
+  "log.token.cancelOrderMissing": {
+    zh: "Token 过期撤单时订单已不存在",
+    en: "Order already gone while cancelling after token expiry",
+  },
+  "log.token.cancelFailed": {
+    zh: "Token 过期撤单失败: {error}",
+    en: "Failed to cancel orders after token expiry: {error}",
+  },
+  "notify.token.title": { zh: "Token 已过期", en: "Token expired" },
+  "notify.token.closeOnly": {
+    zh: "Token 已过期，进入平仓模式，不再开新仓",
+    en: "Token expired; entering close-only mode, no new positions",
+  },
+  "notify.token.silent": {
+    zh: "Token 已过期，策略进入静默模式",
+    en: "Token expired; strategy entering silent mode",
+  },
+  // --- strategy/common/isolated-margin-guard ---
+  "log.margin.switched": {
+    zh: "已切换为逐仓模式 (isolated)，恢复策略运行",
+    en: "Switched to isolated margin; resuming strategy",
+  },
+  "log.margin.switchUnconfirmed": {
+    zh: "逐仓模式切换未确认，当前模式: {mode}",
+    en: "Isolated margin switch unconfirmed; current mode: {mode}",
+  },
+  "log.margin.switchFailed": {
+    zh: "切换逐仓模式失败: {error}",
+    en: "Failed to switch to isolated margin: {error}",
+  },
 };
 
 const formatTemplate = (template: string, params: Record<string, unknown>): string => {

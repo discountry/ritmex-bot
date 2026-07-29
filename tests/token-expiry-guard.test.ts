@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, afterEach } from "vitest";
 import { standxTokenConfig } from "../src/config";
+import { t } from "../src/i18n";
 import { TokenExpiryGuard } from "../src/strategy/common/token-expiry-guard";
 
 const HOUR_MS = 3_600_000;
@@ -83,7 +84,7 @@ describe("TokenExpiryGuard", () => {
     await guard.evaluate({ positionAmt: 0, openOrderCount: 0 });
     await guard.evaluate({ positionAmt: 0, openOrderCount: 0 });
     const entryLogs = logs.filter(
-      ([type, detail]) => type === "info" && detail.includes("静默数据接收模式")
+      ([type, detail]) => type === "info" && detail === t("log.token.silentEntered")
     );
     expect(entryLogs).toHaveLength(1);
   });

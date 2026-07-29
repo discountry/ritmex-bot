@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { IsolatedMarginGuard } from "../src/strategy/common/isolated-margin-guard";
 import type { AccountSnapshot } from "../src/exchanges/types";
+import { t } from "../src/i18n";
 
 const SYMBOL = "BTC-USD";
 
@@ -71,7 +72,7 @@ describe("IsolatedMarginGuard", () => {
     });
     expect(await guard.ensureIsolated()).toBe(true);
     expect(changeMarginMode).toHaveBeenCalledWith({ symbol: SYMBOL, marginMode: "isolated" });
-    expect(logs.some(([, detail]) => detail.includes("已切换为逐仓模式"))).toBe(true);
+    expect(logs.some(([, detail]) => detail === t("log.margin.switched"))).toBe(true);
   });
 
   it("gives up after the confirm attempts run out", async () => {
