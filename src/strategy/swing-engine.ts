@@ -2,7 +2,7 @@ import type { ExchangeAdapter } from "../exchanges/adapter";
 import type { AccountSnapshot, Depth, Order, Ticker } from "../exchanges/types";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { marketClose, placeMarketOrder, placeStopLossOrder, unlockOperating } from "../core/order-coordinator";
-import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
+import type { OrderContext, OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
 import { extractMessage, isRateLimitError, isUnknownOrderError } from "../utils/errors";
 import { getPosition, type PositionSnapshot } from "../utils/strategy";
 import { computePositionPnl } from "../utils/pnl";
@@ -135,6 +135,19 @@ export class SwingEngine {
     this.precision.start();
     this.bootstrap();
   }
+
+  /** Bundles the fixed order-routing state; rebuilt lazily on first use. */
+  private get orderContext(): OrderContext {
+    return (this.orderContextCache ??= {
+      adapter: this.exchange,
+      symbol: this.config.symbol,
+      locks: this.locks,
+      timers: this.timers,
+      pendings: this.pending,
+      log: (type, detail) => this.tradeLog.push(type, detail),
+    });
+  }
+  private orderContextCache: OrderContext | null = null;
 
   start(): void {
     if (this.timer) return;
@@ -348,24 +361,18 @@ export class SwingEngine {
       if (Math.abs(position.positionAmt) > EPS) {
         return;
       }
-      await placeMarketOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        this.config.tradeAmount,
-        (type, detail) => this.tradeLog.push(type, detail),
-        false,
-        {
+      await placeMarketOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        amount: this.config.tradeAmount,
+        reduceOnly: false,
+        guard: {
           markPrice: position.markPrice,
           expectedPrice: Number(this.tickerSnapshot?.lastPrice) || null,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { qtyStep: this.config.qtyStep }
-      );
+        qtyStep: this.config.qtyStep
+      });
       this.tradeLog.push("open", `${reason}: ${side} (market)`);
     } catch (err) {
       this.tradeLog.push("error", `Open failed: ${extractMessage(err)}`);
@@ -380,23 +387,17 @@ export class SwingEngine {
         side === "SELL"
           ? Number(this.depthSnapshot?.bids?.[0]?.[0])
           : Number(this.depthSnapshot?.asks?.[0]?.[0]);
-      await marketClose(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        Math.abs(position.positionAmt),
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await marketClose(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        quantity: Math.abs(position.positionAmt),
+        guard: {
           markPrice: position.markPrice,
           expectedPrice: Number.isFinite(expected) ? expected : Number(this.tickerSnapshot?.lastPrice) || null,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { qtyStep: this.config.qtyStep }
-      );
+        qtyStep: this.config.qtyStep
+      });
       this.tradeLog.push("close", `${reason}: ${side} (market close)`);
     } catch (err) {
       if (isUnknownOrderError(err)) {
@@ -459,24 +460,19 @@ export class SwingEngine {
 
     try {
       const qty = Math.abs(position.positionAmt);
-      await placeStopLossOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        stopSide,
-        stopPrice,
-        qty,
-        lastPrice,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await placeStopLossOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: stopSide,
+        stopPrice: stopPrice,
+        quantity: qty,
+        lastPrice: lastPrice,
+        guard: {
           markPrice: position.markPrice,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
       this.lastStopAttempt = { side: stopSide, price: stopPrice, at: Date.now() };
     } catch (err) {
       this.lastStopAttempt = { side: stopSide, price: stopPrice, at: Date.now() };

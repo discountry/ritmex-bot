@@ -20,7 +20,7 @@ import {
   placeOrder,
   unlockOperating,
 } from "../core/order-coordinator";
-import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
+import type { OrderContext, OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
 import { makeOrderPlan } from "../core/lib/order-plan";
 import { safeCancelOrder } from "../core/lib/orders";
 import { RateLimitController } from "../core/lib/rate-limit";
@@ -126,6 +126,19 @@ export class MakerEngine {
     this.precision.start();
     this.bootstrap();
   }
+
+  /** Bundles the fixed order-routing state; rebuilt lazily on first use. */
+  private get orderContext(): OrderContext {
+    return (this.orderContextCache ??= {
+      adapter: this.exchange,
+      symbol: this.config.symbol,
+      locks: this.locks,
+      timers: this.timers,
+      pendings: this.pending,
+      log: (type, detail) => this.tradeLog.push(type, detail),
+    });
+  }
+  private orderContextCache: OrderContext | null = null;
 
   start(): void {
     if (this.timer) return;
@@ -439,27 +452,18 @@ export class MakerEngine {
       if (!target) continue;
       if (target.amount < EPS) continue;
       try {
-        await placeOrder(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pending,
-          target.side,
-          target.price, // 已经是字符串价格
-          target.amount,
-          (type, detail) => this.tradeLog.push(type, detail),
-          target.reduceOnly,
-          {
+        await placeOrder(this.orderContext, {
+          openOrders: this.openOrders,
+          side: target.side,
+          price: target.price,
+          amount: target.amount,
+          reduceOnly: target.reduceOnly,
+          guard: {
             markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          {
-            priceTick: this.precision.priceTick,
-            qtyStep: this.precision.qtyStep,
-          }
-        );
+          qtyStep: this.precision.qtyStep
+        });
       } catch (error) {
         if (isInsufficientBalanceError(error)) {
           this.registerInsufficientBalance(error);
@@ -507,23 +511,17 @@ export class MakerEngine {
       );
       try {
         await this.flushOrders();
-        await marketClose(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pending,
-          position.positionAmt > 0 ? "SELL" : "BUY",
-          absPosition,
-          (type, detail) => this.tradeLog.push(type, detail),
-          {
+        await marketClose(this.orderContext, {
+          openOrders: this.openOrders,
+          side: position.positionAmt > 0 ? "SELL" : "BUY",
+          quantity: absPosition,
+          guard: {
             markPrice: position.markPrice,
             expectedPrice: Number(closeSidePrice) || null,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { qtyStep: this.precision.qtyStep }
-        );
+          qtyStep: this.precision.qtyStep
+        });
       } catch (error) {
         if (isUnknownOrderError(error)) {
           this.tradeLog.push("order", t("log.maker.stopOrderMissing"));

@@ -21,7 +21,7 @@ import {
   placeOrder,
   unlockOperating,
 } from "../core/order-coordinator";
-import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
+import type { OrderContext, OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
 import type { MakerEngineSnapshot } from "./maker-engine";
 import { makeOrderPlan } from "../core/lib/order-plan";
 import { safeCancelOrder } from "../core/lib/orders";
@@ -150,6 +150,19 @@ export class LiquidityMakerEngine {
     this.repriceDwellMs = Math.max(1000, this.config.refreshIntervalMs * 3);
     this.bootstrap();
   }
+
+  /** Bundles the fixed order-routing state; rebuilt lazily on first use. */
+  private get orderContext(): OrderContext {
+    return (this.orderContextCache ??= {
+      adapter: this.exchange,
+      symbol: this.config.symbol,
+      locks: this.locks,
+      timers: this.timers,
+      pendings: this.pending,
+      log: (type, detail) => this.tradeLog.push(type, detail),
+    });
+  }
+  private orderContextCache: OrderContext | null = null;
 
   start(): void {
     if (this.timer) return;
@@ -698,17 +711,11 @@ export class LiquidityMakerEngine {
     const closeBidPrice = topBid != null ? formatPriceToString(topBid, priceDecimals) : null;
     const closeAskPrice = topAsk != null ? formatPriceToString(topAsk, priceDecimals) : null;
     try {
-      await marketClose(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        absPosition,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await marketClose(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        quantity: absPosition,
+        guard: {
           markPrice: position.markPrice,
           expectedPrice:
             side === "SELL"
@@ -716,8 +723,8 @@ export class LiquidityMakerEngine {
               : (closeBidPrice != null ? Number(closeBidPrice) : null),
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { qtyStep: this.precision.qtyStep }
-      );
+        qtyStep: this.precision.qtyStep
+      });
     } catch (error) {
       if (isUnknownOrderError(error)) {
         this.tradeLog.push("order", "限频强制平仓时订单已不存在");
@@ -886,27 +893,18 @@ export class LiquidityMakerEngine {
       }
       try {
         const reduceOnlyFlag = this.marketType === "spot" ? false : target.reduceOnly;
-        await placeOrder(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pending,
-          target.side,
-          target.price, // 已经是字符串价格
-          target.amount,
-          (type, detail) => this.tradeLog.push(type, detail),
-          reduceOnlyFlag,
-          {
+        await placeOrder(this.orderContext, {
+          openOrders: this.openOrders,
+          side: target.side,
+          price: target.price,
+          amount: target.amount,
+          reduceOnly: reduceOnlyFlag,
+          guard: {
             markPrice: this.getPositionSnapshot().markPrice,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          {
-            priceTick: this.precision.priceTick,
-            qtyStep: this.precision.qtyStep,
-          }
-        );
+          qtyStep: this.precision.qtyStep
+        });
         // Record last placed entry order timing and price
         if (!target.reduceOnly) {
           this.lastEntryOrderBySide[target.side] = { price: target.price, ts: Date.now() };
@@ -955,23 +953,17 @@ export class LiquidityMakerEngine {
         // 尽力撤销所有未完成挂单，避免锁定基础资产导致余额不足
         await this.exchange.cancelAllOrders({ symbol: this.config.symbol }).catch(() => {});
         await this.flushOrders();
-        await marketClose(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pending,
-          "SELL",
-          absPosition,
-          (type, detail) => this.tradeLog.push(type, detail),
-          {
+        await marketClose(this.orderContext, {
+          openOrders: this.openOrders,
+          side: "SELL",
+          quantity: absPosition,
+          guard: {
             markPrice: position.markPrice,
             expectedPrice: bidPrice || null,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { qtyStep: this.precision.qtyStep }
-        );
+          qtyStep: this.precision.qtyStep
+        });
       } catch (error) {
         if (isRateLimitError(error)) throw error;
         if (isUnknownOrderError(error)) {
@@ -1005,23 +997,17 @@ export class LiquidityMakerEngine {
       );
       try {
         await this.flushOrders();
-        await marketClose(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pending,
-          position.positionAmt > 0 ? "SELL" : "BUY",
-          absPosition,
-          (type, detail) => this.tradeLog.push(type, detail),
-          {
+        await marketClose(this.orderContext, {
+          openOrders: this.openOrders,
+          side: position.positionAmt > 0 ? "SELL" : "BUY",
+          quantity: absPosition,
+          guard: {
             markPrice: position.markPrice,
             expectedPrice: Number(position.positionAmt > 0 ? bidPrice : askPrice) || null,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { qtyStep: this.precision.qtyStep }
-        );
+          qtyStep: this.precision.qtyStep
+        });
       } catch (error) {
         if (isUnknownOrderError(error)) {
           this.tradeLog.push("order", "止损平仓时订单已不存在");
@@ -1253,17 +1239,11 @@ export class LiquidityMakerEngine {
     if (absQty < EPS) return false;
     const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
     try {
-      await marketClose(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        target.side,
-        absQty,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await marketClose(this.orderContext, {
+        openOrders: this.openOrders,
+        side: target.side,
+        quantity: absQty,
+        guard: {
           markPrice: position.markPrice,
           expectedPrice:
             target.side === "SELL"
@@ -1271,8 +1251,8 @@ export class LiquidityMakerEngine {
               : (topAsk != null ? Number(topAsk) : null),
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { qtyStep: this.precision.qtyStep }
-      );
+        qtyStep: this.precision.qtyStep
+      });
       this.tradeLog.push("order", `小额仓位使用市价平仓 ${target.side} 数量 ${absQty.toFixed(6)}`);
       return true;
     } catch (closeError) {

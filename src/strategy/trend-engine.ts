@@ -25,7 +25,7 @@ import {
   placeTrailingStopOrder,
   unlockOperating,
 } from "../core/order-coordinator";
-import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
+import type { OrderContext, OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
 import { extractMessage, isUnknownOrderError } from "../utils/errors";
 import { formatPriceToString } from "../utils/math";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
@@ -138,6 +138,19 @@ export class TrendEngine {
     this.precision.start();
     this.bootstrap();
   }
+
+  /** Bundles the fixed order-routing state; rebuilt lazily on first use. */
+  private get orderContext(): OrderContext {
+    return (this.orderContextCache ??= {
+      adapter: this.exchange,
+      symbol: this.config.symbol,
+      locks: this.locks,
+      timers: this.timers,
+      pendings: this.pending,
+      log: (type, detail) => this.tradeLog.push(type, detail),
+    });
+  }
+  private orderContextCache: OrderContext | null = null;
 
   start(): void {
     if (this.timer) return;
@@ -490,24 +503,18 @@ export class TrendEngine {
 
   private async submitMarketOrder(side: "BUY" | "SELL", price: number, reason: string): Promise<void> {
     try {
-      await placeMarketOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        this.config.tradeAmount,
-        (type, detail) => this.tradeLog.push(type, detail),
-        false,
-        {
+      await placeMarketOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        amount: this.config.tradeAmount,
+        reduceOnly: false,
+        guard: {
           markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice,
           expectedPrice: Number(this.tickerSnapshot?.lastPrice) || null,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { qtyStep: this.config.qtyStep }
-      );
+        qtyStep: this.config.qtyStep
+      });
       this.tradeLog.push("open", `${reason}: ${side} @ ${price}`);
       this.lastOpenPlan = { side, price };
     } catch (err) {
@@ -748,17 +755,11 @@ export class TrendEngine {
             return { closed: false, pnl };
           }
         }
-        await marketClose(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pending,
-          direction === "long" ? "SELL" : "BUY",
-          Math.abs(position.positionAmt),
-          (type, detail) => this.tradeLog.push(type, detail),
-          {
+        await marketClose(this.orderContext, {
+          openOrders: this.openOrders,
+          side: direction === "long" ? "SELL" : "BUY",
+          quantity: Math.abs(position.positionAmt),
+          guard: {
             markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice,
             expectedPrice: Number(
               direction === "long"
@@ -767,8 +768,8 @@ export class TrendEngine {
             ) || null,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { qtyStep: this.config.qtyStep }
-        );
+          qtyStep: this.config.qtyStep
+        });
         result.closed = true;
         this.tradeLog.push("close", t("log.trend.stopClose", { side: direction === "long" ? "SELL" : "BUY" }));
         // 记录止损时间以便短期内抑制再次入场
@@ -811,24 +812,19 @@ export class TrendEngine {
       if (quantity <= minQty) {
         return;
       }
-      await placeStopLossOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        stopPrice,
-        quantity,
-        lastPrice,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await placeStopLossOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        stopPrice: stopPrice,
+        quantity: quantity,
+        lastPrice: lastPrice,
+        guard: {
           markPrice: position.markPrice,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
       this.lastStopAttempt = { side, price: stopPrice, at: Date.now() };
     } catch (err) {
       this.tradeLog.push("error", t("log.trend.placeStopFail", { error: String(err) }));
@@ -871,24 +867,19 @@ export class TrendEngine {
       if (quantity <= minQty) {
         return;
       }
-      const order = await placeStopLossOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        nextStopPrice,
-        quantity,
-        lastPrice,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      const order = await placeStopLossOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        stopPrice: nextStopPrice,
+        quantity: quantity,
+        lastPrice: lastPrice,
+        guard: {
           markPrice: position.markPrice,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
       if (order) {
         this.tradeLog.push(
           "stop",
@@ -914,24 +905,19 @@ export class TrendEngine {
           (side === "SELL" && existingStopPrice >= lastPrice) ||
           (side === "BUY" && existingStopPrice <= lastPrice);
         if (!restoreInvalid) {
-          const restored = await placeStopLossOrder(
-            this.exchange,
-            this.config.symbol,
-            this.openOrders,
-            this.locks,
-            this.timers,
-            this.pending,
-            side,
-            existingStopPrice,
-            quantity,
-            lastPrice,
-            (t, d) => this.tradeLog.push(t, d),
-            {
+          const restored = await placeStopLossOrder(this.orderContext, {
+            openOrders: this.openOrders,
+            side: side,
+            stopPrice: existingStopPrice,
+            quantity: quantity,
+            lastPrice: lastPrice,
+            guard: {
               markPrice: position.markPrice,
               maxPct: this.config.maxCloseSlippagePct,
             },
-            { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-          );
+            priceTick: this.config.priceTick,
+            qtyStep: this.config.qtyStep
+          });
           if (restored) {
             this.tradeLog.push(
               "order",
@@ -959,24 +945,19 @@ export class TrendEngine {
       return;
     }
     try {
-      await placeTrailingStopOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        activationPrice,
-        quantity,
-        this.config.trailingCallbackRate,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await placeTrailingStopOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        activationPrice: activationPrice,
+        quantity: quantity,
+        callbackRate: this.config.trailingCallbackRate,
+        guard: {
           markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
     } catch (err) {
       this.tradeLog.push("error", t("log.trend.trailingFail", { error: String(err) }));
     }

@@ -10,11 +10,13 @@ import {
   placeOrder,
   placeStopLossOrder,
   unlockOperating,
+  type OrderContext,
   type OrderLockMap,
   type OrderPendingMap,
   type OrderTimerMap,
 } from "../core/order-coordinator";
 import { StrategyEventEmitter } from "./common/event-emitter";
+import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-syncer";
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { clearGridState, loadGridState, saveGridState } from "./common/grid-storage";
 import {
@@ -170,7 +172,7 @@ export class GridEngine {
   private savePending = false;
   private uncoveredQty = 0;
   private desiredOrders: DesiredGridOrder[] = [];
-  private precisionSync: Promise<void> | null = null;
+  private readonly precision: PrecisionSyncer;
 
   constructor(
     private readonly config: GridConfig,
@@ -187,10 +189,24 @@ export class GridEngine {
       this.stopReason = "配置无效，已暂停网格";
       this.log("error", this.stopReason);
     }
-    this.syncPrecision();
+    this.precision = createPrecisionSyncer(this.exchange, this.config, this.config.qtyStep, this.log);
+    this.precision.start();
     this.bootstrap();
     this.setupConnectionProtection();
   }
+
+  /** Bundles the fixed order-routing state; rebuilt lazily on first use. */
+  private get orderContext(): OrderContext {
+    return (this.orderContextCache ??= {
+      adapter: this.exchange,
+      symbol: this.config.symbol,
+      locks: this.locks,
+      timers: this.timers,
+      pendings: this.pendings,
+      log: (type, detail) => this.tradeLog.push(type, detail),
+    });
+  }
+  private orderContextCache: OrderContext | null = null;
 
   start(): void {
     if (this.timer || !this.running) {
@@ -209,6 +225,7 @@ export class GridEngine {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.precision.stop();
   }
 
   on(event: GridEvent, listener: GridListener): void {
@@ -276,37 +293,6 @@ export class GridEngine {
   // -----------------------------------------------------------------------
   // Precision sync
   // -----------------------------------------------------------------------
-
-  private syncPrecision(): void {
-    if (this.precisionSync) return;
-    const getPrecision = this.exchange.getPrecision?.bind(this.exchange);
-    if (!getPrecision) return;
-    this.precisionSync = getPrecision()
-      .then((precision) => {
-        if (!precision) return;
-        let updated = false;
-        if (Number.isFinite(precision.priceTick) && precision.priceTick > 0) {
-          if (Math.abs(precision.priceTick - this.config.priceTick) > 1e-12) {
-            this.config.priceTick = precision.priceTick;
-            updated = true;
-          }
-        }
-        if (Number.isFinite(precision.qtyStep) && precision.qtyStep > 0) {
-          if (Math.abs(precision.qtyStep - this.config.qtyStep) > 1e-12) {
-            this.config.qtyStep = precision.qtyStep;
-            updated = true;
-          }
-        }
-        if (updated) {
-          this.log("info", `已同步交易精度: priceTick=${precision.priceTick} qtyStep=${precision.qtyStep}`);
-        }
-      })
-      .catch((error) => {
-        this.log("error", `同步精度失败: ${extractMessage(error)}`);
-        this.precisionSync = null;
-        setTimeout(() => this.syncPrecision(), 2000);
-      });
-  }
 
   // -----------------------------------------------------------------------
   // Feed subscriptions / connection events
@@ -744,26 +730,16 @@ export class GridEngine {
     const ordersVersionBeforePlace = this.ordersVersion;
     try {
       this.lastLimitAttemptAt = now;
-      placed = await placeOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pendings,
-        action.side,
-        action.price,
-        action.qty,
-        this.log,
-        isEntry ? false : this.config.useReduceOnlyForExit,
-        undefined,
-        {
-          priceTick: this.config.priceTick,
-          qtyStep: this.config.qtyStep,
-          skipDedupe: true,
-          clientOrderId,
-        }
-      );
+      placed = await placeOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: action.side,
+        price: action.price,
+        amount: action.qty,
+        reduceOnly: isEntry ? false : this.config.useReduceOnlyForExit,
+        qtyStep: this.config.qtyStep,
+        skipDedupe: true,
+        clientOrderId,
+      });
     } catch (error) {
       this.log("error", `挂单失败 (${action.side} @ ${action.price}): ${extractMessage(error)}`);
     }
@@ -829,23 +805,17 @@ export class GridEngine {
       }
     }
     try {
-      await marketClose(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pendings,
-        side,
-        qty,
-        this.log,
-        {
+      await marketClose(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        quantity: qty,
+        guard: {
           markPrice: mark,
           expectedPrice: Number.isFinite(closeSidePrice) ? closeSidePrice : null,
           maxPct: limitPct > 0 ? limitPct : undefined,
         },
-        { qtyStep: this.config.qtyStep }
-      );
+        qtyStep: this.config.qtyStep
+      });
       this.log("close", `市价平仓 ${side} ${qty} (${reason})`);
       return true;
     } catch (error) {
@@ -971,21 +941,16 @@ export class GridEngine {
 
     const lastPrice = Number(this.tickerSnapshot?.lastPrice);
     try {
-      const placed = await placeStopLossOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pendings,
-        desired.side,
-        desired.stopPrice,
-        Math.abs(this.position.positionAmt),
-        Number.isFinite(lastPrice) ? lastPrice : price,
-        this.log,
-        undefined,
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+      const placed = await placeStopLossOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: desired.side,
+        stopPrice: desired.stopPrice,
+        quantity: Math.abs(this.position.positionAmt),
+        lastPrice: Number.isFinite(lastPrice) ? lastPrice : price,
+        guard: undefined,
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
       if (placed?.orderId != null) {
         state.exchangeStop = {
           orderId: String(placed.orderId),

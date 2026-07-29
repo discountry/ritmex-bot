@@ -15,7 +15,7 @@ import {
   placeTrailingStopOrder,
   unlockOperating,
 } from "../core/order-coordinator";
-import type { OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
+import type { OrderContext, OrderLockMap, OrderPendingMap, OrderTimerMap } from "../core/order-coordinator";
 import { createTradeLog, type TradeLogEntry } from "../logging/trade-log";
 import { extractMessage, isUnknownOrderError } from "../utils/errors";
 import { formatPriceToString } from "../utils/math";
@@ -75,6 +75,19 @@ export class GuardianEngine {
     this.precision.start();
     this.bootstrap();
   }
+
+  /** Bundles the fixed order-routing state; rebuilt lazily on first use. */
+  private get orderContext(): OrderContext {
+    return (this.orderContextCache ??= {
+      adapter: this.exchange,
+      symbol: this.config.symbol,
+      locks: this.locks,
+      timers: this.timers,
+      pendings: this.pending,
+      log: (type, detail) => this.tradeLog.push(type, detail),
+    });
+  }
+  private orderContextCache: OrderContext | null = null;
 
   start(): void {
     if (this.timer) return;
@@ -390,24 +403,19 @@ export class GuardianEngine {
       if (quantity <= minQty) {
         return;
       }
-      await placeStopLossOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        stopPrice,
-        quantity,
-        lastPrice,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await placeStopLossOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        stopPrice: stopPrice,
+        quantity: quantity,
+        lastPrice: lastPrice,
+        guard: {
           markPrice: position.markPrice,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
       this.lastStopAttempt.side = side;
       this.lastStopAttempt.price = stopPrice;
       this.lastStopAttempt.at = now;
@@ -449,24 +457,19 @@ export class GuardianEngine {
       if (quantity <= minQty) {
         return;
       }
-      const order = await placeStopLossOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        nextStopPrice,
-        quantity,
-        lastPrice,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      const order = await placeStopLossOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        stopPrice: nextStopPrice,
+        quantity: quantity,
+        lastPrice: lastPrice,
+        guard: {
           markPrice: position.markPrice,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
       if (order) {
         this.tradeLog.push(
           "stop",
@@ -484,24 +487,19 @@ export class GuardianEngine {
         if (quantity <= minQty) {
           return;
         }
-        const restored = await placeStopLossOrder(
-          this.exchange,
-          this.config.symbol,
-          this.openOrders,
-          this.locks,
-          this.timers,
-          this.pending,
-          side,
-          Number.isFinite(existingStopPrice) ? existingStopPrice : nextStopPrice,
-          quantity,
-          lastPrice,
-          (type, detail) => this.tradeLog.push(type, detail),
-          {
+        const restored = await placeStopLossOrder(this.orderContext, {
+          openOrders: this.openOrders,
+          side: side,
+          stopPrice: Number.isFinite(existingStopPrice) ? existingStopPrice : nextStopPrice,
+          quantity: quantity,
+          lastPrice: lastPrice,
+          guard: {
             markPrice: position.markPrice,
             maxPct: this.config.maxCloseSlippagePct,
           },
-          { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-        );
+          priceTick: this.config.priceTick,
+          qtyStep: this.config.qtyStep
+        });
         if (restored && Number.isFinite(existingStopPrice)) {
           this.tradeLog.push(
             "order",
@@ -525,24 +523,19 @@ export class GuardianEngine {
       return;
     }
     try {
-      await placeTrailingStopOrder(
-        this.exchange,
-        this.config.symbol,
-        this.openOrders,
-        this.locks,
-        this.timers,
-        this.pending,
-        side,
-        activationPrice,
-        quantity,
-        this.config.trailingCallbackRate,
-        (type, detail) => this.tradeLog.push(type, detail),
-        {
+      await placeTrailingStopOrder(this.orderContext, {
+        openOrders: this.openOrders,
+        side: side,
+        activationPrice: activationPrice,
+        quantity: quantity,
+        callbackRate: this.config.trailingCallbackRate,
+        guard: {
           markPrice: getPosition(this.accountSnapshot, this.config.symbol).markPrice,
           maxPct: this.config.maxCloseSlippagePct,
         },
-        { priceTick: this.config.priceTick, qtyStep: this.config.qtyStep }
-      );
+        priceTick: this.config.priceTick,
+        qtyStep: this.config.qtyStep
+      });
     } catch (err) {
       this.tradeLog.push("error", t("log.guardian.trailingFail", { error: String(err) }));
     }
