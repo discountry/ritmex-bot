@@ -6,6 +6,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 
 If you'd like to support this project and get fee discounts, please consider using these referral links:
 
+* [Lighter Robinhood Chain referral link](https://robinhoodchain.lighter.xyz/?referral=RITMEX) — 10% bonus points
 * [Lighter referral link](https://app.lighter.xyz/?referral=RITMEX)
 * [Hyperliquid referral link](https://app.hyperliquid.xyz/join/RITMEX)
 * [Ondo Perps referral link](https://app.ondoperps.xyz/?ref=4A3ACQ)

@@ -34,13 +34,12 @@ import type {
 } from "./types";
 import {
   DEFAULT_AUTH_TOKEN_BUFFER_MS,
-  DEFAULT_LIGHTER_ENVIRONMENT,
-  LIGHTER_HOSTS,
   LIGHTER_ORDER_TYPE,
   LIGHTER_TIME_IN_FORCE,
   IMMEDIATE_OR_CANCEL_EXPIRY_PLACEHOLDER,
   type LighterEnvironment,
 } from "./constants";
+import { resolveLighterNetwork, type LighterNetworkResolution } from "./network";
 import { decimalToScaled, scaledToDecimalString, scaleQuantityWithMinimum } from "./decimal";
 import { lighterOrderToAster, toAccountSnapshot, toDepth, toKlines, toOrders, toTicker } from "./mappers";
 import { normalizeOrderIdentity, orderIdentityEquals } from "./order-identity";
@@ -75,47 +74,6 @@ function createEvent<T>(): SimpleEvent<T> {
       return listeners.size;
     },
   };
-}
-
-function isLighterEnvironment(value: string | undefined | null): value is LighterEnvironment {
-  if (!value) return false;
-  return Object.prototype.hasOwnProperty.call(LIGHTER_HOSTS, value);
-}
-
-function detectEnvironmentFromUrl(baseUrl: string | undefined | null): LighterEnvironment | null {
-  if (!baseUrl) return null;
-  const matchHost = (host: string): LighterEnvironment | null => {
-    for (const [env, config] of Object.entries(LIGHTER_HOSTS)) {
-      try {
-        const restHost = new URL(config.rest).hostname.toLowerCase();
-        if (restHost === host) {
-          return env as LighterEnvironment;
-        }
-      } catch {
-        // ignore invalid config URLs
-      }
-    }
-    if (host.includes("mainnet")) return "mainnet";
-    if (host.includes("testnet")) return "testnet";
-    if (host.includes("staging")) return "staging";
-    if (host.includes("dev")) return "dev";
-    return null;
-  };
-
-  try {
-    const parsed = new URL(baseUrl);
-    return matchHost(parsed.hostname.toLowerCase());
-  } catch {
-    return matchHost(baseUrl.toLowerCase());
-  }
-}
-
-function inferEnvironment(envOption: string | undefined, baseUrl?: string | null): LighterEnvironment {
-  if (isLighterEnvironment(envOption)) {
-    return envOption;
-  }
-  const detected = detectEnvironmentFromUrl(baseUrl ?? undefined);
-  return detected ?? DEFAULT_LIGHTER_ENVIRONMENT;
 }
 
 interface Pollers {
@@ -181,8 +139,34 @@ const TERMINAL_ORDER_STATUSES = new Set([
   "canceled-reduce-only",
 ]);
 
-const KNOWN_SPOT_MARKETS: Record<string, { marketId: number; base: string; quote: string; priceDecimals?: number; sizeDecimals?: number }> = {
-  ETHUSDC: { marketId: 2048, base: "ETH", quote: "USDC", priceDecimals: 2, sizeDecimals: 4 },
+interface SpotMarketPreset {
+  marketId: number;
+  base: string;
+  quote: string;
+  priceDecimals?: number;
+  sizeDecimals?: number;
+}
+
+/**
+ * Market ids are per-deployment, so presets are keyed by environment first — reusing a mainnet
+ * id on Robinhood Chain would silently trade a different instrument.
+ */
+const KNOWN_SPOT_MARKETS: Partial<Record<LighterEnvironment, Record<string, SpotMarketPreset>>> = {
+  mainnet: {
+    ETHUSDC: { marketId: 2048, base: "ETH", quote: "USDC", priceDecimals: 2, sizeDecimals: 4 },
+  },
+  rh: {
+    ETHUSDG: { marketId: 2048, base: "ETH", quote: "USDG", priceDecimals: 2, sizeDecimals: 4 },
+  },
+};
+
+/**
+ * Which deployment lists a given spot symbol. Used only to pick an environment when the user
+ * supplied neither LIGHTER_ENV nor LIGHTER_BASE_URL, since the default is testnet.
+ */
+const SPOT_PRESET_ENVIRONMENTS: Record<string, LighterEnvironment> = {
+  ETHUSDC: "mainnet",
+  ETHUSDG: "rh",
 };
 
 export interface LighterGatewayOptions {
@@ -191,7 +175,9 @@ export interface LighterGatewayOptions {
   accountIndex: number;
   apiKeys: Record<number, string>;
   baseUrl?: string;
-  environment?: keyof typeof LIGHTER_HOSTS;
+  /** Canonical name or alias; see LIGHTER_ENVIRONMENT_ALIASES. */
+  environment?: string;
+  wsUrl?: string;
   marketId?: number;
   priceDecimals?: number;
   sizeDecimals?: number;
@@ -211,7 +197,9 @@ export class LighterGateway {
   private readonly nonceManager: HttpNonceManager;
   private readonly logger: (context: string, error: unknown) => void;
   private readonly apiKeyIndices: number[];
-  private readonly environment: keyof typeof LIGHTER_HOSTS;
+  private readonly network: LighterNetworkResolution;
+  private readonly environment: LighterEnvironment | null;
+  private networkVerified = false;
   private readonly pollers: Pollers = { ticker: undefined, klines: new Map() };
   private accountPoller: ReturnType<typeof setInterval> | null = null;
   private accountPollInFlight = false;
@@ -236,6 +224,8 @@ export class LighterGateway {
   private forcedSpotPreset = false;
 
   private marketId: number | null = null;
+  /** Exact symbol as listed by the venue (e.g. `ETH/USDG`), used to match stats payloads. */
+  private resolvedMarketSymbol: string | null = null;
   private marketType: "perp" | "spot" | null = null;
   private priceDecimals: number | null = null;
   private sizeDecimals: number | null = null;
@@ -295,40 +285,43 @@ export class LighterGateway {
     const parsedSymbols = parseBaseQuote(this.marketSymbol);
     this.baseAssetSymbol = parsedSymbols.base ?? null;
     this.quoteAssetSymbol = parsedSymbols.quote ?? null;
-    this.applyPresetMarket();
-    if (process.env.LIGHTER_MARKET_ID) {
-      this.marketId = Number(process.env.LIGHTER_MARKET_ID);
-    }
+
+    // Explicit overrides are applied before presets so a preset can only fill a gap, never
+    // overwrite what the operator asked for.
+    this.marketId =
+      options.marketId != null
+        ? Number(options.marketId)
+        : process.env.LIGHTER_MARKET_ID
+          ? Number(process.env.LIGHTER_MARKET_ID)
+          : null;
+    this.priceDecimals = options.priceDecimals ?? null;
+    this.sizeDecimals = options.sizeDecimals ?? null;
     if (process.env.LIGHTER_MARKET_TYPE) {
       this.marketType = normalizeMarketType(process.env.LIGHTER_MARKET_TYPE) ?? this.marketType;
     }
-    const envPreference =
-      options.environment ??
-      process.env.LIGHTER_ENV ??
-      (this.forcedSpotPreset && !options.baseUrl ? "mainnet" : undefined);
-    this.environment = inferEnvironment(envPreference, options.baseUrl);
-    const host = options.baseUrl ?? LIGHTER_HOSTS[this.environment]?.rest;
-    if (!host) {
-      throw new Error(`Unknown Lighter environment ${this.environment}`);
-    }
-    if (process.env.LIGHTER_DEBUG === "1" || process.env.LIGHTER_DEBUG === "true") {
-      // eslint-disable-next-line no-console
-      console.error(
-        "[LighterGateway] init",
-        JSON.stringify({ env: this.environment, host, marketId: this.marketId, marketType: this.marketType })
-      );
-    }
-    const wsHost = LIGHTER_HOSTS[this.environment]?.ws;
-    if (!wsHost) {
-      throw new Error(`WebSocket endpoint not configured for env ${this.environment}`);
-    }
-    this.wsUrl = wsHost;
-    this.http = new LighterHttpClient({ baseUrl: host });
+
+    const baseUrl = options.baseUrl ?? process.env.LIGHTER_BASE_URL ?? undefined;
+    // A spot-only symbol implies its venue, but only when nothing more explicit was given —
+    // otherwise the default (testnet) would be picked for a market that does not exist there.
+    const presetEnvHint = SPOT_PRESET_ENVIRONMENTS[normalizeSymbolKey(this.marketSymbol)];
+    this.network = resolveLighterNetwork({
+      environment: options.environment ?? process.env.LIGHTER_ENV ?? (baseUrl ? undefined : presetEnvHint),
+      baseUrl,
+      wsUrl: options.wsUrl ?? process.env.LIGHTER_WS_URL,
+      chainId: options.chainId,
+    });
+    this.environment = this.network.environment;
+
+    // Market ids are per-deployment, so presets can only be applied once the venue is known.
+    this.applyPresetMarket();
+
+    this.wsUrl = this.network.wsUrl;
+    this.http = new LighterHttpClient({ baseUrl: this.network.restUrl });
     this.signer = new LighterSigner({
       accountIndex: options.accountIndex,
-      chainId: options.chainId ?? (this.environment === "mainnet" ? 304 : 300),
+      chainId: this.network.chainId,
       apiKeys: options.apiKeys,
-      baseUrl: host,
+      baseUrl: this.network.restUrl,
     });
     this.apiKeyIndices = options.apiKeyIndices ?? Object.keys(options.apiKeys).map(Number);
     if (this.forcedSpotPreset && this.apiKeyIndices.length > 1) {
@@ -347,9 +340,6 @@ export class LighterGateway {
         console.error(`[LighterGateway] ${context}`, error);
       }
     });
-    this.marketId = options.marketId != null ? Number(options.marketId) : null;
-    this.priceDecimals = options.priceDecimals ?? null;
-    this.sizeDecimals = options.sizeDecimals ?? null;
     this.tickerPollMs = options.tickerPollMs ?? DEFAULT_TICKER_POLL_MS;
     this.klinePollMs = options.klinePollMs ?? DEFAULT_KLINE_POLL_MS;
     this.l1Address = options.l1Address ?? null;
@@ -359,6 +349,16 @@ export class LighterGateway {
     this.lastOrdersUpdateAt = now;
     this.lastAccountUpdateAt = now;
     this.lastTickerUpdateAt = now;
+    this.announceNetwork();
+  }
+
+  /** One line so an operator can confirm which venue the bot actually attached to. */
+  private announceNetwork(): void {
+    // eslint-disable-next-line no-console
+    console.error(
+      `[Lighter] env=${this.environment ?? "custom"} rest=${this.network.restUrl} ws=${this.network.wsUrl} ` +
+        `chainId=${this.network.chainId} account=${Number(this.signer.accountIndex)}`
+    );
   }
 
   async ensureInitialized(): Promise<void> {
@@ -520,16 +520,64 @@ export class LighterGateway {
     this.startStaleMonitor();
   }
 
+  /**
+   * Proves the REST host really is the deployment the config claims, before a single order is
+   * signed. The signing chain id is not exposed by any endpoint, so it can only be validated
+   * indirectly: `layer1BasicInfo` carries the L1 chain id and the ZkLighter contract address,
+   * both unique per deployment. A mismatch means REST, websocket and chain id have drifted
+   * apart — every transaction would be signed for the wrong chain — so it fails closed.
+   */
+  private async verifyNetworkIdentity(): Promise<void> {
+    if (this.networkVerified) return;
+    const { expectedL1ChainId, expectedZkLighterContract } = this.network;
+    if (expectedL1ChainId == null && expectedZkLighterContract == null) {
+      this.networkVerified = true;
+      return;
+    }
+    let info: Awaited<ReturnType<LighterHttpClient["getLayer1BasicInfo"]>>;
+    try {
+      info = await this.http.getLayer1BasicInfo();
+    } catch (error) {
+      // An auxiliary endpoint being unreachable must not block trading; the real calls will
+      // surface a connectivity problem on their own.
+      this.logger("verifyNetwork", error);
+      return;
+    }
+    const actualL1ChainId = info.l1_providers?.[0]?.chainId ?? null;
+    const actualContract =
+      info.contract_addresses?.find((entry) => entry.name === "ZkLighterContract")?.address ?? null;
+
+    const mismatches: string[] = [];
+    if (expectedL1ChainId != null && actualL1ChainId != null && actualL1ChainId !== expectedL1ChainId) {
+      mismatches.push(`L1 chainId ${actualL1ChainId} (expected ${expectedL1ChainId})`);
+    }
+    if (
+      expectedZkLighterContract &&
+      actualContract &&
+      actualContract.toLowerCase() !== expectedZkLighterContract.toLowerCase()
+    ) {
+      mismatches.push(`ZkLighter contract ${actualContract} (expected ${expectedZkLighterContract})`);
+    }
+    if (mismatches.length) {
+      throw new Error(
+        `Lighter network mismatch: ${this.network.restUrl} reports ${mismatches.join(" and ")}. ` +
+          `Config claims env=${this.environment ?? "custom"} (signing chainId ${this.network.chainId}). ` +
+          `Fix LIGHTER_ENV / LIGHTER_BASE_URL before trading.`
+      );
+    }
+    this.networkVerified = true;
+  }
+
   private async loadMetadata(): Promise<void> {
+    await this.verifyNetworkIdentity();
     const books = await this.http.getOrderBooks();
     const desiredSymbol = this.marketSymbol;
     const wantsSpot = guessMarketType(desiredSymbol) === "spot" || this.marketType === "spot";
     this.logger("loadMetadata", { desiredSymbol, wantsSpot, presetMarketId: this.marketId, bookCount: books.length });
     let target: LighterOrderBookMetadata | null = null;
 
-    if (!this.marketId && wantsSpot) {
-      const normalized = desiredSymbol.toUpperCase().replace(/[^A-Z0-9]/g, "");
-      const preset = KNOWN_SPOT_MARKETS[normalized];
+    if (!this.marketId && wantsSpot && this.environment) {
+      const preset = KNOWN_SPOT_MARKETS[this.environment]?.[normalizeSymbolKey(desiredSymbol)];
       if (preset) {
         this.marketId = preset.marketId;
         this.baseAssetSymbol = this.baseAssetSymbol ?? preset.base;
@@ -550,8 +598,11 @@ export class LighterGateway {
         target = spotById ?? null;
       }
       if (!target) {
+        // Market ids are per-deployment, so a stale id carried over from another venue is the
+        // most likely cause here.
         throw new Error(
-          `Configured market id ${this.marketId} not found in Lighter order books. Check LIGHTER_ENV/baseUrl matches the venue that lists spot ETH/USDC (e.g., mainnet).`
+          `Configured market id ${this.marketId} not found on ${this.environment ?? this.network.restUrl}. ` +
+            `Market ids differ per deployment — clear LIGHTER_MARKET_ID or set one listed by this venue.`
         );
       }
     }
@@ -574,7 +625,9 @@ export class LighterGateway {
         `Expected spot market for ${desiredSymbol}, but resolved to market_id=${target.market_id} type=${target.market_type ?? "unknown"}`
       );
     }
+    this.assertUnitMultiplier(target);
     this.marketId = Number(target.market_id);
+    this.resolvedMarketSymbol = target.symbol ?? null;
     this.marketType = normalizeMarketType(target.market_type) ?? this.marketType ?? guessMarketType(target.symbol);
     this.baseAssetId = target.base_asset_id ?? this.baseAssetId;
     this.quoteAssetId = target.quote_asset_id ?? this.quoteAssetId;
@@ -594,6 +647,31 @@ export class LighterGateway {
     if (wantsSpot && this.marketType !== "spot") {
       throw new Error(`Expected spot market for ${desiredSymbol}, but resolved to ${target.market_type ?? "unknown"}`);
     }
+  }
+
+  /**
+   * Robinhood Chain lists a few tokenized-equity markets whose contract `multiplier` is not 1
+   * (corporate actions / accrued yield). Size and price scaling here assumes 1.0, so those
+   * markets are refused rather than traded with quietly wrong quantities. Override only if you
+   * have verified the scaling yourself.
+   */
+  private assertUnitMultiplier(book: LighterOrderBookMetadata): void {
+    const raw = book.multiplier;
+    if (raw == null) return;
+    const multiplier = Number(raw);
+    if (!Number.isFinite(multiplier) || Math.abs(multiplier - 1) < 1e-9) return;
+    if (process.env.LIGHTER_ALLOW_NON_UNIT_MULTIPLIER === "1" || process.env.LIGHTER_ALLOW_NON_UNIT_MULTIPLIER === "true") {
+      this.logger(
+        "loadMetadata",
+        `market ${book.symbol} has multiplier ${raw}; order sizing assumes 1.0 and may be off`
+      );
+      return;
+    }
+    throw new Error(
+      `Lighter market ${book.symbol} (id=${book.market_id}) has contract multiplier ${raw}, not 1.0. ` +
+        `Order size/price scaling assumes 1.0, so trading it could size positions incorrectly. ` +
+        `Set LIGHTER_ALLOW_NON_UNIT_MULTIPLIER=1 to proceed anyway.`
+    );
   }
 
   private async refreshAccountSnapshot(): Promise<void> {
@@ -927,8 +1005,7 @@ export class LighterGateway {
       desiredSymbol.includes("/") ||
       desiredSymbol.includes("-") ||
       desiredSymbol.includes(":") ||
-      normalizedDesired.includes("USDC") ||
-      normalizedDesired.endsWith("USD");
+      SPOT_QUOTE_SUFFIXES.some((suffix) => normalizedDesired.includes(suffix));
     const preferred = candidates.filter((book) =>
       wantsSpot ? normalizeMarketType(book.market_type) === "spot" : true
     );
@@ -1471,7 +1548,8 @@ export class LighterGateway {
 
   private extractMarketIdFromChannel(channel: unknown): number | null {
     if (typeof channel !== "string") return null;
-    const match = channel.match(/account_market:(\d+)/);
+    // Subscriptions use `account_market/{market}/{account}`; echoes may come back colon-separated.
+    const match = channel.match(/account_market[:/](\d+)/);
     if (match && match[1]) {
       const value = Number(match[1]);
       return Number.isFinite(value) ? value : null;
@@ -1513,7 +1591,9 @@ export class LighterGateway {
         marketId: this.marketId,
         marketType: this.marketType ?? guessMarketType(this.marketSymbol),
         baseAssetSymbol: this.baseAssetSymbol,
-        quoteAssetSymbol: this.quoteAssetSymbol,
+        // Falls back to the venue's settlement asset (USDG on rh, USDC elsewhere) so the
+        // dashboard never labels a balance with the wrong currency.
+        quoteAssetSymbol: this.quoteAssetSymbol ?? this.network.defaultQuoteAsset,
         baseAssetId: this.baseAssetId,
         quoteAssetId: this.quoteAssetId,
       }
@@ -1661,10 +1741,17 @@ export class LighterGateway {
       const stats = await this.http.getExchangeStats();
       const marketId = this.marketId;
       if (marketId == null) return;
-      const match = stats.find(
-        (entry) => Number(entry.market_id) === marketId || (entry.symbol ? entry.symbol.toUpperCase() : "") === this.marketSymbol
-      );
+      // Neither mainnet nor rh returns market_id in this payload today, so matching falls back
+      // to the exact venue symbol. Compared delimiter-free (`ETH/USDG` vs `ETHUSDG`) but never
+      // by base alone, which would let the ETH perp masquerade as the ETH/USDG spot market.
+      const desiredKey = normalizeSymbolKey(this.resolvedMarketSymbol ?? this.marketSymbol);
+      const match = stats.find((entry) => {
+        if (entry.market_id != null && Number(entry.market_id) === marketId) return true;
+        return entry.symbol ? normalizeSymbolKey(entry.symbol) === desiredKey : false;
+      });
       if (!match) return;
+      // Cached so estimateMarketPrice has a last-trade fallback when the book is empty.
+      this.ticker = match;
       const ticker = toTicker(this.displaySymbol, match);
       this.tickerEvent.emit(ticker);
       this.loggedCreateOrderPayload = false;
@@ -1783,8 +1870,9 @@ export class LighterGateway {
   }
 
   private applyPresetMarket(): void {
-    const normalized = (this.marketSymbol ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const preset = KNOWN_SPOT_MARKETS[normalized];
+    if (!this.environment) return;
+    const normalized = normalizeSymbolKey(this.marketSymbol);
+    const preset = KNOWN_SPOT_MARKETS[this.environment]?.[normalized];
     if (!preset) return;
     if (this.marketId == null) this.marketId = preset.marketId;
     if (!this.baseAssetSymbol) this.baseAssetSymbol = preset.base;
@@ -2192,10 +2280,19 @@ function normalizeMarketType(value: string | null | undefined): "perp" | "spot" 
   return undefined;
 }
 
+/**
+ * Quote assets that mark a compact symbol as spot. Deliberately excludes bare "USD": mainnet
+ * lists forex perps such as NZDUSD that would otherwise be mistaken for spot pairs.
+ */
+const SPOT_QUOTE_SUFFIXES = ["USDC", "USDG"];
+
 function guessMarketType(symbol: string | null | undefined): "perp" | "spot" | null {
   if (!symbol) return null;
   const upper = symbol.toUpperCase();
-  if (upper.includes("/") || upper.includes("-") || upper.includes(":") || upper.endsWith("USDC")) {
+  if (upper.includes("/") || upper.includes("-") || upper.includes(":")) {
+    return "spot";
+  }
+  if (SPOT_QUOTE_SUFFIXES.some((suffix) => upper.endsWith(suffix))) {
     return "spot";
   }
   return null;
@@ -2222,6 +2319,11 @@ function tryParseTxInfo(value: string): unknown {
   } catch {
     return value;
   }
+}
+
+/** Delimiter-free upper-case form, e.g. `ETH/USDG` and `eth-usdg` both become `ETHUSDG`. */
+function normalizeSymbolKey(value: string | null | undefined): string {
+  return (value ?? "").toUpperCase().replace(/[^A-Z0-9]/g, "");
 }
 
 function normalizeSymbolForms(value: string | null | undefined): string[] {

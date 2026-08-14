@@ -144,6 +144,8 @@ export interface LighterOrderBookMetadata {
   supported_price_decimals: number;
   supported_quote_decimals: number;
   status: "inactive" | "frozen" | "active" | string;
+  /** Contract multiplier; "1.0" everywhere except a few tokenized-equity markets on rh. */
+  multiplier?: string;
 }
 
 export interface LighterAccountMarketUpdate {

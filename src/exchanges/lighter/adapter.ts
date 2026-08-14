@@ -22,6 +22,7 @@ export interface LighterCredentials {
   apiKeyIndex?: number;
   environment?: string;
   baseUrl?: string;
+  wsUrl?: string;
   marketId?: number;
   priceDecimals?: number;
   sizeDecimals?: number;
@@ -60,7 +61,8 @@ export class LighterExchangeAdapter implements ExchangeAdapter {
       accountIndex,
       apiKeys,
       baseUrl: credentials.baseUrl ?? process.env.LIGHTER_BASE_URL,
-      environment: environment as LighterGatewayOptions["environment"],
+      environment,
+      wsUrl: credentials.wsUrl ?? process.env.LIGHTER_WS_URL,
       marketId,
       priceDecimals,
       sizeDecimals,

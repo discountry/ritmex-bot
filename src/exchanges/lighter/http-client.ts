@@ -4,7 +4,7 @@ import type {
   LighterMarketStats,
   LighterOrderBookMetadata,
 } from "./types";
-import { DEFAULT_LIGHTER_ENVIRONMENT, LIGHTER_HOSTS } from "./constants";
+import { DEFAULT_LIGHTER_ENVIRONMENT, LIGHTER_HOSTS, LIGHTER_NETWORKS } from "./constants";
 
 interface ApiResponseBase {
   code: number;
@@ -36,6 +36,11 @@ interface ExchangeStatsResponse extends ApiResponseBase {
 
 interface NextNonceResponse extends ApiResponseBase {
   nonce: number;
+}
+
+export interface Layer1BasicInfo extends ApiResponseBase {
+  l1_providers?: Array<{ chainId?: number; networkId?: number }>;
+  contract_addresses?: Array<{ name?: string; address?: string }>;
 }
 
 export interface SendTxResponse extends ApiResponseBase {
@@ -78,7 +83,7 @@ export class LighterHttpClient {
 
   constructor(options: LighterHttpClientOptions = {}) {
     const env = options.environment ?? DEFAULT_LIGHTER_ENVIRONMENT;
-    const host = options.baseUrl ?? LIGHTER_HOSTS[env]?.rest;
+    const host = options.baseUrl ?? LIGHTER_NETWORKS[env]?.rest;
     if (!host) {
       throw new Error(`Unknown Lighter environment: ${env}`);
     }
@@ -95,25 +100,31 @@ export class LighterHttpClient {
     return response.order_books ?? [];
   }
 
+  async getLayer1BasicInfo(): Promise<Layer1BasicInfo> {
+    return this.get<Layer1BasicInfo>("/api/v1/layer1BasicInfo");
+  }
+
   async getExchangeStats(): Promise<LighterMarketStats[]> {
     const response = await this.get<ExchangeStatsResponse>("/api/v1/exchangeStats");
     const stats = response.order_book_stats ?? [];
+    // Both mainnet and rh return prices as JSON numbers here while the shared types (and the
+    // Ticker contract) declare strings, so normalize instead of leaking numbers downstream.
     return stats.map((entry) => ({
       market_id: entry.market_id,
       symbol: entry.symbol,
       market_type: (entry as any).market_type,
-      index_price: (entry as any).index_price ?? entry.mark_price ?? entry.last_trade_price,
-      mid_price: (entry as any).mid_price,
-      mark_price: entry.mark_price ?? (entry as any).mid_price ?? entry.last_trade_price,
-      last_trade_price: entry.last_trade_price,
-      open_interest: (entry as any).open_interest ?? "0",
+      index_price: toPriceString((entry as any).index_price ?? entry.mark_price ?? entry.last_trade_price) ?? "0",
+      mid_price: toPriceString((entry as any).mid_price),
+      mark_price: toPriceString(entry.mark_price ?? (entry as any).mid_price ?? entry.last_trade_price),
+      last_trade_price: toPriceString(entry.last_trade_price) ?? "0",
+      open_interest: toPriceString((entry as any).open_interest) ?? "0",
       daily_base_token_volume: entry.daily_base_token_volume,
       daily_quote_token_volume: entry.daily_quote_token_volume,
       daily_price_low: entry.daily_price_low,
       daily_price_high: entry.daily_price_high,
       daily_price_change: entry.daily_price_change,
-      current_funding_rate: entry.current_funding_rate,
-      funding_rate: entry.funding_rate,
+      current_funding_rate: toPriceString(entry.current_funding_rate),
+      funding_rate: toPriceString(entry.funding_rate),
       funding_timestamp: entry.funding_timestamp,
     }));
   }
@@ -292,4 +303,11 @@ export class LighterHttpClient {
 
 function truncateBody(body: string, limit = 200): string {
   return body.length > limit ? `${body.slice(0, limit)}…` : body;
+}
+
+function toPriceString(value: unknown): string | undefined {
+  if (value == null) return undefined;
+  if (typeof value === "string") return value;
+  if (typeof value === "number") return Number.isFinite(value) ? String(value) : undefined;
+  return undefined;
 }

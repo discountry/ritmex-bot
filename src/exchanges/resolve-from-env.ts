@@ -84,6 +84,8 @@ function resolveLighterCredentials(symbol: string): LighterCredentials {
     apiKeyIndex: process.env.LIGHTER_API_KEY_INDEX ? Number(process.env.LIGHTER_API_KEY_INDEX) : 0,
     environment: process.env.LIGHTER_ENV,
     baseUrl: process.env.LIGHTER_BASE_URL,
+    wsUrl: process.env.LIGHTER_WS_URL,
+    chainId: process.env.LIGHTER_CHAIN_ID ? Number(process.env.LIGHTER_CHAIN_ID) : undefined,
     l1Address: process.env.LIGHTER_L1_ADDRESS,
     marketSymbol: process.env.LIGHTER_SYMBOL,
     marketId: process.env.LIGHTER_MARKET_ID ? Number(process.env.LIGHTER_MARKET_ID) : undefined,

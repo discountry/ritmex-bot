@@ -10,6 +10,7 @@ A Bun-powered multi-exchange perpetuals workstation that ships an SMA30 trend en
 
 如果您希望获取优惠并支持本项目，请考虑使用以下注册链接：
 
+* [Lighter Robinhood Chain 注册链接](https://robinhoodchain.lighter.xyz/?referral=RITMEX) —— 额外 10% 积分加成
 * [Lighter 手续费优惠注册链接](https://app.lighter.xyz/?referral=RITMEX)
 * [Hyperliquid 邀请注册链接](https://app.hyperliquid.xyz/join/RITMEX)
 * [Ondo Perps 邀请注册链接](https://app.ondoperps.xyz/?ref=4A3ACQ)
