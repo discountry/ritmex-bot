@@ -243,6 +243,10 @@ const translations: Record<string, TranslationEntry> = {
     zh: "交易所: {exchange} ｜ 交易对: {symbol} ｜ 买一价: {bid} ｜ 卖一价: {ask} ｜ 点差: {spread}",
     en: "Exchange: {exchange} | Symbol: {symbol} | Best Bid: {bid} | Best Ask: {ask} | Spread: {spread}",
   },
+  "makerPoints.markLine": {
+    zh: "计分基准 Mark: {mark} ｜ 100bps 外倍率归零，超过 {maxDistance}bps 不再挂单",
+    en: "Scoring anchor (mark): {mark} | zero multiplier beyond 100bps; quotes capped at {maxDistance}bps",
+  },
   "makerPoints.quoteLine": {
     zh: "挂单模式: {mode} ｜ BUY {buy} ｜ SELL {sell}",
     en: "Quote mode: {mode} | BUY {buy} | SELL {sell}",
@@ -252,9 +256,10 @@ const translations: Record<string, TranslationEntry> = {
     en: "Binance depth (±{windowBps}bps): bid {buy} | ask {sell} | Status: {status}",
   },
   "makerPoints.bandDepthLine": {
-    zh: "StandX 档位 {band}bps 深度: 买 {buy} ｜ 卖 {sell}",
-    en: "StandX band {band}bps depth: buy {buy} | sell {sell}",
+    zh: "档位 {band} 目标 {target}bps ｜ 买 {buyDist} ×{buyMult} 深度 {buy} ｜ 卖 {sellDist} ×{sellMult} 深度 {sell}",
+    en: "Band {band} target {target}bps | buy {buyDist} ×{buyMult} depth {buy} | sell {sellDist} ×{sellMult} depth {sell}",
   },
+  "makerPoints.bandDisabled": { zh: "（已关闭）", en: " (off)" },
   "makerPoints.mode.closeOnly": { zh: "平仓", en: "Close only" },
   "makerPoints.mode.normal": { zh: "正常", en: "Normal" },
   "makerPoints.feed.binance": { zh: "Binance", en: "Binance" },

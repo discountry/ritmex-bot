@@ -35,7 +35,16 @@ import { createPrecisionSyncer, type PrecisionSyncer } from "./common/precision-
 import { safeSubscribe, type LogHandler } from "./common/subscriptions";
 import { SessionVolumeTracker } from "./common/session-volume";
 import { BinanceDepthTracker, type BinanceDepthSnapshot } from "./common/binance-depth";
-import { buildBpsTargets } from "./maker-points-logic";
+import {
+  bandRepriceToleranceBps,
+  buildBandTargets,
+  makerPointsMultiplier,
+  resolveSafeQuotePrice,
+  shouldKeepQuote,
+  signedDistanceBps,
+  type BandTarget,
+  type MakerPointsBand,
+} from "./maker-points-logic";
 import { t } from "../i18n";
 import { IsolatedMarginGuard } from "./common/isolated-margin-guard";
 import { TokenExpiryGuard } from "./common/token-expiry-guard";
@@ -52,11 +61,28 @@ interface DesiredOrder {
   reduceOnly: boolean;
 }
 
+export interface BandStatus {
+  band: MakerPointsBand;
+  /** 该档位配置的目标距离（bps，距 mark price）。 */
+  bps: number;
+  enabled: boolean;
+  /** 盘口一档到目标价之间的挂单量，用于判断被吃穿的风险。 */
+  buyDepth: number | null;
+  sellDepth: number | null;
+  /** 实际在场挂单距 mark 的距离；无挂单时为 null。 */
+  buyDistanceBps: number | null;
+  sellDistanceBps: number | null;
+  /** 上述实际距离对应的 Maker Points 倍率。 */
+  buyMultiplier: number | null;
+  sellMultiplier: number | null;
+}
+
 export interface MakerPointsSnapshot {
   ready: boolean;
   symbol: string;
   topBid: number | null;
   topAsk: number | null;
+  markPrice: number | null;
   spread: number | null;
   priceDecimals: number;
   position: PositionSnapshot;
@@ -75,13 +101,11 @@ export interface MakerPointsSnapshot {
     binance: boolean;
   };
   binanceDepth: BinanceDepthSnapshot | null;
-  bandDepths: Array<{
-    band: "0-10" | "10-30" | "30-100";
-    bps: number;
-    buyDepth: number | null;
-    sellDepth: number | null;
-    enabled: boolean;
-  }>;
+  /** 配置的最大挂单距离（bps），用于仪表盘提示与 100bps 悬崖的安全边际。 */
+  maxDistanceBps: number;
+  bandDepths: BandStatus[];
+  /** 每个在场挂单已在盘口停留的毫秒数；Maker Points 要求超过 3 秒才计分。 */
+  orderRestingMs: Record<string, number>;
   quoteStatus: {
     closeOnly: boolean;
     skipBuy: boolean;
@@ -134,10 +158,10 @@ export class MakerPointsEngine {
   private lastCloseOnly = false;
   private lastSkipBuy = false;
   private lastSkipSell = false;
-  private lastQuoteBid1: number | null = null;
-  private lastQuoteAsk1: number | null = null;
   // 跟踪各档位深度是否足够的状态 (按 bps 值索引)
   private lastDepthOkStatus: Record<number, { buy: boolean; sell: boolean }> = {};
+  /** 最近一轮实际下发的报价距 mark 的距离，用于仪表盘展示倍率。 */
+  private lastQuoteDistanceBps: Partial<Record<MakerPointsBand, { buy: number | null; sell: number | null }>> = {};
 
   private readinessLogged = {
     account: false,
@@ -549,8 +573,7 @@ export class MakerPointsEngine {
       unlockOperating(this.locks, this.timers, this.pending, "LIMIT");
 
       // 重置 reprice 基准，强制下一次重新计算
-      this.lastQuoteBid1 = null;
-      this.lastQuoteAsk1 = null;
+      this.lastQuoteDistanceBps = {};
       this.desiredOrders = [];
       this.lastDesiredSummary = null;
 
@@ -705,39 +728,18 @@ export class MakerPointsEngine {
         this.lastSkipSell = skipSell;
       }
 
-      const closeOnlyChanged = closeOnly !== prevCloseOnly;
-      const skipChanged = skipBuy !== prevSkipBuy || skipSell !== prevSkipSell;
-      const repriceNeeded = closeOnly ? true : this.shouldReprice(topBid, topAsk);
-      const depthStatusChanged = this.checkDepthStatusChanged(depth, topBid, topAsk);
-      const shouldRecompute =
-        closeOnly ||
-        repriceNeeded ||
-        closeOnlyChanged ||
-        skipChanged ||
-        depthStatusChanged ||
-        this.desiredOrders.length === 0;
-
-      const desired = shouldRecompute
-        ? closeOnly
-          ? this.buildCloseOnlyOrders(position, topBid, topAsk)
-          : this.buildDesiredOrders({
-              bid1: topBid,
-              ask1: topAsk,
-              skipBuy,
-              skipSell,
-              depth,
-            })
-        : this.desiredOrders;
-
-      if (shouldRecompute) {
-        if (closeOnly) {
-          this.lastQuoteBid1 = null;
-          this.lastQuoteAsk1 = null;
-        } else {
-          this.lastQuoteBid1 = topBid;
-          this.lastQuoteAsk1 = topAsk;
-        }
-      }
+      // 每轮都重算：报价是否真的变动由各档位的 sticky 判定决定，
+      // 价格没漂出档位容差时会复用现有挂单价，makeOrderPlan 也就不会撤单。
+      const desired = closeOnly
+        ? this.buildCloseOnlyOrders(position, topBid, topAsk)
+        : this.buildDesiredOrders({
+            bid1: topBid,
+            ask1: topAsk,
+            anchor: this.getQuoteAnchor(depth),
+            skipBuy,
+            skipSell,
+            depth,
+          });
 
       this.desiredOrders = desired;
       this.logDesiredOrders(desired);
@@ -759,143 +761,173 @@ export class MakerPointsEngine {
     }
   }
 
+  /** 当前启用的档位及其目标距离，按距离升序。 */
+  private bandTargets(): BandTarget[] {
+    return buildBandTargets({
+      band0To10: this.config.enableBand0To10,
+      band10To30: this.config.enableBand10To30,
+      band30To100: this.config.enableBand30To100,
+      band0To10Bps: this.config.band0To10Bps,
+      band10To30Bps: this.config.band10To30Bps,
+      band30To100Bps: this.config.band30To100Bps,
+    });
+  }
+
+  private amountForBand(band: MakerPointsBand): number {
+    if (band === "0-10") return Number(this.config.band0To10Amount);
+    if (band === "10-30") return Number(this.config.band10To30Amount);
+    return Number(this.config.band30To100Amount);
+  }
+
+  private toleranceFor(targetBps: number): number {
+    return bandRepriceToleranceBps(targetBps, this.config.minRepriceBps, this.config.bandRepriceRatio);
+  }
+
+  /**
+   * 距离计算的基准价：活动按 mark price 计分，所以优先用交易所 mark price，
+   * 拿不到时退回盘口中值。
+   */
+  private getQuoteAnchor(depth: Depth | null): number | null {
+    const mark = Number(this.tickerSnapshot?.markPrice);
+    if (Number.isFinite(mark) && mark > 0) return mark;
+    const { topBid, topAsk } = getTopPrices(depth ?? this.depthSnapshot);
+    if (topBid == null || topAsk == null) return null;
+    return (topBid + topAsk) / 2;
+  }
+
+  /** 可以被 sticky 复用的在场开仓挂单。 */
+  private activeEntryOrders(): Order[] {
+    return this.openOrders.filter(
+      (order) =>
+        order.symbol === this.config.symbol &&
+        !order.reduceOnly &&
+        isOrderActiveStatus(order.status) &&
+        !this.pendingCancelOrders.has(String(order.orderId))
+    );
+  }
+
+  /**
+   * 在现有挂单中找出还能留在原地的那一张：距离仍在本档容差内、数量一致、
+   * 且没有被其它档位认领。找到就复用它的价格，这一轮该档位不撤不挂。
+   */
+  private pickStickyPrice(params: {
+    side: "BUY" | "SELL";
+    targetBps: number;
+    anchor: number;
+    amount: number;
+    pool: Order[];
+    claimed: Set<string>;
+  }): number | null {
+    const { side, targetBps, anchor, amount, pool, claimed } = params;
+    const tolerance = this.toleranceFor(targetBps);
+    const qtyTolerance = Math.max(this.precision.qtyStep, EPS);
+    let best: { id: string; price: number; delta: number } | null = null;
+
+    for (const order of pool) {
+      if (order.side !== side) continue;
+      const id = String(order.orderId);
+      if (claimed.has(id)) continue;
+      const price = Number(order.price);
+      if (!Number.isFinite(price) || price <= 0) continue;
+      const origQty = Number(order.origQty);
+      if (Number.isFinite(origQty) && Math.abs(origQty - amount) > qtyTolerance) continue;
+      const keep = shouldKeepQuote({
+        side,
+        existingPrice: price,
+        anchor,
+        targetBps,
+        toleranceBps: tolerance,
+        maxDistanceBps: this.config.maxDistanceBps,
+      });
+      if (!keep) continue;
+      const delta = Math.abs(signedDistanceBps(side, price, anchor) - targetBps);
+      if (!best || delta < best.delta) {
+        best = { id, price, delta };
+      }
+    }
+
+    if (!best) return null;
+    claimed.add(best.id);
+    return best.price;
+  }
+
   private buildDesiredOrders(params: {
     bid1: number;
     ask1: number;
+    anchor: number | null;
     skipBuy: boolean;
     skipSell: boolean;
     depth: Depth | null;
   }): DesiredOrder[] {
-    const { bid1, ask1, skipBuy, skipSell, depth } = params;
+    const { bid1, ask1, anchor, skipBuy, skipSell, depth } = params;
 
-    const targets = buildBpsTargets({
-      band0To10: this.config.enableBand0To10,
-      band10To30: this.config.enableBand10To30,
-      band30To100: this.config.enableBand30To100,
-    }).sort((a, b) => b - a);
-
+    // 远档先算，让它优先认领距离最匹配的在场挂单
+    const targets = this.bandTargets().sort((a, b) => b.bps - a.bps);
     if (!targets.length) return [];
 
     const priceDecimals = this.getPriceDecimals();
-    const desired: DesiredOrder[] = [];
     const minDepth = this.config.filterMinDepth;
+    const desired: DesiredOrder[] = [];
+    const pool = this.activeEntryOrders();
+    const claimed = new Set<string>();
+    const distances: Partial<Record<MakerPointsBand, { buy: number | null; sell: number | null }>> = {};
 
-    const getAmountForBps = (bps: number): number => {
-      if (bps <= 10) return Number(this.config.band0To10Amount);
-      if (bps <= 30) return Number(this.config.band10To30Amount);
-      return Number(this.config.band30To100Amount);
-    };
-
-    for (const bps of targets) {
-      const amount = getAmountForBps(bps);
+    for (const target of targets) {
+      const amount = this.amountForBand(target.band);
+      const record: { buy: number | null; sell: number | null } = { buy: null, sell: null };
+      distances[target.band] = record;
       if (!Number.isFinite(amount) || amount <= 0) continue;
 
-      // 所有档位都检查深度
-      const shouldCheckDepth = minDepth > 0;
+      for (const side of ["BUY", "SELL"] as const) {
+        if (side === "BUY" ? skipBuy : skipSell) continue;
 
-      if (!skipBuy) {
-        const targetPrice = this.normalizeDepthTargetPrice(bid1 * (1 - bps / 10000), priceDecimals);
-        if (targetPrice != null) {
-          if (shouldCheckDepth) {
-            const depthQty = getDepthBetweenPrices(depth, "BUY", targetPrice);
-            if (depthQty < minDepth) {
-              this.logThinDepthSkip("BUY", bps, depthQty, minDepth);
-            } else {
-              this.resetThinDepthSkip("BUY", bps);
-              desired.push({
-                side: "BUY",
-                price: formatPriceToString(targetPrice, priceDecimals),
-                amount,
-                reduceOnly: false,
-              });
-            }
-          } else {
-            desired.push({
-              side: "BUY",
-              price: formatPriceToString(targetPrice, priceDecimals),
-              amount,
-              reduceOnly: false,
-            });
+        const raw = resolveSafeQuotePrice({
+          side,
+          targetBps: target.bps,
+          markPrice: anchor,
+          bookPrice: side === "BUY" ? bid1 : ask1,
+          maxDistanceBps: this.config.maxDistanceBps,
+        });
+        const ideal = raw == null ? null : this.normalizeDepthTargetPrice(raw, priceDecimals);
+        if (ideal == null) continue;
+
+        // 深度保护先于价格复用：目标价前方挂单太薄就整档不挂
+        if (minDepth > 0) {
+          const depthQty = getDepthBetweenPrices(depth, side, ideal);
+          if (depthQty < minDepth) {
+            this.logThinDepthSkip(side, target.bps, depthQty, minDepth);
+            continue;
           }
+          this.resetThinDepthSkip(side, target.bps);
         }
-      }
-      if (!skipSell) {
-        const targetPrice = this.normalizeDepthTargetPrice(ask1 * (1 + bps / 10000), priceDecimals);
-        if (targetPrice != null) {
-          if (shouldCheckDepth) {
-            const depthQty = getDepthBetweenPrices(depth, "SELL", targetPrice);
-            if (depthQty < minDepth) {
-              this.logThinDepthSkip("SELL", bps, depthQty, minDepth);
-            } else {
-              this.resetThinDepthSkip("SELL", bps);
-              desired.push({
-                side: "SELL",
-                price: formatPriceToString(targetPrice, priceDecimals),
-                amount,
-                reduceOnly: false,
-              });
-            }
-          } else {
-            desired.push({
-              side: "SELL",
-              price: formatPriceToString(targetPrice, priceDecimals),
-              amount,
-              reduceOnly: false,
-            });
-          }
+
+        const sticky =
+          anchor == null
+            ? null
+            : this.pickStickyPrice({ side, targetBps: target.bps, anchor, amount, pool, claimed });
+        const price = sticky ?? ideal;
+
+        if (anchor != null) {
+          const distance = signedDistanceBps(side, price, anchor);
+          record[side === "BUY" ? "buy" : "sell"] = Number.isFinite(distance) ? distance : null;
         }
+
+        desired.push({
+          side,
+          price: formatPriceToString(price, priceDecimals),
+          amount,
+          reduceOnly: false,
+        });
       }
     }
 
+    this.lastQuoteDistanceBps = distances;
     return desired;
   }
 
   /**
-   * 检查各档位的深度状态是否发生变化
-   * 当深度从足够变为不足，或从不足变为足够时，需要触发重新计算
-   */
-  private checkDepthStatusChanged(
-    depth: Depth | null,
-    bid1: number,
-    ask1: number
-  ): boolean {
-    const minDepth = this.config.filterMinDepth;
-    if (minDepth <= 0) return false;
-    const priceDecimals = this.getPriceDecimals();
-
-    // 获取启用的所有档位
-    const targets = buildBpsTargets({
-      band0To10: this.config.enableBand0To10,
-      band10To30: this.config.enableBand10To30,
-      band30To100: this.config.enableBand30To100,
-    });
-
-    let changed = false;
-
-    for (const bps of targets) {
-      const buyTargetPrice = this.normalizeDepthTargetPrice(bid1 * (1 - bps / 10000), priceDecimals);
-      const sellTargetPrice = this.normalizeDepthTargetPrice(ask1 * (1 + bps / 10000), priceDecimals);
-
-      const buyDepthQty = getDepthBetweenPrices(depth, "BUY", buyTargetPrice ?? 0);
-      const sellDepthQty = getDepthBetweenPrices(depth, "SELL", sellTargetPrice ?? 0);
-      const currentBuyOk = buyDepthQty >= minDepth;
-      const currentSellOk = sellDepthQty >= minDepth;
-
-      const lastStatus = this.lastDepthOkStatus[bps];
-      if (lastStatus) {
-        if (lastStatus.buy !== currentBuyOk || lastStatus.sell !== currentSellOk) {
-          changed = true;
-        }
-      }
-
-      this.lastDepthOkStatus[bps] = { buy: currentBuyOk, sell: currentSellOk };
-    }
-
-    return changed;
-  }
-
-  /**
-   * 当深度从“满足阈值”切换到“不满足阈值”时，立即触发一次主循环，优先撤销不再安全的挂单。
+   * 深度从“满足阈值”切换到“不满足阈值”时立即触发一次主循环，抢在被吃穿前撤单。
+   * 同时维护 lastDepthOkStatus，供下一次比较使用。
    */
   private shouldTriggerImmediateDepthProtection(depth: Depth | null): boolean {
     if (!depth) return false;
@@ -907,47 +939,78 @@ export class MakerPointsEngine {
     const { topBid, topAsk } = getTopPrices(depth);
     if (topBid == null || topAsk == null) return false;
 
-    const targets = buildBpsTargets({
-      band0To10: this.config.enableBand0To10,
-      band10To30: this.config.enableBand10To30,
-      band30To100: this.config.enableBand30To100,
-    });
+    const anchor = this.getQuoteAnchor(depth);
     const priceDecimals = this.getPriceDecimals();
+    let degraded = false;
 
-    for (const bps of targets) {
-      const lastStatus = this.lastDepthOkStatus[bps];
-      if (!lastStatus) continue;
+    for (const target of this.bandTargets()) {
+      const buyPrice = this.normalizeSafeQuote("BUY", target.bps, anchor, topBid, priceDecimals);
+      const sellPrice = this.normalizeSafeQuote("SELL", target.bps, anchor, topAsk, priceDecimals);
+      const currentBuyOk = getDepthBetweenPrices(depth, "BUY", buyPrice ?? 0) >= minDepth;
+      const currentSellOk = getDepthBetweenPrices(depth, "SELL", sellPrice ?? 0) >= minDepth;
 
-      const buyTargetPrice = this.normalizeDepthTargetPrice(topBid * (1 - bps / 10000), priceDecimals);
-      const sellTargetPrice = this.normalizeDepthTargetPrice(topAsk * (1 + bps / 10000), priceDecimals);
-      const buyDepthQty = getDepthBetweenPrices(depth, "BUY", buyTargetPrice ?? 0);
-      const sellDepthQty = getDepthBetweenPrices(depth, "SELL", sellTargetPrice ?? 0);
-      const currentBuyOk = buyDepthQty >= minDepth;
-      const currentSellOk = sellDepthQty >= minDepth;
-
-      if (lastStatus.buy && !currentBuyOk) return true;
-      if (lastStatus.sell && !currentSellOk) return true;
+      const lastStatus = this.lastDepthOkStatus[target.bps];
+      if (lastStatus && ((lastStatus.buy && !currentBuyOk) || (lastStatus.sell && !currentSellOk))) {
+        degraded = true;
+      }
+      this.lastDepthOkStatus[target.bps] = { buy: currentBuyOk, sell: currentSellOk };
     }
 
-    return false;
+    return degraded;
+  }
+
+  private normalizeSafeQuote(
+    side: "BUY" | "SELL",
+    targetBps: number,
+    anchor: number | null,
+    bookPrice: number,
+    priceDecimals: number
+  ): number | null {
+    const raw = resolveSafeQuotePrice({
+      side,
+      targetBps,
+      markPrice: anchor,
+      bookPrice,
+      maxDistanceBps: this.config.maxDistanceBps,
+    });
+    return raw == null ? null : this.normalizeDepthTargetPrice(raw, priceDecimals);
   }
 
   /**
-   * 当盘口相对上次报价偏移超过 minRepriceBps 时，立即触发一次主循环，优先撤销旧报价。
+   * 任一在场挂单已经漂出所有启用档位的容差（或穿过 mark、掉出积分范围）时，
+   * 立即触发一次主循环，不等 500ms 定时器。
    */
   private shouldTriggerImmediateReprice(depth: Depth | null): boolean {
     if (!depth) return false;
     if (this.defenseMode || this.reconnectResetPending || this.stopLossProcessing) return false;
 
-    const hasActiveEntryOrders = this.openOrders.some(
-      (order) => order.symbol === this.config.symbol && !order.reduceOnly && isOrderActiveStatus(order.status)
-    );
-    if (!hasActiveEntryOrders) return false;
+    const pool = this.activeEntryOrders();
+    if (!pool.length) return false;
 
-    const { topBid, topAsk } = getTopPrices(depth);
-    if (topBid == null || topAsk == null) return false;
+    const anchor = this.getQuoteAnchor(depth);
+    if (anchor == null) return false;
 
-    return this.shouldReprice(topBid, topAsk);
+    const targets = this.bandTargets();
+    if (!targets.length) return true;
+
+    for (const order of pool) {
+      const price = Number(order.price);
+      if (!Number.isFinite(price) || price <= 0) return true;
+      const side = order.side === "BUY" ? "BUY" : "SELL";
+      const keepable = targets.some((target) =>
+        shouldKeepQuote({
+          side,
+          existingPrice: price,
+          anchor,
+          targetBps: target.bps,
+          toleranceBps: this.toleranceFor(target.bps),
+          maxDistanceBps: this.config.maxDistanceBps,
+        })
+      );
+      if (!keepable) return true;
+    }
+
+    return false;
   }
 
   private buildCloseOnlyOrders(
@@ -976,19 +1039,6 @@ export class MakerPointsEngine {
         reduceOnly: true,
       },
     ];
-  }
-
-  private shouldReprice(bid1: number, ask1: number): boolean {
-    const threshold = Number(this.config.minRepriceBps);
-    if (!Number.isFinite(threshold) || threshold <= 0) return true;
-    if (!Number.isFinite(bid1) || !Number.isFinite(ask1)) return false;
-    if (!Number.isFinite(this.lastQuoteBid1 ?? NaN) || !Number.isFinite(this.lastQuoteAsk1 ?? NaN)) {
-      return true;
-    }
-    if ((this.lastQuoteBid1 ?? 0) <= 0 || (this.lastQuoteAsk1 ?? 0) <= 0) return true;
-    const bidMove = Math.abs(bid1 - (this.lastQuoteBid1 ?? bid1)) / (this.lastQuoteBid1 ?? bid1) * 10000;
-    const askMove = Math.abs(ask1 - (this.lastQuoteAsk1 ?? ask1)) / (this.lastQuoteAsk1 ?? ask1) * 10000;
-    return bidMove >= threshold || askMove >= threshold;
   }
 
   private async ensureStartupOrderReset(): Promise<boolean> {
@@ -1077,12 +1127,7 @@ export class MakerPointsEngine {
       if (target.amount < EPS) continue;
       try {
         // reduce-only 订单不能设置 tp/sl，仅开仓单设置止损
-        const priceNum = Number(target.price);
-        const slPrice = target.reduceOnly
-          ? undefined
-          : target.side === "BUY"
-            ? priceNum - 1
-            : priceNum + 1;
+        const slPrice = target.reduceOnly ? undefined : this.computeStopLossTrigger(target.side, Number(target.price));
         await placeOrder(this.orderContext, {
           openOrders: this.openOrders,
           side: target.side,
@@ -1329,6 +1374,21 @@ export class MakerPointsEngine {
     }
   }
 
+  /**
+   * 开仓单附带的止损触发价：一旦挂单被吃就立刻市价止血。
+   * 按 bps 计算而非固定金额，换标的时不会退化成几百 bps 或落到 tick 之内被交易所拒单。
+   */
+  private computeStopLossTrigger(side: "BUY" | "SELL", price: number): number | undefined {
+    if (!Number.isFinite(price) || price <= 0) return undefined;
+    const bps = Number(this.config.slOffsetBps);
+    if (!Number.isFinite(bps) || bps <= 0) return undefined;
+    const tick = Math.max(this.precision.priceTick, 1e-9);
+    const offset = Math.max((price * bps) / 10000, tick * 2);
+    const trigger = side === "BUY" ? price - offset : price + offset;
+    if (!Number.isFinite(trigger) || trigger <= 0) return undefined;
+    return Number(formatPriceToString(trigger, this.getPriceDecimals()));
+  }
+
   private getPriceDecimals(): number {
     const tick = Math.max(1e-9, this.precision.priceTick);
     const raw = Math.log10(1 / tick);
@@ -1359,13 +1419,24 @@ export class MakerPointsEngine {
     const { topBid, topAsk } = getTopPrices(this.depthSnapshot);
     const spread = topBid != null && topAsk != null ? topAsk - topBid : null;
     const pnl = computePositionPnl(position, topBid, topAsk);
-    const bandDepths = this.computeBandDepths(topBid, topAsk);
+    const anchor = this.getQuoteAnchor(this.depthSnapshot);
+    const bandDepths = this.computeBandDepths(topBid, topAsk, anchor);
+    const markRaw = Number(this.tickerSnapshot?.markPrice);
+    const now = Date.now();
+    const orderRestingMs: Record<string, number> = {};
+    for (const order of this.openOrders) {
+      const placed = Number(order.time);
+      if (Number.isFinite(placed) && placed > 0) {
+        orderRestingMs[String(order.orderId)] = Math.max(0, now - placed);
+      }
+    }
 
     return {
       ready: this.isReady(),
       symbol: this.config.symbol,
       topBid,
       topAsk,
+      markPrice: Number.isFinite(markRaw) && markRaw > 0 ? markRaw : null,
       spread,
       priceDecimals: this.getPriceDecimals(),
       position,
@@ -1378,7 +1449,9 @@ export class MakerPointsEngine {
       lastUpdated: Date.now(),
       feedStatus: { ...this.feedStatus },
       binanceDepth: this.binanceDepth.getSnapshot(),
+      maxDistanceBps: this.config.maxDistanceBps,
       bandDepths,
+      orderRestingMs,
       quoteStatus: {
         closeOnly: this.lastCloseOnly,
         skipBuy: this.lastSkipBuy,
@@ -1387,24 +1460,51 @@ export class MakerPointsEngine {
     };
   }
 
-  private computeBandDepths(topBid: number | null, topAsk: number | null): MakerPointsSnapshot["bandDepths"] {
-    const bands: MakerPointsSnapshot["bandDepths"] = [
-      { band: "0-10", bps: 9, buyDepth: null, sellDepth: null, enabled: this.config.enableBand0To10 },
-      { band: "10-30", bps: 29, buyDepth: null, sellDepth: null, enabled: this.config.enableBand10To30 },
-      { band: "30-100", bps: 99, buyDepth: null, sellDepth: null, enabled: this.config.enableBand30To100 },
-    ];
-
-    if (!this.depthSnapshot || topBid == null || topAsk == null) {
-      return bands;
-    }
+  private computeBandDepths(
+    topBid: number | null,
+    topAsk: number | null,
+    anchor: number | null
+  ): BandStatus[] {
+    const enabled: Record<MakerPointsBand, boolean> = {
+      "0-10": this.config.enableBand0To10,
+      "10-30": this.config.enableBand10To30,
+      "30-100": this.config.enableBand30To100,
+    };
+    // 展开全部三档（含未启用的），仪表盘要能看到被关掉的档位
+    const all = buildBandTargets({
+      band0To10: true,
+      band10To30: true,
+      band30To100: true,
+      band0To10Bps: this.config.band0To10Bps,
+      band10To30Bps: this.config.band10To30Bps,
+      band30To100Bps: this.config.band30To100Bps,
+    });
     const priceDecimals = this.getPriceDecimals();
 
-    return bands.map((band) => {
-      const buyTargetPrice = this.normalizeDepthTargetPrice(topBid * (1 - band.bps / 10000), priceDecimals);
-      const sellTargetPrice = this.normalizeDepthTargetPrice(topAsk * (1 + band.bps / 10000), priceDecimals);
-      const buyDepth = getDepthBetweenPrices(this.depthSnapshot, "BUY", buyTargetPrice ?? 0);
-      const sellDepth = getDepthBetweenPrices(this.depthSnapshot, "SELL", sellTargetPrice ?? 0);
-      return { ...band, buyDepth, sellDepth };
+    return all.map(({ band, bps }) => {
+      const quoted = this.lastQuoteDistanceBps[band];
+      const buyDistanceBps = quoted?.buy ?? null;
+      const sellDistanceBps = quoted?.sell ?? null;
+      const base: BandStatus = {
+        band,
+        bps,
+        enabled: enabled[band],
+        buyDepth: null,
+        sellDepth: null,
+        buyDistanceBps,
+        sellDistanceBps,
+        buyMultiplier: buyDistanceBps == null ? null : makerPointsMultiplier(buyDistanceBps),
+        sellMultiplier: sellDistanceBps == null ? null : makerPointsMultiplier(sellDistanceBps),
+      };
+      if (!this.depthSnapshot || topBid == null || topAsk == null) return base;
+
+      const buyPrice = this.normalizeSafeQuote("BUY", bps, anchor, topBid, priceDecimals);
+      const sellPrice = this.normalizeSafeQuote("SELL", bps, anchor, topAsk, priceDecimals);
+      return {
+        ...base,
+        buyDepth: getDepthBetweenPrices(this.depthSnapshot, "BUY", buyPrice ?? 0),
+        sellDepth: getDepthBetweenPrices(this.depthSnapshot, "SELL", sellPrice ?? 0),
+      };
     });
   }
 
@@ -1718,8 +1818,7 @@ export class MakerPointsEngine {
     // 重置本地状态，强制下一轮重新计算挂单
     this.desiredOrders = [];
     this.lastDesiredSummary = null;
-    this.lastQuoteBid1 = null;
-    this.lastQuoteAsk1 = null;
+    this.lastQuoteDistanceBps = {};
   }
 
   /**

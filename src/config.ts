@@ -5,6 +5,7 @@
 
 import { resolveExchangeId, type SupportedExchangeId } from "./exchanges/create-adapter";
 import { language, type Language } from "./i18n";
+import { DEFAULT_BAND_BPS, MAKER_POINTS_ZERO_BPS } from "./strategy/maker-points-logic";
 
 export interface StandxTokenConfig {
   expiryTimestamp: number | null;
@@ -226,7 +227,20 @@ export interface MakerPointsConfig {
   band10To30Amount: number;
   /** 30-100 bps 档位挂单数量，未配置时使用 perOrderAmount */
   band30To100Amount: number;
+  /** 0-10 bps 档位目标距离（距 mark price 的 bps），默认 9 */
+  band0To10Bps: number;
+  /** 10-30 bps 档位目标距离（距 mark price 的 bps），默认 29 */
+  band10To30Bps: number;
+  /** 30-100 bps 档位目标距离（距 mark price 的 bps），默认 40 */
+  band30To100Bps: number;
+  /** 距 mark price 的最大允许距离（bps）。100 bps 处倍率归零，默认 95 留安全边际 */
+  maxDistanceBps: number;
+  /** 近档最小重挂阈值（bps），默认 3 */
   minRepriceBps: number;
+  /** 远档重挂阈值 = max(minRepriceBps, 目标距离 × 该比例)，默认 0.15 */
+  bandRepriceRatio: number;
+  /** 成交后立即止损的触发价偏移（bps），默认 2；随标的价格自动缩放 */
+  slOffsetBps: number;
   /** 是否根据 Binance 盘口深度失衡自动取消单边挂单，默认 true */
   enableBinanceDepthCancel: boolean;
   /** Binance 深度监控窗口（bps），默认 3 */
@@ -238,6 +252,33 @@ export interface MakerPointsConfig {
 }
 
 const defaultMakerPointsAmount = parseNumber(process.env.MAKER_POINTS_ORDER_AMOUNT, parseNumber(process.env.TRADE_AMOUNT, 0.001));
+
+const makerPointsBands = {
+  band0To10: {
+    enabled: parseBoolean(process.env.MAKER_POINTS_BAND_0_10, true),
+    bps: parseNumber(process.env.MAKER_POINTS_BAND_0_10_BPS, DEFAULT_BAND_BPS["0-10"]),
+  },
+  band10To30: {
+    enabled: parseBoolean(process.env.MAKER_POINTS_BAND_10_30, true),
+    bps: parseNumber(process.env.MAKER_POINTS_BAND_10_30_BPS, DEFAULT_BAND_BPS["10-30"]),
+  },
+  band30To100: {
+    enabled: parseBoolean(process.env.MAKER_POINTS_BAND_30_100, true),
+    bps: parseNumber(process.env.MAKER_POINTS_BAND_30_100_BPS, DEFAULT_BAND_BPS["30-100"]),
+  },
+};
+
+/**
+ * 最大挂单距离不能小于任何启用档位的目标距离 —— 否则夹回会把挂单推向盘口，
+ * 正好是最容易被吃的方向。上限锁在 100 bps，那里倍率归零。
+ */
+function resolveMaxDistanceBps(): number {
+  const configured = parseNumber(process.env.MAKER_POINTS_MAX_DISTANCE_BPS, 95);
+  const widest = Object.values(makerPointsBands)
+    .filter((band) => band.enabled)
+    .reduce((max, band) => Math.max(max, band.bps), 1);
+  return Math.min(MAKER_POINTS_ZERO_BPS, Math.max(configured, widest));
+}
 
 export const makerPointsConfig: MakerPointsConfig = {
   symbol: resolveSymbolFromEnv("standx"),
@@ -252,13 +293,19 @@ export const makerPointsConfig: MakerPointsConfig = {
   ),
   priceTick: parseNumber(process.env.MAKER_POINTS_PRICE_TICK ?? process.env.PRICE_TICK, 0.1),
   qtyStep: parseNumber(process.env.MAKER_POINTS_QTY_STEP ?? process.env.QTY_STEP, 0.001),
-  enableBand0To10: parseBoolean(process.env.MAKER_POINTS_BAND_0_10, true),
-  enableBand10To30: parseBoolean(process.env.MAKER_POINTS_BAND_10_30, true),
-  enableBand30To100: parseBoolean(process.env.MAKER_POINTS_BAND_30_100, true),
+  enableBand0To10: makerPointsBands.band0To10.enabled,
+  enableBand10To30: makerPointsBands.band10To30.enabled,
+  enableBand30To100: makerPointsBands.band30To100.enabled,
   band0To10Amount: parseNumber(process.env.MAKER_POINTS_BAND_0_10_AMOUNT, defaultMakerPointsAmount),
   band10To30Amount: parseNumber(process.env.MAKER_POINTS_BAND_10_30_AMOUNT, defaultMakerPointsAmount),
   band30To100Amount: parseNumber(process.env.MAKER_POINTS_BAND_30_100_AMOUNT, defaultMakerPointsAmount),
+  band0To10Bps: makerPointsBands.band0To10.bps,
+  band10To30Bps: makerPointsBands.band10To30.bps,
+  band30To100Bps: makerPointsBands.band30To100.bps,
+  maxDistanceBps: resolveMaxDistanceBps(),
   minRepriceBps: parseNumber(process.env.MAKER_POINTS_MIN_REPRICE_BPS, 3),
+  bandRepriceRatio: parseNumber(process.env.MAKER_POINTS_BAND_REPRICE_RATIO, 0.15),
+  slOffsetBps: parseNumber(process.env.MAKER_POINTS_SL_OFFSET_BPS, 2),
   enableBinanceDepthCancel: parseBoolean(process.env.MAKER_POINTS_BINANCE_DEPTH_CANCEL, true),
   binanceDepthWindowBps: parseNumber(process.env.MAKER_POINTS_BINANCE_DEPTH_WINDOW_BPS, 3),
   binanceDepthImbalanceRatio: parseNumber(process.env.MAKER_POINTS_BINANCE_DEPTH_IMBALANCE_RATIO, 9),

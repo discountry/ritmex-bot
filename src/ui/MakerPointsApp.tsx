@@ -43,12 +43,20 @@ export function MakerPointsApp({ onExit }: MakerPointsAppProps) {
   const sortedOrders = [...snapshot.openOrders].sort((a, b) =>
     (Number(b.updateTime ?? 0) - Number(a.updateTime ?? 0)) || Number(b.orderId) - Number(a.orderId)
   );
+  // Maker Points 只对停留超过 3 秒的挂单计分，所以存活时长要直接可见
+  const formatResting = (orderId: string | number) => {
+    const ms = snapshot.orderRestingMs[String(orderId)];
+    if (ms == null) return "-";
+    const seconds = ms / 1000;
+    return `${seconds < 3 ? "!" : ""}${formatNumber(seconds, 1)}s`;
+  };
   const openOrderRows = sortedOrders.slice(0, 8).map((order) => ({
     id: order.orderId,
     side: order.side,
     price: order.price,
     qty: order.origQty,
     filled: order.executedQty,
+    resting: formatResting(order.orderId),
     reduceOnly: order.reduceOnly ? "yes" : "no",
     status: order.status,
   }));
@@ -58,6 +66,7 @@ export function MakerPointsApp({ onExit }: MakerPointsAppProps) {
     { key: "price", header: "Price", align: "right", minWidth: 10 },
     { key: "qty", header: "Qty", align: "right", minWidth: 8 },
     { key: "filled", header: "Filled", align: "right", minWidth: 8 },
+    { key: "resting", header: "Rest", align: "right", minWidth: 6 },
     { key: "reduceOnly", header: "RO", minWidth: 4 },
     { key: "status", header: "Status", minWidth: 10 },
   ];
@@ -96,6 +105,9 @@ export function MakerPointsApp({ onExit }: MakerPointsAppProps) {
         : t("offset.imbalance.balanced");
   const quoteMode = snapshot.quoteStatus.closeOnly ? t("makerPoints.mode.closeOnly") : t("makerPoints.mode.normal");
   const formatDepth = (value: number | null) => (value == null ? "-" : formatNumber(value, 4));
+  const formatDistance = (value: number | null) => (value == null ? "-" : `${formatNumber(value, 1)}bps`);
+  const formatMultiplier = (value: number | null) =>
+    value == null ? "-" : `${formatNumber(value * 100, 2)}%`;
 
   return (
     <Box flexDirection="column" paddingX={1}>
@@ -108,6 +120,12 @@ export function MakerPointsApp({ onExit }: MakerPointsAppProps) {
             bid: formatNumber(topBid, priceDigits),
             ask: formatNumber(topAsk, priceDigits),
             spread: spreadDisplay,
+          })}
+        </Text>
+        <Text color={snapshot.markPrice == null ? "yellow" : undefined}>
+          {t("makerPoints.markLine", {
+            mark: snapshot.markPrice == null ? "-" : formatNumber(snapshot.markPrice, priceDigits),
+            maxDistance: snapshot.maxDistanceBps,
           })}
         </Text>
         <Text color="gray">{t("trend.statusLine", { status: readyStatus })}</Text>
@@ -130,9 +148,15 @@ export function MakerPointsApp({ onExit }: MakerPointsAppProps) {
           <Text key={band.band} color={band.enabled ? undefined : "gray"}>
             {t("makerPoints.bandDepthLine", {
               band: band.band,
+              target: formatNumber(band.bps, 1),
+              buyDist: formatDistance(band.buyDistanceBps),
+              buyMult: formatMultiplier(band.buyMultiplier),
               buy: formatDepth(band.buyDepth),
+              sellDist: formatDistance(band.sellDistanceBps),
+              sellMult: formatMultiplier(band.sellMultiplier),
               sell: formatDepth(band.sellDepth),
             })}
+            {band.enabled ? "" : t("makerPoints.bandDisabled")}
           </Text>
         ))}
         <Text>
