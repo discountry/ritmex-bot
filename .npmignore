@@ -1,3 +1,11 @@
 docs/
 .claude/
 .cursor/
+
+# 密钥文件：package.json 的 files 白名单之外的第二道防线。
+# 注意 .npmignore 一旦存在就会完全接管 .gitignore，.gitignore 里的规则不再生效。
+.env
+.env.*
+!.env.example
+*.pem
+*.key

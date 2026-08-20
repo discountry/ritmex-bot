@@ -11,6 +11,19 @@
   "bin": {
     "ritmex-bot": "./bin/ritmex-bot"
   },
+  "files": [
+    "bin",
+    "src",
+    "scripts",
+    "index.ts",
+    "tsconfig.json",
+    "setup.sh",
+    ".env.example",
+    "README_en.md",
+    "cli-guide.md",
+    "cli-guide.en.md",
+    "grid-trading.md"
+  ],
   "scripts": {
     "dev": "bun run index.ts",
     "start": "bun run index.ts",
@@ -20,6 +33,8 @@
     "test": "bun x vitest run",
     "test:exchange-contract": "bun x vitest run tests/exchange-contract-suite.test.ts tests/exchange-factory.test.ts tests/config.test.ts",
     "test:watch": "bun x vitest",
+    "check:pack": "bun run scripts/check-pack.ts",
+    "prepublishOnly": "bun run scripts/check-pack.ts",
     "start:trend:silent": "bun run index.ts --strategy trend --silent",
     "start:maker:silent": "bun run index.ts --strategy maker --silent",
     "start:offset:silent": "bun run index.ts --strategy offset-maker --silent",
